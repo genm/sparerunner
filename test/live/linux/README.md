@@ -138,6 +138,21 @@ scale set.
 Run from a trusted checkout. The driver builds the harness with the repository's
 mise-pinned Go toolchain. It requires `mise`, `gh`, and `jq`.
 
+Linked Git worktrees use a `.git` pointer file. Go's build-VCS discovery does
+not treat that file as a repository root and, for an in-repository worktree,
+can stamp the containing checkout's unrelated `HEAD` while still reporting
+`vcs.modified=false`. The driver detects this layout, verifies the worktree is
+clean, builds from a detached non-hardlinked local clone of its exact commit,
+and rejects the result unless the embedded `vcs.revision` and `vcs.modified`
+match that source. The isolated source is removed on exit.
+
+The build-only provenance preflight performs that check without reading
+credentials or contacting GitHub:
+
+```bash
+sudo ./test/live/linux/run.sh build-provenance
+```
+
 Populate the explicit provenance values immediately before a protected run:
 
 ```bash

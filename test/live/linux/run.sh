@@ -3,6 +3,7 @@ set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 live_build_dir=""
+live_source_dir=""
 injector_config=""
 injector_armed=false
 live_controller_pid=""
@@ -33,6 +34,9 @@ cleanup() {
   if [[ -n "$live_build_dir" && "$live_build_dir" == /run/tewake-live-linux.* && -d "$live_build_dir" ]]; then
     rm -rf -- "$live_build_dir"
   fi
+  if [[ -n "$live_source_dir" && "$live_source_dir" == /run/tewake-live-source.* && -d "$live_source_dir" ]]; then
+    rm -rf -- "$live_source_dir"
+  fi
   if (( original_status != 0 )); then
     exit "$original_status"
   fi
@@ -61,13 +65,56 @@ build_harness() {
   if [[ -n "$live_build_dir" ]]; then
     return
   fi
+  command -v git >/dev/null || fail "git is required"
   command -v mise >/dev/null || fail "mise is required"
+  local source_head source_root go_binary build_revision build_modified
+  source_head="$(git -C "$repo_root" rev-parse --verify 'HEAD^{commit}')" ||
+    fail "repository HEAD is unavailable"
+  [[ -z "$(git -C "$repo_root" status --porcelain=v1 --untracked-files=all)" ]] ||
+    fail "live acceptance requires a clean checkout"
+
+  source_root="$repo_root"
+  if [[ ! -d "$repo_root/.git" ]]; then
+    # Go's VCS discovery recognizes a .git directory, not the .git pointer file
+    # used by linked worktrees. An in-repository worktree can otherwise inherit
+    # the parent checkout's unrelated HEAD while still reporting
+    # vcs.modified=false. Build from a detached, non-hardlinked local clone so
+    # the embedded provenance is the exact clean worktree commit.
+    live_source_dir="$(mktemp -d /run/tewake-live-source.XXXXXX)"
+    git clone --quiet --no-hardlinks --no-checkout "$repo_root" "$live_source_dir" ||
+      fail "could not create isolated live-build source"
+    git -C "$live_source_dir" checkout --quiet --detach "$source_head" ||
+      fail "could not select the live-build commit"
+    [[ -z "$(git -C "$live_source_dir" status --porcelain=v1 --untracked-files=all)" ]] ||
+      fail "isolated live-build source is not clean"
+    source_root="$live_source_dir"
+  fi
+
+  go_binary="$(cd "$repo_root" && mise which go)"
+  [[ "$go_binary" == /* && -x "$go_binary" ]] ||
+    fail "mise did not resolve the pinned Go executable"
   live_build_dir="$(mktemp -d /run/tewake-live-linux.XXXXXX)"
   chmod 0700 "$live_build_dir"
   (
-    cd "$repo_root"
-    mise exec -- go build -trimpath -o "$live_build_dir/tewake-live-linux" ./test/live/linux
+    cd "$source_root"
+    "$go_binary" build -trimpath -o "$live_build_dir/tewake-live-linux" ./test/live/linux
   )
+  build_revision="$(
+    "$go_binary" version -m "$live_build_dir/tewake-live-linux" |
+      awk '$1 == "build" && $2 ~ /^vcs.revision=/ {
+        sub(/^vcs.revision=/, "", $2)
+        print $2
+      }'
+  )"
+  build_modified="$(
+    "$go_binary" version -m "$live_build_dir/tewake-live-linux" |
+      awk '$1 == "build" && $2 ~ /^vcs.modified=/ {
+        sub(/^vcs.modified=/, "", $2)
+        print $2
+      }'
+  )"
+  [[ "$build_revision" == "$source_head" && "$build_modified" == "false" ]] ||
+    fail "built harness provenance does not match the clean checkout"
 }
 
 config_value() {
@@ -386,6 +433,7 @@ node_postflight() {
 usage() {
   printf '%s\n' \
     'usage:' \
+    '  run.sh build-provenance' \
     '  run.sh normal ABSOLUTE_CONFIG' \
     '  run.sh commit-before-ack ABSOLUTE_CONFIG' \
     '  run.sh cleanup-failure ABSOLUTE_CONFIG ABSOLUTE_ROOT_OWNED_INJECTOR' \
@@ -396,6 +444,10 @@ usage() {
 }
 
 case "${1:-}" in
+build-provenance)
+  [[ $# -eq 1 ]] || usage
+  build_harness
+  ;;
 normal)
   [[ $# -eq 2 ]] || usage
   run_normal "$2"
