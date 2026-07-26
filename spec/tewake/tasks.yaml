@@ -11,12 +11,28 @@ tasks:
     depends_on: []
     paths:
       - .github
-      - cmd
+      - .editorconfig
+      - .gitignore
+      - .mise.toml
+      - .npmrc
+      - AGENTS.md
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - cmd/tewake
+      - cmd/tewake-agent
+      - go.mod
+      - go.sum
       - internal/buildinfo
+      - internal/webui
+      - justfile
+      - lefthook.yml
+      - process-compose.yaml
       - spec/tewake
       - web
-      - .mise.toml
-      - justfile
+      - scripts/cross-build.sh
     ci_targets: [lint, typecheck, test, build]
     pr_order: 1
     status: done

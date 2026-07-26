@@ -27,7 +27,8 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-          cache: true
+          # Fork PRs run untrusted code and must not populate shared dependency caches.
+          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
 
       - name: Set up pnpm
         uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
@@ -39,7 +40,7 @@ jobs:
         uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
         with:
           node-version: 24.15.0
-          cache: pnpm
+          cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
           cache-dependency-path: web/pnpm-lock.yaml
 
       - name: Install Web dependencies
@@ -110,7 +111,7 @@ jobs:
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
-          cache: true
+          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
 
       - name: Test
         run: go test ./...
@@ -120,3 +121,37 @@ jobs:
 
       - name: Build agent
         run: go build -trimpath ./cmd/tewake-agent
+
+  cross-build:
+    name: Cross-build (all supported targets)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+
+      - name: Cross-build controller and agent for every supported target
+        run: ./scripts/cross-build.sh
+
+  required:
+    name: ci/required
+    if: ${{ always() }}
+    needs:
+      - quality
+      - go
+      - cross-build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Enforce required quality gates
+        shell: bash
+        run: |
+          test "${{ needs.quality.result }}" = success
+          test "${{ needs.go.result }}" = success
+          test "${{ needs.cross-build.result }}" = success

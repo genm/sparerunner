@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 
 	"github.com/genm/tewake/internal/buildinfo"
@@ -9,25 +10,33 @@ import (
 )
 
 func main() {
-	root := newRootCommand()
-	if err := root.Execute(); err != nil {
+	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func newRootCommand() *cobra.Command {
+func run(args []string, stdout, stderr io.Writer) error {
+	root := newRootCommand(stdout, stderr)
+	root.SetArgs(args)
+	return root.Execute()
+}
+
+func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
 		Use:           "tewake",
 		Short:         "Orchestrate trusted GitHub Actions runners across computers you own",
 		SilenceErrors: true,
 		SilenceUsage:  true,
+		Version:       buildinfo.String(),
 	}
+	root.SetOut(stdout)
+	root.SetErr(stderr)
 	root.AddCommand(&cobra.Command{
 		Use:   "version",
 		Short: "Print version information",
-		Run: func(_ *cobra.Command, _ []string) {
-			fmt.Println(buildinfo.String())
+		Run: func(command *cobra.Command, _ []string) {
+			fmt.Fprintln(command.OutOrStdout(), buildinfo.String())
 		},
 	})
 	root.AddCommand(notImplementedCommand("init", "Initialize a Tewake controller"))

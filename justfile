@@ -34,17 +34,7 @@ build:
   pnpm --dir web build
 
 build-all:
-  mkdir -p bin
-  for os in linux darwin windows; do \
-    extension=""; \
-    if [ "$os" = windows ]; then extension=".exe"; fi; \
-    for arch in amd64 arm64; do \
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-        go build -trimpath -o "bin/tewake-$os-$arch$extension" ./cmd/tewake; \
-      CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \
-        go build -trimpath -o "bin/tewake-agent-$os-$arch$extension" ./cmd/tewake-agent; \
-    done; \
-  done
+  ./scripts/cross-build.sh
 
 check: fmt-check lint test build
 
