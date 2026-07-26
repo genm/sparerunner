@@ -103,7 +103,15 @@ tasks:
       - internal/store/migrations
     ci_targets: [lint, test, build]
     pr_order: 4
-    status: todo
+    status: done
+    notes: >
+      Hosted Linux, macOS, Windows, quality, and six-target cross-build CI run
+      30191626970 accepted the rebased implementation. Local race and repeated tests
+      kill a subprocess without Close after a committed WAL assignment; reopen proves
+      the exact snapshot and replay without duplicates. A second kill proves migration
+      rollback, and an unrelated SQLite fixture remains byte-for-byte unchanged when
+      rejected. Physical power-loss and end-to-end GitHub/runner crash windows remain
+      gates for twk-007/twk-011.
     acceptance:
       - Message, reservation, and desired execution commit atomically.
       - Crash-boundary integration tests recover without duplicate active executions.
