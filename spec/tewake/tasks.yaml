@@ -211,12 +211,24 @@ tasks:
       job through the controller, Linux agent, scale set, and native runner.
     depends_on: [twk-002, twk-004, twk-005, twk-006]
     paths:
+      - .github/workflows/ci.yml
+      - cmd/tewake-agent
+      - internal/app
+      - internal/github
       - packaging/linux
       - internal/platform/linux
+      - internal/store
+      - internal/transport
+      - justfile
+      - scripts/test-platform-linux.sh
       - test/live/linux
     ci_targets: [lint, test, build, e2e]
     pr_order: 7
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-26: The durable single-slot Linux vertical now composes authenticated Agent snapshots, Controller slot claims, prepare/start commands, Agent outbox acknowledgement, official scale-set polling, and a root-owned cgroup-v2 Supervisor behind a fixed local protocol. Local race tests cover command replay, commit-before-ack recovery, fast terminal jobs, disconnect cleanup, unavailable native runtime, and cleanup quarantine."
+      - "2026-07-26: Independent review found and closed capacity advertisement by online-but-unexecutable nodes, terminal-state regression after fast jobs, unbounded command/session history, and local journal failure hidden by reconnect loops. Root-side package provenance and exec-boundary containment hardening plus the reproducible live acceptance harness remain under integration."
+      - "2026-07-26: A real private GitHub job, systemd restart process counts, GitHub redelivery at the commit/ack crash seam, and cleanup-failure evidence still require the dedicated sandbox and Linux host. Until those gates pass, this task and its Draft PR remain in progress."
     acceptance:
       - One private job completes and its workspace and JIT material are absent afterward.
       - Service restart leaves exactly one runner listener and one agent process.
@@ -295,6 +307,8 @@ tasks:
     ci_targets: [lint, test, build]
     pr_order: 11
     status: todo
+    notes:
+      - "2026-07-26: twk-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. twk-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
     acceptance:
       - Controller and agent kill tests do not create duplicate runners.
       - One offline node does not block restored capacity from reconciled nodes.
@@ -381,5 +395,9 @@ tasks:
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.
+      - >-
+        Each target's linked dependency closure produces a third-party license
+        and NOTICE bundle, and every archive and installer contains the
+        verified bundle.
       - Every release gate and real-fleet evidence check succeeds.
       - The public release documents unsupported signing or platform combinations explicitly.

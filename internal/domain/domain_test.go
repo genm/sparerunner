@@ -166,6 +166,30 @@ func TestExecutionHappyPathAndCleanupFailure(t *testing.T) {
 	}
 }
 
+func TestExecutionReachabilityAllowsOmittedIntermediateObservationsButNeverRegression(t *testing.T) {
+	tests := []struct {
+		name string
+		from ExecutionState
+		to   ExecutionState
+		want bool
+	}{
+		{name: "same observation", from: ExecutionRunning, to: ExecutionRunning, want: true},
+		{name: "offline agent skips to released", from: ExecutionPreparing, to: ExecutionReleased, want: true},
+		{name: "offline agent skips to cleanup failure", from: ExecutionRunning, to: ExecutionCleanupFailed, want: true},
+		{name: "cleanup failure quarantines", from: ExecutionCleanupFailed, to: ExecutionQuarantined, want: true},
+		{name: "terminal state cannot regress", from: ExecutionReleased, to: ExecutionRunning, want: false},
+		{name: "cleaning cannot return to preparing", from: ExecutionCleaning, to: ExecutionPreparing, want: false},
+		{name: "unknown source fails closed", from: ExecutionState("unknown"), to: ExecutionReleased, want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := CanReachExecutionState(test.from, test.to); got != test.want {
+				t.Fatalf("CanReachExecutionState(%q, %q) = %t, want %t", test.from, test.to, got, test.want)
+			}
+		})
+	}
+}
+
 func TestCommandReplayRejectsMismatchedPayload(t *testing.T) {
 	replay := NewCommandReplay()
 	command := Command{

@@ -37,8 +37,14 @@ type ProcessedMessage struct {
 	CreatedAtUnixNano int64
 }
 
+type NodeAdministration struct {
+	NodeID domain.NodeID
+	State  domain.NodeAdministrativeState
+}
+
 type ControllerSnapshot struct {
 	ControllerEpoch   domain.ControllerEpoch
+	Nodes             []NodeAdministration
 	Reservations      []SlotReservation
 	Executions        []domain.ExecutionSnapshot
 	ProcessedMessages []ProcessedMessage
@@ -118,10 +124,10 @@ func (s *ControllerStore) assignOnce(ctx context.Context, assignment Assignment)
 		return existing, true, nil
 	}
 	e := assignment.Execution
-	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES (?, ?, ?, ?)`, e.Slot.NodeID, e.Slot.Index, e.TargetID, e.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES (?, ?, ?, ?, ?, ?)`, e.ID, e.TargetID, e.Slot.NodeID, e.Slot.Index, e.State, createdAt); err != nil {
 		return domain.ExecutionSnapshot{}, false, mapAssignmentError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES (?, ?, ?, ?, ?, ?)`, e.ID, e.TargetID, e.Slot.NodeID, e.Slot.Index, e.State, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES (?, ?, ?, ?)`, e.Slot.NodeID, e.Slot.Index, e.TargetID, e.ID); err != nil {
 		return domain.ExecutionSnapshot{}, false, mapAssignmentError(err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_messages(scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano) VALUES (?, ?, ?, ?, ?)`, assignment.ScaleSetID, assignment.MessageID, assignment.MessageDigest, e.ID, createdAt); err != nil {
@@ -153,7 +159,14 @@ func findMessage(ctx context.Context, tx *sql.Tx, assignment Assignment) (domain
 		return domain.ExecutionSnapshot{}, false, err
 	}
 	existing := domain.ExecutionSnapshot{ID: domain.ExecutionID(executionID), TargetID: domain.TargetID(targetID), Slot: domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slotIndex}, State: domain.ExecutionState(state)}
-	if digest != assignment.MessageDigest || existing != assignment.Execution {
+	// Desired state may have advanced after the message was first committed.
+	// Replay identity is the immutable message digest plus execution/slot
+	// ownership, so comparing the caller's original Reserved state here would
+	// reject a legitimate GitHub redelivery after the Agent started.
+	if digest != assignment.MessageDigest ||
+		existing.ID != assignment.Execution.ID ||
+		existing.TargetID != assignment.Execution.TargetID ||
+		existing.Slot != assignment.Execution.Slot {
 		return domain.ExecutionSnapshot{}, false, fmt.Errorf("%w: scale set message %d", ErrReplayMismatch, assignment.MessageID)
 	}
 	return existing, true, nil
@@ -246,7 +259,45 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 	}
 	result := ControllerSnapshot{ControllerEpoch: domain.ControllerEpoch(rawEpoch)}
 
-	rows, err := tx.QueryContext(ctx, `SELECT node_id, slot_index, target_id, execution_id FROM slot_reservations ORDER BY node_id, slot_index`)
+	rows, err := tx.QueryContext(ctx, `SELECT n.node_id, a.administrative_state, n.revoked
+		FROM enrolled_nodes n
+		LEFT JOIN node_administrative_states a ON a.node_id = n.node_id
+		ORDER BY n.node_id`)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	for rows.Next() {
+		var node NodeAdministration
+		var state sql.NullString
+		var revoked int
+		if err := rows.Scan(&node.NodeID, &state, &revoked); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		if node.NodeID == "" || !state.Valid {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored node administrative authority failed validation")
+		}
+		node.State = domain.NodeAdministrativeState(state.String)
+		if err := node.State.Validate("controller_snapshot.node.administrative_state"); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		if (revoked != 0) != (node.State == domain.NodeRevoked) {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored node revocation authority is inconsistent")
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT node_id, slot_index, target_id, execution_id FROM slot_reservations ORDER BY node_id, slot_index`)
 	if err != nil {
 		return ControllerSnapshot{}, err
 	}
@@ -270,6 +321,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 			rows.Close()
 			return ControllerSnapshot{}, err
 		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
@@ -303,6 +358,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 		}
 		result.Executions = append(result.Executions, execution)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
 	}
@@ -322,6 +381,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 			return ControllerSnapshot{}, errors.New("stored processed message failed validation")
 		}
 		result.ProcessedMessages = append(result.ProcessedMessages, message)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err

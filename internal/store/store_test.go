@@ -93,17 +93,26 @@ func TestAssignmentCanonicalIdentityAndDatabaseInvariants(t *testing.T) {
 	if _, replayed, err := store.Assign(ctx, boundary); err != nil || replayed {
 		t.Fatalf("maximum signed SQLite IDs = (%t, %v)", replayed, err)
 	}
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'unknown', 1)`); err == nil {
+		t.Fatal("direct invalid execution state bypassed CHECK")
+	}
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('node-direct', 0, 'target-direct', 'execution-direct')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'running', 1)`); err == nil {
-		t.Fatal("direct invalid execution state bypassed CHECK")
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-execution', 'target-direct', 'node-direct', 1, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-execution', 'target-direct', 'node-direct', 0, 'reserved', 1)`); err == nil {
-		t.Fatal("execution-to-reservation identity mismatch bypassed composite foreign key")
+	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('different-node', 1, 'target-direct', 'different-execution')`); err == nil {
+		t.Fatal("reservation-to-execution node mismatch bypassed composite foreign key")
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'different-target', 'node-direct', 0, 'reserved', 1)`); err == nil {
-		t.Fatal("execution-to-reservation target mismatch bypassed composite foreign key")
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-target-execution', 'target-direct', 'node-direct', 2, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('node-direct', 2, 'different-target', 'different-target-execution')`); err == nil {
+		t.Fatal("reservation-to-execution target mismatch bypassed composite foreign key")
 	}
 	if _, err := store.db.Exec(`INSERT INTO processed_messages(scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano) VALUES (0, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'execution-direct', 1)`); err == nil {
 		t.Fatal("zero numeric message identity bypassed CHECK")
@@ -111,6 +120,68 @@ func TestAssignmentCanonicalIdentityAndDatabaseInvariants(t *testing.T) {
 	columns := tableColumns(t, store.db, "processed_messages")
 	if strings.Join(columns, ",") != "scale_set_id,message_id,message_digest,execution_id,created_at_unix_nano" {
 		t.Fatalf("processed_messages has redundant drift columns: %v", columns)
+	}
+}
+
+func TestActiveExecutionReservationCannotBeDeleted(t *testing.T) {
+	ctx := context.Background()
+	store := openController(t, "controller.db")
+	defer store.Close()
+
+	const executionID = "execution-active-lease"
+	if _, replayed, err := store.Assign(ctx, testAssignment(92, executionID, "node-active-lease", 0)); err != nil || replayed {
+		t.Fatalf("assign active execution = (%t, %v)", replayed, err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM slot_reservations WHERE execution_id = ?`, executionID); err == nil {
+		t.Fatal("active execution reservation was deleted")
+	}
+	assertCount(t, store.db, `SELECT count(*) FROM slot_reservations WHERE execution_id = 'execution-active-lease'`, 1)
+}
+
+func TestExecutionReservationDataInvariantFailsClosedOnOpen(t *testing.T) {
+	tests := []struct {
+		name      string
+		statement string
+	}{
+		{
+			name: "active execution without reservation",
+			statement: `
+				UPDATE executions SET state = 'released' WHERE id = 'execution-reservation-invariant';
+				DELETE FROM slot_reservations WHERE execution_id = 'execution-reservation-invariant';
+				UPDATE executions SET state = 'running' WHERE id = 'execution-reservation-invariant';`,
+		},
+		{
+			name:      "terminal execution with reservation",
+			statement: `UPDATE executions SET state = 'released' WHERE id = 'execution-reservation-invariant';`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(privateTestDir(t), "controller.db")
+			controller := openControllerPath(t, path)
+			if _, replayed, err := controller.Assign(ctx, testAssignment(
+				93,
+				"execution-reservation-invariant",
+				"node-reservation-invariant",
+				0,
+			)); err != nil || replayed {
+				t.Fatalf("assign execution = (%t, %v)", replayed, err)
+			}
+			if err := controller.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			execRaw(t, path, test.statement)
+			degraded, err := OpenController(ctx, path, Options{})
+			if degraded == nil || !errors.Is(err, ErrRecoveryMode) || !errors.Is(err, ErrCorruptBackup) {
+				t.Fatalf("invalid reservation database open = (%v, %v)", degraded, err)
+			}
+			if readyErr := degraded.Ready(); !errors.Is(readyErr, ErrRecoveryMode) {
+				t.Fatalf("invalid reservation database readiness = %v", readyErr)
+			}
+			_ = degraded.Close()
+		})
 	}
 }
 
@@ -368,6 +439,88 @@ func TestMigrationRecoveryPreservesOriginalAndRejectsUnknownVersions(t *testing.
 	_ = degraded.Close()
 }
 
+func TestAgentRuntimeMigrationPreservesHistoricalAssignmentAndSeedsNodeAuthority(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller-v2.db")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := applyLoadedMigrations(ctx, db, "controller", migrations[:2], func() time.Time {
+		return time.Unix(100, 0)
+	}, nil); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	nodeID := enrollmentNodeID(6)
+	if _, err := db.Exec(`INSERT INTO enrolled_nodes(
+		node_id, current_serial, credential_epoch, not_before_unix_nano,
+		not_after_unix_nano, revoked
+	) VALUES (?, 'a6', 1, 1, 2, 0)`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO slot_reservations(
+		node_id, slot_index, target_id, execution_id
+	) VALUES (?, 0, 'target-v2', 'execution-v2')`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO executions(
+		id, target_id, node_id, slot_index, state, created_at_unix_nano
+	) VALUES ('execution-v2', 'target-v2', ?, 0, 'reserved', 1)`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO processed_messages(
+		scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano
+	) VALUES (1, 1, ?, 'execution-v2', 1)`, digestForTest("v2-message")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := openControllerPath(t, path)
+	defer upgraded.Close()
+	snapshot, err := upgraded.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Nodes) != 1 ||
+		snapshot.Nodes[0] != (NodeAdministration{NodeID: domain.NodeID(nodeID), State: domain.NodeActive}) ||
+		len(snapshot.Reservations) != 1 ||
+		len(snapshot.Executions) != 1 ||
+		snapshot.Executions[0].ID != "execution-v2" {
+		t.Fatalf("upgraded controller snapshot = %+v", snapshot)
+	}
+	if err := validateForeignKeys(ctx, upgraded.db); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
 	ctx := context.Background()
 	db := openRawTestDatabase(t)
@@ -489,13 +642,22 @@ func TestAgentJournalAllowlistedTombstoneAndSecretCanaryRejection(t *testing.T) 
 	}
 	defer store.Close()
 	command := domain.Command{ID: "command-1", ControllerEpoch: 1, ExecutionID: "execution-1", ExpectedState: domain.ExecutionReserved, PayloadDigest: domain.PayloadDigest([]byte("only-digest"))}
+	if replay, err := store.LookupCommand(ctx, command); err != nil || replay {
+		t.Fatalf("missing command lookup = (%t, %v)", replay, err)
+	}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || replay {
 		t.Fatalf("initial command = (%t, %v)", replay, err)
+	}
+	if replay, err := store.LookupCommand(ctx, command); err != nil || !replay {
+		t.Fatalf("exact command lookup = (%t, %v)", replay, err)
 	}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || !replay {
 		t.Fatalf("exact replay = (%t, %v)", replay, err)
 	}
 	command.PayloadDigest = domain.PayloadDigest([]byte("changed"))
+	if _, err := store.LookupCommand(ctx, command); !errors.Is(err, ErrReplayMismatch) {
+		t.Fatalf("changed command lookup = %v", err)
+	}
 	if _, err := store.RecordCommand(ctx, command); !errors.Is(err, ErrReplayMismatch) {
 		t.Fatalf("changed command = %v", err)
 	}
@@ -610,6 +772,86 @@ func TestAgentEpochFenceAndSnapshotSurviveRestart(t *testing.T) {
 	}
 	if final.MaxControllerEpoch != 4 || len(final.Commands) != 3 {
 		t.Fatalf("final agent snapshot = %+v", final)
+	}
+}
+
+func TestAgentObservationOrderingSurvivesWallClockRegressionAndRejectsStateRegression(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(300, 0)
+	store, err := OpenAgent(ctx, filepath.Join(privateTestDir(t), "agent-monotonic.db"), Options{
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	executionID := domain.ExecutionID("execution-monotonic")
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionPreparing,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now = time.Unix(100, 0)
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionRunning,
+	}); err != nil {
+		t.Fatalf("forward observation after wall-clock regression = %v", err)
+	}
+	second, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Observations) != 1 || len(second.Observations) != 1 ||
+		second.Observations[0].ObservedAtUnixNano <= first.Observations[0].ObservedAtUnixNano {
+		t.Fatalf("observation ordering regressed: first=%+v second=%+v", first.Observations, second.Observations)
+	}
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionPreparing,
+	}); err == nil {
+		t.Fatal("Agent journal accepted a lifecycle state regression")
+	}
+
+	tombstoneID := domain.ExecutionID("cleanup-monotonic")
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupProcessResidue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	beforeReplay, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = time.Unix(50, 0)
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupProcessResidue,
+	}); err != nil {
+		t.Fatalf("exact tombstone replay after wall-clock regression = %v", err)
+	}
+	afterReplay, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeReplay.CleanupTombstones) != 1 || len(afterReplay.CleanupTombstones) != 1 ||
+		afterReplay.CleanupTombstones[0].RecordedAtUnixNano <= beforeReplay.CleanupTombstones[0].RecordedAtUnixNano {
+		t.Fatalf("tombstone ordering regressed: before=%+v after=%+v",
+			beforeReplay.CleanupTombstones, afterReplay.CleanupTombstones)
+	}
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupWorkspaceRemoval,
+	}); err == nil {
+		t.Fatal("cleanup tombstone classification changed after persistence")
 	}
 }
 
@@ -775,6 +1017,56 @@ func TestSchemaObjectsAndForeignKeysFailClosedOnOpen(t *testing.T) {
 	}
 }
 
+func TestControllerAgentRuntimeColumnAllowlistRejectsSecretCanaryColumns(t *testing.T) {
+	tables := []string{
+		"node_administrative_states",
+		"agent_commands",
+		"agent_session_snapshots",
+		"agent_snapshot_commands",
+		"agent_snapshot_observations",
+		"agent_snapshot_cleanup_tombstones",
+		"agent_execution_updates",
+		"github_session_demand",
+		"github_queue_messages",
+		"github_message_jobs",
+		"github_job_claims",
+		"github_jit_attempts",
+	}
+	for _, table := range tables {
+		t.Run(table, func(t *testing.T) {
+			path := filepath.Join(privateTestDir(t), "controller.db")
+			controller := openControllerPath(t, path)
+			if err := controller.Close(); err != nil {
+				t.Fatal(err)
+			}
+			execRaw(t, path, fmt.Sprintf(
+				`ALTER TABLE %s ADD COLUMN jit_config TEXT NOT NULL DEFAULT 'jit-secret-canary.example.test'`,
+				table,
+			))
+			dsn, err := sqliteDSN(path, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open(sqliteDriver, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateColumnAllowlist(context.Background(), db, "controller"); !errors.Is(err, ErrCorruptBackup) {
+				_ = db.Close()
+				t.Fatalf("secret column allowlist error = %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			degraded, err := OpenController(context.Background(), path, Options{})
+			if degraded == nil || !errors.Is(err, ErrRecoveryMode) {
+				t.Fatalf("secret-column database open = (%v, %v)", degraded, err)
+			}
+			_ = degraded.Close()
+		})
+	}
+}
+
 func TestPageCorruptionEntersRecoveryBeforeMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(privateTestDir(t), "controller.db")
@@ -829,6 +1121,9 @@ func TestSnapshotsAndWritesRejectInvalidPersistedRanges(t *testing.T) {
 		store := openController(t, "reservation.db")
 		defer store.Close()
 		if _, err := store.db.Exec("PRAGMA ignore_check_constraints=ON"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-invalid', 'target-1', '', 0, 'reserved', 1)`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('', 0, 'target-1', 'execution-invalid')`); err != nil {

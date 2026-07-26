@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
@@ -46,6 +47,7 @@ type ControllerState struct {
 	Store        *store.ControllerStore
 	Service      enroll.Service
 	Sessions     *transport.ActiveSessionRegistry
+	AgentBroker  *AgentBroker
 	AdminSession [32]byte
 	Epoch        uint64
 }
@@ -208,6 +210,7 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		Store:        controllerStore,
 		Service:      service,
 		Sessions:     sessions,
+		AgentBroker:  NewAgentBroker(domain.ControllerEpoch(epoch), newStoreBackedAgentConsumers(controllerStore)),
 		AdminSession: adminSession,
 		Epoch:        epoch,
 	}, nil

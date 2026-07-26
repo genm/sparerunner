@@ -4,6 +4,23 @@ import (
 	"sync"
 )
 
+type CommandType string
+
+const (
+	CommandPrepare CommandType = "prepare"
+	CommandStart   CommandType = "start"
+	CommandCancel  CommandType = "cancel"
+)
+
+func (commandType CommandType) Validate(field string) error {
+	switch commandType {
+	case CommandPrepare, CommandStart, CommandCancel:
+		return nil
+	default:
+		return invalid("invalid_command_type", field, "must be prepare, start, or cancel")
+	}
+}
+
 // Command is the complete replay identity sent from controller to agent. Payload
 // content is deliberately absent: only its digest participates in replay checks.
 type Command struct {

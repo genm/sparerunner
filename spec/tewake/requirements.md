@@ -24,8 +24,11 @@ parallelism, and re-registering broken runners.
   release this is the same trust domain as the Administrator.
 - **GitHub**: the external source of job assignments, scale-set state, runner
   registration, and JIT runner configuration.
-- **Agent**: the privileged local supervisor that reports node capacity and owns the
-  runner process lifecycle.
+- **Agent**: the unprivileged outbound network process that reports node capacity
+  and drives the local runner lifecycle.
+- **Platform Supervisor**: the narrow OS-specific privileged boundary that owns
+  process containment, slot-account handoff, and verified cleanup without
+  accepting arbitrary commands from the Agent.
 - **Workflow**: code executed by the official GitHub Actions runner. Native workflows
   are trusted code, but they remain untrusted input to Tewake's protocol and file
   handling.
@@ -127,6 +130,15 @@ parallelism, and re-registering broken runners.
   not a first-release requirement.
 - Nodes make outbound WSS connections authenticated with node certificates. mDNS is
   endpoint discovery only and is never an identity or authorization signal.
+- On Linux, the network-facing Agent shall run without root privileges. A separate
+  root Supervisor shall authenticate the Agent over a local Unix socket and accept
+  only fixed operations derived from root-owned configuration; arbitrary command,
+  path, environment, UID, and GID input is forbidden.
+- The Linux Supervisor shall independently verify a root-owned copy of the exact
+  pinned official runner archive, reconstruct the execution tree only from that
+  copy, and descriptor-pin the resulting workspace and executable at launch. An
+  Agent-owned cache entry or prebuilt workspace shall never be privileged
+  execution authority.
 - The controller CA defaults to a ten-year validity. Controller and node leaf
   certificates default to one year and automatically renew at a jittered point
   between 70% and 90% of their lifetime. Expired or superseded leaf credentials fail
@@ -170,6 +182,13 @@ parallelism, and re-registering broken runners.
 - For every execution history, active plus reserved slots shall never exceed either
   `node.maxRunners` or the configured fleet maximum.
 - A free physical slot shall be granted to at most one GitHub Target at a time.
+- Every non-terminal Controller execution shall retain exactly one matching slot
+  reservation and every terminal execution shall retain none. Missing or excess
+  reservation evidence shall put the Controller store into recovery mode rather
+  than advertise the affected capacity as free.
+- A connected node whose native runner backend is unavailable, stale, or not yet
+  reconciled shall advertise zero capacity even when its diagnostic Agent session
+  remains online.
 - Duplicate commands and duplicate scale-set messages shall resolve idempotently and
   shall not create a second runtime.
 - After a successful job, runner registration, workspace, runtime process tree,
@@ -177,6 +196,12 @@ parallelism, and re-registering broken runners.
   materialized from JIT configuration shall be absent.
 - If cleanup verification fails, the execution shall enter `CleanupFailed` and the
   node shall enter `Quarantined` rather than `Idle`.
+- If the Linux Supervisor socket, peer identity, cgroup-v2 contract, or root-owned
+  configuration cannot be verified, native runner admission shall fail without
+  elevating the network-facing Agent.
+- Each Linux execution shall receive a private `HOME`, XDG cache/config roots, and
+  `TMPDIR` below its disposable execution root. Their residue shall be absent before
+  the slot can serve a later job.
 - A warm node shall start the official runner quickly enough to satisfy GitHub's
   60-second job-pickup window; measured startup latency is a release gate rather than
   a hidden runtime timeout.
@@ -186,7 +211,11 @@ parallelism, and re-registering broken runners.
 - If the controller stops after desired-state commit and before GitHub message
   acknowledgement, replay after restart shall not lose the job or start it twice.
 - If an agent disconnects during a running job, the job shall continue locally and
-  cleanup shall be journaled for later reconciliation.
+  cleanup and its typed terminal update shall be journaled for acknowledgement and
+  later reconciliation.
+- If the Agent cannot read or durably update its local runner journal or terminal
+  outbox, the Agent process shall exit for OS-service recovery rather than hide the
+  local authority failure behind a reconnect loop.
 - If GitHub returns a 5xx response, the UI and API shall retain last-known data and
   mark it stale instead of returning an empty healthy collection.
 - After a controller restart, capacity shall begin at zero and return independently

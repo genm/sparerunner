@@ -32,6 +32,8 @@ type Client struct {
 	newSessionRetryableClient func() *retryablehttp.Client
 	openMessageSession        func(context.Context, int, string, *retryablehttp.Client) (*scaleset.MessageSessionClient, error)
 	readMessageSession        func(*scaleset.MessageSessionClient) scaleset.RunnerScaleSetSession
+	getRunnerByName           func(context.Context, string) (*scaleset.RunnerReference, error)
+	removeRunner              func(context.Context, int64) error
 }
 
 // NewAppClient creates a low-level client for one GitHub App installation.

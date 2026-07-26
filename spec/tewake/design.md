@@ -135,6 +135,13 @@ A node has concrete slot identities from 0 to `maxRunners - 1`. A slot is either
 or owned by exactly one reservation/execution. The scheduler may temporarily grant a
 free slot to one GitHub Target when advertising `maxCapacity`.
 
+The reservation is an active SQLite lease, not derived best-effort state. Every
+non-terminal execution has exactly one matching reservation and every terminal
+execution has none. SQLite rejects deletion of an active lease; a terminal update
+must delete exactly one lease in the same transaction. Controller startup validates
+the complete relation and enters read-only recovery mode if corruption or manual
+drift would otherwise make a live slot appear free.
+
 The fleet maximum is optional. If absent, it equals the sum of node maxima. Capacity
 advertised to all Targets is backed by concrete non-overlapping slots, preventing
 several organizations from counting the same computer simultaneously.
@@ -240,7 +247,7 @@ advertisement.
 {
   "protocolVersion": 1,
   "messageId": "opaque-id",
-  "type": "hello|snapshot|heartbeat|start|cancel|execution_update|log|ack",
+  "type": "hello|snapshot|heartbeat|prepare|start|cancel|execution_update|log|ack",
   "payload": {}
 }
 ```
@@ -260,6 +267,27 @@ operations are idempotent:
 - `EnsureRunning`
 - `Inspect`
 - `Destroy`
+
+Before a newly observed command is recorded or acknowledged, the Agent compares
+`ExpectedState` with its authoritative local runner observation while holding an
+execution-scoped command lock. A command that fails this comparison is not
+inserted into the replay journal, so retransmitting an initially rejected command
+cannot later acquire authority merely by being classified as a replay. A
+previously admitted identical command may resume its idempotent operation after a
+crash; a changed payload or a second command whose state precondition is stale is
+rejected before JIT delivery, process start, or cleanup.
+
+Runner admission is a two-command exchange. `prepare` carries only the pinned
+runner version and non-secret runtime options, expects Controller state
+`Reserved`, and invokes `EnsurePrepared`. After the Agent durably reports
+`Preparing` with a prepared local workspace, the Controller generates JIT
+configuration and sends `start` with expected state `Preparing`. A start command
+is never used as an implicit package download or workspace-preparation request.
+Once a secret-bearing start command has been durably accepted, its execution is
+owned by the Agent process rather than the WebSocket: loss of the command ACK
+does not discard the command or cancel the local start. The Controller does not
+automatically regenerate or replay JIT after an ambiguous write; reconciliation
+first determines whether the Agent journal accepted that exact command.
 
 Runner-journal records carry a monotonically increasing storage revision. Creating
 an execution is an insert-only `Preparing` claim made before its execution root is
@@ -286,6 +314,23 @@ The agent uses a dedicated service account and OS process containment:
   owning the root agent service
 - Job Object and Windows Service recovery on Windows
 
+On Linux, the outbound network Agent itself runs as an unprivileged
+`tewake-agent` account. A separate root-owned local Supervisor service owns the
+delegated cgroup subtree, durable start fences, slot-account handoff, and verified
+cleanup. The two services communicate only over a root-created Unix socket. The
+Supervisor authenticates the Agent with the peer credential supplied by the
+kernel, accepts a versioned fixed-operation protocol, and derives every cgroup,
+workspace, executable, argument, and runner UID from its local configuration.
+It never accepts an arbitrary command, path, environment, UID, or GID from the
+network-facing process. Losing the Supervisor or failing any peer, filesystem,
+cgroup-v2, or protocol check makes native runner admission unavailable while the
+Agent may remain connected for diagnostics.
+
+Every authenticated snapshot carries an explicit `nativeRunnerReady` observation.
+The Controller treats a missing or false value as zero capacity even if the Agent
+transport is online. Eligibility additionally requires a fresh, reconciled
+snapshot; connectivity is not evidence that the local runner backend is usable.
+
 A macOS process group is only a cleanup aid: a workflow can call `setsid()` and
 leave that group. Strong macOS admission therefore requires an exclusive slot UID
 whose complete process inventory can be terminated and proven empty after restart.
@@ -300,9 +345,18 @@ exist as an absolute, service-owned `0700` directory; every original path compon
 must be a real directory rather than a symlink, and unsafe owners or writable
 ancestors fail before download. Cache validation returns a single-use capability
 holding the exact open archive object whose manifest, regular-file identity, exact
-size, and SHA-256 were checked. The Agent extracts from that same object into the
-execution-specific directory, so a later cache path rename, symlink retarget, or
-directory-entry replacement cannot substitute executable input.
+size, and SHA-256 were checked.
+
+On Linux that Agent cache capability is not privileged launch authority. The root
+Supervisor independently fixes the official package for its own platform, opens
+the cache object, and copies it to a root-owned execution-local archive while
+checking the exact pinned size and SHA-256. It extracts only from that same
+root-owned descriptor, removes the temporary archive, and hands the completed
+tree to the dedicated runner identity last. At the launch boundary it opens both
+the workspace directory and `run.sh`, rechecks their inode, owner, and durable
+`WorkspaceRef`, and passes those descriptors to the downgraded launcher. The
+launcher changes directory and executes through `/proc/self/fd`; it never reopens
+an Agent-writable pathname after verification.
 
 Preparation captures a typed, opaque platform workspace identity containing a
 versioned backend and canonical owner value. The Cleaner and Supervisor must name
@@ -324,8 +378,8 @@ destructive teardown; overlapping managers return reconciliation instead of raci
 the same workspace. Once absence is verified, a transient or ambiguous terminal
 journal write is resolved before the slot can become `Released` or `Failed`.
 
-The runtime is prepared before JIT generation. The Agent passes the opaque value to
-the platform Supervisor through a synchronous one-shot callback with no raw
+The runtime is prepared and reported before JIT generation. The Agent passes the
+opaque value to the platform Supervisor through a synchronous one-shot callback with no raw
 accessor. The Supervisor consumes it only after the workspace and start fence are
 validated, then supplies it to the official runner through the required
 `--jitconfig` argument; the official runner writes the decoded settings,
@@ -336,6 +390,41 @@ explicit retention policy, workspace, and execution directory after the expected
 identity is re-observed, then verifies absence. Tewake does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
+
+Linux runner environment state is execution-scoped: `HOME`,
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `TMPDIR` all resolve below the
+descriptor-pinned disposable workspace. The persistent slot-account home is not
+writable by the Supervisor service. Removal and absence verification therefore
+cover runner credentials and files that honor those home/cache/temp variables.
+Native mode does not create a mount namespace per job: a workflow that bypasses
+`TMPDIR` and writes an absolute `/tmp` path may leave data visible to a later job
+inside the Supervisor service's `PrivateTmp` namespace. This is part of the
+trusted-workflow limitation rather than a sandbox guarantee.
+
+After the listener starts, the Agent monitors the complete platform containment
+rather than only the listener PID. There is no controller-connection or arbitrary
+job-duration timeout: an Agent/WebSocket disconnect leaves the job running. When
+the containment becomes empty, `Destroy` first commits the local revisioned
+`Cleaning` intent, performs teardown, and commits the terminal local state. Only
+the resulting `Released` or `CleanupFailed` observation is then persisted to the
+durable Agent outbox before network delivery. The outbox entry is removed only
+after a matching Controller acknowledgement, so cleanup and its quarantine result
+survive reconnects without exposing a synthetic Controller-side `Cleaning` state
+that is ahead of the Agent runtime SSOT, and without retaining raw process output
+or JIT material.
+
+The local runner journal and terminal outbox are admission authorities, not
+best-effort telemetry. A read, write, or acknowledgement failure in either surface
+terminates the Agent process with an explicit degraded error so the OS service can
+restart it. Reconnecting forever with an unreadable local authority is forbidden.
+
+The authenticated reconnect snapshot includes the Agent's maximum accepted
+Controller epoch, non-secret command replay identities and payload digests,
+execution observations, and cleanup tombstones. The Controller commits that
+snapshot before activating the session or acknowledging it. This is the evidence
+used to resolve an ambiguous secret-bearing command write; absence is never
+inferred from a connection alone, and a new JIT configuration is not generated
+until the previous command is proven unaccepted or terminal.
 
 The JIT lease records the required verify-then-deliver order. Delivery before the
 exec-boundary workspace check invokes no consumer, a failed check permanently

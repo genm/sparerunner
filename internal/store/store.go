@@ -298,11 +298,14 @@ func validateMigrationOwnership(ctx context.Context, q queryer, role string, mig
 	if len(applied) == 0 {
 		return nil, fmt.Errorf("%w: migration history is empty", ErrUnownedDatabase)
 	}
-	if err := validateMigrationVersions(applied, migrations); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorruptBackup, err)
-	}
+	// Role is an independent ownership marker. Check it before comparing
+	// role-specific migration counts so one role advancing beyond another still
+	// reports the owning boundary instead of masquerading as a future schema.
 	if err := verifyRole(ctx, q, role); err != nil {
 		return nil, err
+	}
+	if err := validateMigrationVersions(applied, migrations); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorruptBackup, err)
 	}
 	expectedSchema, expectedMetadata, err := expectedMigrationPrefix(ctx, role, migrations, len(applied))
 	if err != nil {
@@ -630,7 +633,10 @@ func validateOpenDatabase(ctx context.Context, db *sql.DB, role string) error {
 	if err := validateForeignKeys(ctx, db); err != nil {
 		return err
 	}
-	return validateColumnAllowlist(ctx, db, role)
+	if err := validateColumnAllowlist(ctx, db, role); err != nil {
+		return err
+	}
+	return validateDataInvariants(ctx, db, role)
 }
 
 func validateMetadata(ctx context.Context, db queryer, role string) error {
@@ -721,23 +727,46 @@ func migrationFS(role string) fs.FS {
 
 func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error {
 	expected := map[string][]string{
-		"store_metadata":         {"key", "value"},
-		"schema_migrations":      {"version", "applied_at_unix_nano"},
-		"command_replays":        {"command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
-		"execution_observations": {"execution_id", "state", "observed_at_unix_nano"},
-		"cleanup_tombstones":     {"execution_id", "failure_code", "recorded_at_unix_nano"},
-		"slot_reservations":      {"node_id", "slot_index", "target_id", "execution_id"},
-		"executions":             {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
-		"processed_messages":     {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
-		"enrollment_tokens":      {"token_id", "secret_digest", "controller_epoch"},
-		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
-		"enrollment_replays":     {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
+		"store_metadata":                    {"key", "value"},
+		"schema_migrations":                 {"version", "applied_at_unix_nano"},
+		"command_replays":                   {"command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
+		"execution_observations":            {"execution_id", "state", "observed_at_unix_nano"},
+		"cleanup_tombstones":                {"execution_id", "failure_code", "recorded_at_unix_nano"},
+		"runner_journal_records":            {"execution_id", "spec_digest", "jit_digest", "state", "root_name", "pid", "tombstone", "containment_backend", "containment_owner_id", "containment_scope", "containment_host_epoch", "containment_invocation_id", "containment_fence_token", "workspace_backend", "workspace_owner_id", "revision", "mutation_token"},
+		"execution_update_outbox":           {"sequence", "message_id", "node_id", "command_id", "execution_id", "state", "replayed", "error_code"},
+		"accepted_command_types":            {"command_id", "command_type"},
+		"slot_reservations":                 {"node_id", "slot_index", "target_id", "execution_id"},
+		"executions":                        {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
+		"processed_messages":                {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
+		"enrollment_tokens":                 {"token_id", "secret_digest", "controller_epoch"},
+		"enrolled_nodes":                    {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
+		"node_administrative_states":        {"node_id", "administrative_state"},
+		"enrollment_replays":                {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
+		"agent_commands":                    {"command_id", "node_id", "command_type", "controller_epoch", "execution_id", "expected_state", "payload_digest", "issued_at_unix_nano"},
+		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano"},
+		"agent_snapshot_commands":           {"node_id", "command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
+		"agent_snapshot_observations":       {"node_id", "execution_id", "state", "agent_observed_at_unix_nano", "received_at_unix_nano"},
+		"agent_snapshot_cleanup_tombstones": {"node_id", "execution_id", "failure_code", "agent_recorded_at_unix_nano", "received_at_unix_nano"},
+		"agent_execution_updates":           {"node_id", "message_id", "command_id", "execution_id", "state", "replayed", "error_code", "payload_digest", "received_at_unix_nano"},
+		"github_session_demand":             {"scale_set_id", "session_id", "total_available_jobs", "total_acquired_jobs", "total_assigned_jobs", "total_running_jobs", "total_registered_runners", "total_busy_runners", "total_idle_runners", "observed_at_unix_nano"},
+		"github_queue_messages":             {"scale_set_id", "message_id", "message_digest", "committed_at_unix_nano"},
+		"github_message_jobs":               {"scale_set_id", "message_id", "event_index", "event_type", "runner_request_id", "runner_id", "runner_name", "result", "repository_name", "owner_name", "job_id", "workflow_run_id"},
+		"github_job_claims":                 {"scale_set_id", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_attempts":               {"scale_set_id", "runner_request_id", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
-		tables = append(tables, "slot_reservations", "executions", "processed_messages", "enrollment_tokens", "enrolled_nodes", "enrollment_replays")
+		tables = append(tables,
+			"slot_reservations", "executions", "processed_messages",
+			"enrollment_tokens", "enrolled_nodes", "node_administrative_states", "enrollment_replays",
+			"agent_commands", "agent_session_snapshots", "agent_snapshot_commands",
+			"agent_snapshot_observations", "agent_snapshot_cleanup_tombstones",
+			"agent_execution_updates",
+			"github_session_demand", "github_queue_messages", "github_message_jobs",
+			"github_job_claims", "github_jit_attempts",
+		)
 	} else {
-		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones")
+		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones", "runner_journal_records", "execution_update_outbox", "accepted_command_types")
 	}
 	for _, table := range tables {
 		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
@@ -880,6 +909,38 @@ func validateForeignKeys(ctx context.Context, db queryer) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("%w: foreign key check: %v", ErrCorruptBackup, err)
+	}
+	return nil
+}
+
+func validateDataInvariants(ctx context.Context, db queryer, role string) error {
+	if role != "controller" {
+		return nil
+	}
+	var invalid int
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT executions.id
+			FROM executions
+			LEFT JOIN slot_reservations
+				ON slot_reservations.execution_id = executions.id
+			GROUP BY executions.id, executions.state
+			HAVING (
+				executions.state IN (
+					'reserved', 'preparing', 'running', 'cleaning',
+					'cleanup_failed', 'quarantined'
+				)
+				AND count(slot_reservations.execution_id) != 1
+			) OR (
+				executions.state IN ('released', 'failed')
+				AND count(slot_reservations.execution_id) != 0
+			)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf("%w: validate execution reservation invariant: %v", ErrCorruptBackup, err)
+	}
+	if invalid != 0 {
+		return fmt.Errorf("%w: execution reservation invariant failed", ErrCorruptBackup)
 	}
 	return nil
 }

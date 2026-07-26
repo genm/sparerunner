@@ -17,6 +17,12 @@ import (
 )
 
 func main() {
+	if handled, err := runPlatformLauncherHelper(os.Args[1:]); handled {
+		if err != nil {
+			os.Exit(1)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	if exitCode := runContext(ctx, os.Args[1:], os.Stdout, os.Stderr); exitCode != 0 {
@@ -60,6 +66,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	})
 	var stateDirectory string
 	var connectionTimeout, reconnectDelay time.Duration
+	native := defaultNativeRunnerOptions()
 	serve := &cobra.Command{
 		Use:   "serve",
 		Short: "Connect this enrolled node to its controller",
@@ -69,18 +76,35 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			commandRuntime, err := platformCommandRuntime(native)
+			if err != nil {
+				return err
+			}
 			return app.ServeAgent(command.Context(), app.AgentServeOptions{
 				StateDirectory:    directory,
 				ConnectionTimeout: connectionTimeout,
 				ReconnectDelay:    reconnectDelay,
+				CommandRuntime:    commandRuntime,
 			})
 		},
 	}
 	serve.Flags().StringVar(&stateDirectory, "state-dir", "", "agent state directory (default: OS user config directory)")
 	serve.Flags().DurationVar(&connectionTimeout, "connection-timeout", app.DefaultConnectTimeout, "controller connection deadline")
 	serve.Flags().DurationVar(&reconnectDelay, "reconnect-delay", app.DefaultReconnectDelay, "delay between reconnect attempts")
+	serve.Flags().StringVar(&native.CacheRoot, "cache-root", native.CacheRoot, "verified runner package cache")
+	serve.Flags().StringVar(&native.RuntimeRoot, "runtime-root", native.RuntimeRoot, "native runner execution root")
+	serve.Flags().StringVar(&native.SupervisorSocket, "supervisor-socket", native.SupervisorSocket, "local privileged supervisor socket")
+	serve.Flags().BoolVar(&native.Required, "require-native-runner", false, "fail startup unless the native runner boundary is available")
 	root.AddCommand(serve)
+	root.AddCommand(platformCommands()...)
 	return root
+}
+
+type nativeRunnerOptions struct {
+	CacheRoot        string
+	RuntimeRoot      string
+	SupervisorSocket string
+	Required         bool
 }
 
 func resolveAgentStateDirectory(explicit string) (string, error) {
