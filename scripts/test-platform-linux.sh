@@ -27,7 +27,7 @@ docker run --rm \
   --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777 \
   --workdir /src \
   "${go_image}" \
-  go test -race -json -count=1 \
+  go test -race -json -count=1 -tags=tewake_privileged \
     ./internal/platform/linux \
     ./internal/runner \
     ./packaging/linux \
