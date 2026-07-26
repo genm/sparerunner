@@ -46,6 +46,7 @@ var (
 	ErrDestinationExists    = errors.New("store destination already exists")
 	ErrStaleControllerEpoch = errors.New("store command is from a stale controller epoch")
 	ErrStoreBusy            = errors.New("store contention deadline exceeded")
+	ErrUnownedDatabase      = errors.New("database is not owned by Tewake")
 )
 
 // MigrationHook is test fault injection at the boundary before version recording.
@@ -123,18 +124,27 @@ func open(ctx context.Context, path, role string, migrations fs.FS, options Opti
 	if base.now == nil {
 		base.now = time.Now
 	}
-	if err := configure(ctx, db); err != nil {
-		_ = db.Close()
-		return nil, fmt.Errorf("configure %s database: %w", role, err)
+	loadedMigrations, err := loadMigrations(role, migrations)
+	if err != nil {
+		base.recovery = err
+		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
 	}
-	// Check the current pages before migrations can write to a damaged database.
-	// quick_check is the normal startup gate; backups receive the exhaustive
-	// integrity_check below.
+	// Both checks are read-only and deliberately precede journal_mode=WAL. An
+	// unrelated SQLite database must be rejected without changing its bytes,
+	// sidecars, schema, or data merely because it was passed to Tewake.
 	if err := validateDatabaseCheck(ctx, db, "quick_check"); err != nil {
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
 	}
-	if err := applyMigrations(ctx, db, role, migrations, base.now, options.MigrationHook); err != nil {
+	if _, err := validateMigrationOwnership(ctx, db, role, loadedMigrations); err != nil {
+		base.recovery = err
+		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
+	}
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("configure %s database: %w", role, err)
+	}
+	if err := applyLoadedMigrations(ctx, db, role, loadedMigrations, base.now, options.MigrationHook); err != nil {
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
 	}
@@ -216,6 +226,10 @@ func applyMigrations(ctx context.Context, db *sql.DB, role string, migrationFS f
 	if err != nil {
 		return err
 	}
+	return applyLoadedMigrations(ctx, db, role, migrations, now, hook)
+}
+
+func applyLoadedMigrations(ctx context.Context, db *sql.DB, role string, migrations []migration, now func() time.Time, hook MigrationHook) error {
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
@@ -223,14 +237,12 @@ func applyMigrations(ctx context.Context, db *sql.DB, role string, migrationFS f
 	// One transaction covers all pending versions, retaining the exact pre-upgrade
 	// schema and data if any DDL, data change, or version record fails.
 	defer tx.Rollback()
-	applied, hasMigrationTable, err := migrationVersions(ctx, tx)
+	// Repeat ownership validation after acquiring the writer reservation. This
+	// closes the read-to-write gap and ensures migrations only extend an exact
+	// schema prefix previously created by this role's migration chain.
+	applied, err := validateMigrationOwnership(ctx, tx, role, migrations)
 	if err != nil {
 		return err
-	}
-	if hasMigrationTable {
-		if err := validateMigrationVersions(applied, migrations); err != nil {
-			return err
-		}
 	}
 	for _, migration := range migrations[len(applied):] {
 		if _, err := tx.ExecContext(ctx, string(migration.body)); err != nil {
@@ -254,10 +266,55 @@ func applyMigrations(ctx context.Context, db *sql.DB, role string, migrationFS f
 
 type queryer interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// validateMigrationOwnership distinguishes a genuinely empty SQLite database
+// from an existing Tewake store. Owned stores must exactly match the schema and
+// metadata produced by their already-applied migration prefix before any pending
+// migration is allowed to run.
+func validateMigrationOwnership(ctx context.Context, q queryer, role string, migrations []migration) ([]int, error) {
+	applied, hasMigrationTable, err := migrationVersions(ctx, q)
+	if err != nil {
+		return nil, fmt.Errorf("%w: inspect schema migrations: %v", ErrUnownedDatabase, err)
+	}
+	if !hasMigrationTable {
+		objects, err := readSchemaObjects(ctx, q)
+		if err != nil {
+			return nil, fmt.Errorf("%w: inspect existing schema: %v", ErrUnownedDatabase, err)
+		}
+		if len(objects) != 0 {
+			return nil, fmt.Errorf("%w: existing database is not empty", ErrUnownedDatabase)
+		}
+		return nil, nil
+	}
+	if len(applied) == 0 {
+		return nil, fmt.Errorf("%w: migration history is empty", ErrUnownedDatabase)
+	}
+	if err := validateMigrationVersions(applied, migrations); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorruptBackup, err)
+	}
+	if err := verifyRole(ctx, q, role); err != nil {
+		return nil, err
+	}
+	expectedSchema, expectedMetadata, err := expectedMigrationPrefix(ctx, role, migrations, len(applied))
+	if err != nil {
+		return nil, fmt.Errorf("build expected %s migration prefix: %w", role, err)
+	}
+	if err := validateSchemaObjectSet(ctx, q, expectedSchema); err != nil {
+		return nil, err
+	}
+	if err := validateMetadataSet(ctx, q, role, expectedMetadata); err != nil {
+		return nil, err
+	}
+	if err := validateForeignKeys(ctx, q); err != nil {
+		return nil, err
+	}
+	return applied, nil
 }
 
 func migrationVersions(ctx context.Context, q queryer) ([]int, bool, error) {
-	rows, err := q.QueryContext(ctx, "SELECT version FROM schema_migrations ORDER BY version")
+	rows, err := q.QueryContext(ctx, "SELECT version, applied_at_unix_nano FROM schema_migrations ORDER BY version")
 	if err != nil && strings.Contains(err.Error(), "no such table: schema_migrations") {
 		return nil, false, nil
 	}
@@ -268,8 +325,12 @@ func migrationVersions(ctx context.Context, q queryer) ([]int, bool, error) {
 	versions := []int{}
 	for rows.Next() {
 		var version int
-		if err := rows.Scan(&version); err != nil {
+		var appliedAt int64
+		if err := rows.Scan(&version, &appliedAt); err != nil {
 			return nil, true, err
+		}
+		if appliedAt <= 0 {
+			return nil, true, errors.New("schema migration has invalid applied timestamp")
 		}
 		versions = append(versions, version)
 	}
@@ -288,7 +349,7 @@ func validateMigrationVersions(applied []int, migrations []migration) error {
 	return nil
 }
 
-func verifyRole(ctx context.Context, db *sql.DB, role string) error {
+func verifyRole(ctx context.Context, db queryer, role string) error {
 	var actual string
 	if err := db.QueryRowContext(ctx, "SELECT value FROM store_metadata WHERE key = 'role'").Scan(&actual); err != nil {
 		return err
@@ -520,7 +581,7 @@ func validateIntegrity(ctx context.Context, db *sql.DB) error {
 	return validateDatabaseCheck(ctx, db, "integrity_check")
 }
 
-func validateDatabaseCheck(ctx context.Context, db *sql.DB, check string) error {
+func validateDatabaseCheck(ctx context.Context, db queryer, check string) error {
 	if check != "quick_check" && check != "integrity_check" {
 		return fmt.Errorf("unsupported SQLite check %q", check)
 	}
@@ -565,13 +626,19 @@ func validateOpenDatabase(ctx context.Context, db *sql.DB, role string) error {
 	return validateColumnAllowlist(ctx, db, role)
 }
 
-func validateMetadata(ctx context.Context, db *sql.DB, role string) error {
-	expectedKeys := []string{"controller_epoch", "role"}
-	epochKey := "controller_epoch"
+func validateMetadata(ctx context.Context, db queryer, role string) error {
+	expectedKeys := currentMetadataKeys(role)
+	return validateMetadataSet(ctx, db, role, expectedKeys)
+}
+
+func currentMetadataKeys(role string) []string {
 	if role == "agent" {
-		expectedKeys = []string{"max_controller_epoch", "role"}
-		epochKey = "max_controller_epoch"
+		return []string{"max_controller_epoch", "role"}
 	}
+	return []string{"controller_epoch", "role"}
+}
+
+func validateMetadataSet(ctx context.Context, db queryer, role string, expectedKeys []string) error {
 	rows, err := db.QueryContext(ctx, "SELECT key FROM store_metadata ORDER BY key")
 	if err != nil {
 		return fmt.Errorf("%w: inspect metadata keys: %v", ErrCorruptBackup, err)
@@ -590,6 +657,10 @@ func validateMetadata(ctx context.Context, db *sql.DB, role string) error {
 	}
 	if !sameStrings(keys, expectedKeys) {
 		return fmt.Errorf("%w: unexpected metadata key set", ErrCorruptBackup)
+	}
+	epochKey := "controller_epoch"
+	if role == "agent" {
+		epochKey = "max_controller_epoch"
 	}
 	epoch, err := readUintMetadata(ctx, db, epochKey)
 	if err != nil || epoch > maxSQLiteInteger {
@@ -690,13 +761,17 @@ type schemaObject struct {
 }
 
 func validateSchemaObjects(ctx context.Context, db *sql.DB, role string) error {
-	actual, err := readSchemaObjects(ctx, db)
-	if err != nil {
-		return fmt.Errorf("%w: inspect schema objects: %v", ErrCorruptBackup, err)
-	}
 	expected, err := expectedSchemaObjects(ctx, role)
 	if err != nil {
 		return fmt.Errorf("build expected %s schema: %w", role, err)
+	}
+	return validateSchemaObjectSet(ctx, db, expected)
+}
+
+func validateSchemaObjectSet(ctx context.Context, db queryer, expected []schemaObject) error {
+	actual, err := readSchemaObjects(ctx, db)
+	if err != nil {
+		return fmt.Errorf("%w: inspect schema objects: %v", ErrCorruptBackup, err)
 	}
 	if len(actual) != len(expected) {
 		return fmt.Errorf("%w: unexpected schema object set", ErrCorruptBackup)
@@ -718,24 +793,52 @@ func expectedSchemaObjects(ctx context.Context, role string) ([]schemaObject, er
 	if err != nil {
 		return nil, err
 	}
+	schema, _, err := expectedMigrationPrefix(ctx, role, loaded, len(loaded))
+	return schema, err
+}
+
+func expectedMigrationPrefix(ctx context.Context, role string, migrations []migration, appliedCount int) ([]schemaObject, []string, error) {
+	if appliedCount < 1 || appliedCount > len(migrations) {
+		return nil, nil, fmt.Errorf("invalid applied migration count %d", appliedCount)
+	}
 	db, err := sql.Open(sqliteDriver, ":memory:")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer db.Close()
 	db.SetMaxOpenConns(1)
 	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	for _, migration := range loaded {
+	for _, migration := range migrations[:appliedCount] {
 		if _, err := db.ExecContext(ctx, string(migration.body)); err != nil {
-			return nil, fmt.Errorf("apply %s: %w", migration.name, err)
+			return nil, nil, fmt.Errorf("apply %s: %w", migration.name, err)
 		}
 	}
-	return readSchemaObjects(ctx, db)
+	schema, err := readSchemaObjects(ctx, db)
+	if err != nil {
+		return nil, nil, err
+	}
+	rows, err := db.QueryContext(ctx, "SELECT key FROM store_metadata ORDER BY key")
+	if err != nil {
+		return nil, nil, fmt.Errorf("inspect expected metadata: %w", err)
+	}
+	defer rows.Close()
+	metadata := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			return nil, nil, err
+		}
+		metadata = append(metadata, key)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	return schema, metadata, nil
 }
 
-func readSchemaObjects(ctx context.Context, db *sql.DB) ([]schemaObject, error) {
+func readSchemaObjects(ctx context.Context, db queryer) ([]schemaObject, error) {
 	rows, err := db.QueryContext(ctx, `
 		SELECT type, name, tbl_name, COALESCE(sql, '')
 		FROM sqlite_schema
@@ -756,7 +859,7 @@ func readSchemaObjects(ctx context.Context, db *sql.DB) ([]schemaObject, error) 
 	return objects, rows.Err()
 }
 
-func validateForeignKeys(ctx context.Context, db *sql.DB) error {
+func validateForeignKeys(ctx context.Context, db queryer) error {
 	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check")
 	if err != nil {
 		return fmt.Errorf("%w: foreign key check: %v", ErrCorruptBackup, err)

@@ -1,13 +1,16 @@
 package store
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -236,6 +239,109 @@ func TestControllerSnapshotSurvivesRestartAndPreventsDuplicateAssignment(t *test
 	assertCount(t, reopened.db, "SELECT count(*) FROM executions", 1)
 }
 
+func TestControllerSnapshotSurvivesProcessKillAndPreventsDuplicateAssignment(t *testing.T) {
+	const helperEnvironment = "TEWAKE_CONTROLLER_CRASH_PATH"
+	if path := os.Getenv(helperEnvironment); path != "" {
+		store, err := OpenController(context.Background(), path, Options{Now: func() time.Time { return time.Unix(100, 0) }})
+		if err != nil {
+			crashHelperExit("open controller: %v", err)
+		}
+		if _, err := store.db.Exec("PRAGMA wal_autocheckpoint=0"); err != nil {
+			crashHelperExit("disable WAL auto-checkpoint: %v", err)
+		}
+		if epoch, err := store.AdvanceEpoch(context.Background()); err != nil || epoch != 1 {
+			crashHelperExit("advance epoch = %d, %v", epoch, err)
+		}
+		assignment := testAssignment(45, "crash-execution", "crash-node", 3)
+		if _, replayed, err := store.Assign(context.Background(), assignment); err != nil || replayed {
+			crashHelperExit("assign = %t, %v", replayed, err)
+		}
+		fmt.Fprintln(os.Stdout, "crash-ready")
+		select {}
+	}
+
+	path := filepath.Join(privateTestDir(t), "controller.db")
+	runAndKillStoreHelper(t, "TestControllerSnapshotSurvivesProcessKillAndPreventsDuplicateAssignment", helperEnvironment, path)
+	walInfo, err := os.Stat(path + "-wal")
+	if err != nil {
+		t.Fatalf("committed WAL missing after process kill: %v", err)
+	}
+	if walInfo.Size() <= 32 {
+		t.Fatalf("committed WAL is unexpectedly empty: %d bytes", walInfo.Size())
+	}
+
+	reopened := openControllerPath(t, path)
+	defer reopened.Close()
+	snapshot, err := reopened.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	assignment := testAssignment(45, "crash-execution", "crash-node", 3)
+	if snapshot.ControllerEpoch != 1 ||
+		len(snapshot.Reservations) != 1 ||
+		len(snapshot.Executions) != 1 ||
+		len(snapshot.ProcessedMessages) != 1 ||
+		snapshot.Executions[0] != assignment.Execution {
+		t.Fatalf("recovered crash snapshot = %+v", snapshot)
+	}
+	got, replayed, err := reopened.Assign(context.Background(), assignment)
+	if err != nil || !replayed || got != assignment.Execution {
+		t.Fatalf("crash replay = (%+v, %t, %v)", got, replayed, err)
+	}
+	assertCount(t, reopened.db, "SELECT count(*) FROM processed_messages", 1)
+	assertCount(t, reopened.db, "SELECT count(*) FROM slot_reservations", 1)
+	assertCount(t, reopened.db, "SELECT count(*) FROM executions", 1)
+}
+
+func TestMigrationTransactionRollsBackAfterProcessKill(t *testing.T) {
+	const helperEnvironment = "TEWAKE_MIGRATION_CRASH_PATH"
+	if path := os.Getenv(helperEnvironment); path != "" {
+		_, err := OpenController(context.Background(), path, Options{
+			Now: func() time.Time { return time.Unix(100, 0) },
+			MigrationHook: func(string, int) error {
+				fmt.Fprintln(os.Stdout, "crash-ready")
+				select {}
+			},
+		})
+		crashHelperExit("migration returned before process kill: %v", err)
+	}
+
+	path := filepath.Join(privateTestDir(t), "controller.db")
+	runAndKillStoreHelper(t, "TestMigrationTransactionRollsBackAfterProcessKill", helperEnvironment, path)
+	dsn, err := sqliteDSN(path, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var objectCount int
+	if err := db.QueryRow("SELECT count(*) FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%'").Scan(&objectCount); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if objectCount != 0 {
+		t.Fatalf("killed migration exposed %d partially committed schema objects", objectCount)
+	}
+
+	recovered := openControllerPath(t, path)
+	defer recovered.Close()
+	snapshot, err := recovered.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.ControllerEpoch != 0 ||
+		len(snapshot.Reservations) != 0 ||
+		len(snapshot.Executions) != 0 ||
+		len(snapshot.ProcessedMessages) != 0 {
+		t.Fatalf("recovered migration snapshot = %+v", snapshot)
+	}
+}
+
 func TestMigrationRecoveryPreservesOriginalAndRejectsUnknownVersions(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(privateTestDir(t), "controller.db")
@@ -266,18 +372,20 @@ func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
 	ctx := context.Background()
 	db := openRawTestDatabase(t)
 	defer db.Close()
-	for _, statement := range []string{
-		"CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at_unix_nano INTEGER NOT NULL)",
-		"INSERT INTO schema_migrations(version, applied_at_unix_nano) VALUES (1, 1)",
-		"CREATE TABLE preserved(value TEXT NOT NULL)",
-		"INSERT INTO preserved(value) VALUES ('unchanged')",
-	} {
-		if _, err := db.Exec(statement); err != nil {
-			t.Fatal(err)
-		}
+	base := `
+		CREATE TABLE store_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL);
+		INSERT INTO store_metadata(key, value) VALUES ('role', 'controller'), ('controller_epoch', '0');
+		CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at_unix_nano INTEGER NOT NULL);
+		CREATE TABLE preserved(value TEXT NOT NULL);
+		INSERT INTO preserved(value) VALUES ('unchanged');`
+	initialMigrations := fstestMapFS(map[string]string{
+		"migrations/controller/001_base.sql": base,
+	})
+	if err := applyMigrations(ctx, db, "controller", initialMigrations, time.Now, nil); err != nil {
+		t.Fatal(err)
 	}
 	migrations := fstestMapFS(map[string]string{
-		"migrations/controller/001_base.sql":    "SELECT 1;",
+		"migrations/controller/001_base.sql":    base,
 		"migrations/controller/002_pending.sql": "CREATE TABLE must_rollback(value TEXT NOT NULL);",
 	})
 	err := applyMigrations(ctx, db, "controller", migrations, time.Now, func(string, int) error { return errors.New("injected") })
@@ -291,6 +399,65 @@ func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
 	assertCount(t, db, "SELECT count(*) FROM schema_migrations WHERE version=1", 1)
 	assertCount(t, db, "SELECT count(*) FROM schema_migrations WHERE version=2", 0)
 	assertCount(t, db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='must_rollback'", 0)
+}
+
+func TestUnownedDatabaseIsRejectedWithoutMutation(t *testing.T) {
+	ctx := context.Background()
+	dir := privateTestDir(t)
+	path := filepath.Join(dir, "unrelated.db")
+	if _, err := prepareDatabasePath(path); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TABLE unrelated(value TEXT NOT NULL); INSERT INTO unrelated(value) VALUES ('preserve-me')`); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	degraded, err := OpenController(ctx, path, Options{})
+	if degraded == nil || !errors.Is(err, ErrRecoveryMode) || !errors.Is(err, ErrUnownedDatabase) {
+		t.Fatalf("unowned database open = (%v, %v)", degraded, err)
+	}
+	if readyErr := degraded.Ready(); !errors.Is(readyErr, ErrRecoveryMode) {
+		t.Fatalf("unowned database readiness = %v", readyErr)
+	}
+	if err := degraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, before) {
+		t.Fatal("rejected open changed unrelated database bytes")
+	}
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := os.Lstat(path + suffix); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("rejected open left SQLite sidecar %q: %v", suffix, err)
+		}
+	}
+	var value string
+	if err := queryRaw(t, path, "SELECT value FROM unrelated").Scan(&value); err != nil {
+		t.Fatal(err)
+	}
+	if value != "preserve-me" {
+		t.Fatalf("unrelated data = %q", value)
+	}
+	assertRawCount(t, path, "SELECT count(*) FROM sqlite_schema WHERE name IN ('store_metadata', 'schema_migrations')", 0)
 }
 
 func TestWrongRoleOpenIsRecoveryAndFatalOpenIsNil(t *testing.T) {
@@ -1006,6 +1173,48 @@ func privateTestDir(t *testing.T) string {
 	return directory
 }
 
+func runAndKillStoreHelper(t *testing.T, testName, environment, path string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^"+testName+"$")
+	command.Env = append(os.Environ(), environment+"="+path)
+	stdout, err := command.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	scanner := bufio.NewScanner(stdout)
+	if !scanner.Scan() {
+		waitErr := command.Wait()
+		t.Fatalf("crash helper did not become ready: scan=%v wait=%v stderr=%s", scanner.Err(), waitErr, stderr.String())
+	}
+	if line := scanner.Text(); line != "crash-ready" {
+		_ = command.Process.Kill()
+		_ = command.Wait()
+		t.Fatalf("unexpected crash helper signal %q; stderr=%s", line, stderr.String())
+	}
+	if err := command.Process.Kill(); err != nil {
+		_ = command.Wait()
+		t.Fatalf("kill crash helper: %v; stderr=%s", err, stderr.String())
+	}
+	if err := command.Wait(); err == nil {
+		t.Fatal("killed crash helper exited successfully")
+	}
+	if ctx.Err() != nil {
+		t.Fatalf("crash helper timed out: %v; stderr=%s", ctx.Err(), stderr.String())
+	}
+}
+
+func crashHelperExit(format string, values ...any) {
+	fmt.Fprintf(os.Stderr, format+"\n", values...)
+	os.Exit(97)
+}
+
 func testAssignment(messageID MessageID, executionID, nodeID string, slot int) Assignment {
 	return Assignment{ScaleSetID: 11, MessageID: messageID, MessageDigest: domain.PayloadDigest([]byte("message-" + string(rune(messageID)))), Execution: domain.ExecutionSnapshot{ID: domain.ExecutionID(executionID), TargetID: "target-1", Slot: domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slot}, State: domain.ExecutionReserved}}
 }
@@ -1121,6 +1330,17 @@ func assertEpoch(t *testing.T, path string, want domain.ControllerEpoch) {
 	got, err := store.AdvanceEpoch(context.Background())
 	if err != nil || got != want {
 		t.Fatalf("epoch = %d, %v; want %d", got, err, want)
+	}
+}
+
+func assertRawCount(t *testing.T, path, query string, want int) {
+	t.Helper()
+	var got int
+	if err := queryRaw(t, path, query).Scan(&got); err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("count = %d, want %d", got, want)
 	}
 }
 
