@@ -21,7 +21,7 @@ func TestBareProcessGroupLosesARealSetsidDescendantAfterLeaderExit(t *testing.T)
 	}
 	directory := t.TempDir()
 	script := filepath.Join(directory, "escape.sh")
-	contents := "#!/bin/sh\nsetsid /bin/sh -c 'echo $$ > escaped.pid; exec sleep 60' &\nwhile [ ! -s escaped.pid ]; do sleep 0.01; done\nexit 0\n"
+	contents := "#!/bin/sh\nsetsid /bin/sh -c 'echo $$ > escaped.pid; exec sleep 60' &\necho $! > spawned.pid\nwhile [ ! -s escaped.pid ]; do sleep 0.01; done\nexit 0\n"
 	if err := os.WriteFile(script, []byte(contents), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -32,10 +32,19 @@ func TestBareProcessGroupLosesARealSetsidDescendantAfterLeaderExit(t *testing.T)
 		t.Fatal(err)
 	}
 	leaderPID := command.Process.Pid
-	childPID := waitForPIDFile(t, filepath.Join(directory, "escaped.pid"))
 	t.Cleanup(func() {
-		_ = syscall.Kill(childPID, syscall.SIGKILL)
+		_ = command.Process.Kill()
 	})
+	spawnedPID := waitForPIDFile(t, filepath.Join(directory, "spawned.pid"))
+	t.Cleanup(func() {
+		_ = syscall.Kill(spawnedPID, syscall.SIGKILL)
+	})
+	childPID := waitForPIDFile(t, filepath.Join(directory, "escaped.pid"))
+	if childPID != spawnedPID {
+		t.Cleanup(func() {
+			_ = syscall.Kill(childPID, syscall.SIGKILL)
+		})
+	}
 	if err := command.Wait(); err != nil {
 		t.Fatalf("leader exit: %v", err)
 	}

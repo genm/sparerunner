@@ -34,6 +34,9 @@ func (strongCleaner) ValidateRuntimeRoot(_ context.Context, root string) error {
 	}
 	return nil
 }
+func (strongCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
+}
 func (strongCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
 	return "test:" + name, nil
 }
@@ -59,9 +62,10 @@ func (s *testSupervisor) Alive(process Process) (bool, error) {
 }
 
 type callbackJIT struct {
-	calls int
-	after error
-	value string
+	calls      int
+	deliveries int
+	after      error
+	value      string
 }
 
 func (j *callbackJIT) Digest() string {
@@ -69,12 +73,47 @@ func (j *callbackJIT) Digest() string {
 	return hex.EncodeToString(sum[:])
 }
 func (j *callbackJIT) Deliver(deliver func(string) error) error {
+	j.deliveries++
 	for range j.calls {
 		if err := deliver(j.value); err != nil {
 			return err
 		}
 	}
 	return j.after
+}
+
+type sequencedWorkspaceCleaner struct {
+	strongCleaner
+	prepareRef   string
+	observed     []string
+	observations int
+}
+
+func (cleaner *sequencedWorkspaceCleaner) PrepareWorkspace(context.Context, *os.Root, string) (string, error) {
+	return cleaner.prepareRef, nil
+}
+
+func (cleaner *sequencedWorkspaceCleaner) WorkspaceRef(context.Context, *os.Root, string) (string, error) {
+	index := cleaner.observations
+	cleaner.observations++
+	if index >= len(cleaner.observed) {
+		index = len(cleaner.observed) - 1
+	}
+	return cleaner.observed[index], nil
+}
+
+type controlledCleaner struct {
+	strongCleaner
+	removeErr error
+	removes   int
+}
+
+func (cleaner *controlledCleaner) RemoveAndVerify(ctx context.Context, root *os.Root, name string) error {
+	cleaner.removes++
+	if cleaner.removeErr != nil {
+		return cleaner.removeErr
+	}
+	return cleaner.strongCleaner.RemoveAndVerify(ctx, root, name)
 }
 
 func TestJITCallbackReplayStopsSingleProcess(t *testing.T) {
@@ -120,6 +159,48 @@ func TestJITDeliveryFailureWithStopFailureQuarantines(t *testing.T) {
 	record, _, _ := journal.Load(context.Background(), request.ExecutionID)
 	if record.State != StateCleanupFailed || !record.Tombstone {
 		t.Fatalf("record = %#v", record)
+	}
+}
+
+func TestWorkspaceReplacementBetweenPreparationReplayAndStartFailsBeforeJIT(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const originalRef = "test:original-workspace"
+	cleaner := &sequencedWorkspaceCleaner{
+		prepareRef: originalRef,
+		observed:   []string{originalRef, "test:replacement-workspace"},
+	}
+	supervisor := &testSupervisor{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     NewMemoryJournal(),
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "workspace-replaced-before-start", Package: pkg}
+	if _, err := manager.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	jit := &callbackJIT{calls: 1, value: "jit-value"}
+	state, err := manager.EnsureRunning(context.Background(), Start{Preparation: request, JIT: jit})
+	if !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("EnsureRunning = %#v, %v", state, err)
+	}
+	if cleaner.observations != 2 || supervisor.prepared != (ContainmentRef{}) || supervisor.starts != 0 || jit.deliveries != 0 {
+		t.Fatalf(
+			"observations=%d containment=%#v starts=%d jit deliveries=%d",
+			cleaner.observations,
+			supervisor.prepared,
+			supervisor.starts,
+			jit.deliveries,
+		)
 	}
 }
 
@@ -333,5 +414,88 @@ func TestRunningCommitFailureStopsProcessAndLeavesStartingRecordReconcileable(t 
 	released, err := manager.Destroy(context.Background(), request.ExecutionID)
 	if err != nil || released.State != StateReleased || supervisor.stops != 2 {
 		t.Fatalf("reconciled Destroy = %#v, err=%v, stops=%d", released, err, supervisor.stops)
+	}
+}
+
+func TestDestroyPersistsCleaningBeforeDestructiveSideEffects(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	journal := &failOnSaveJournal{inner: NewMemoryJournal(), failAt: 2}
+	cleaner := &controlledCleaner{}
+	supervisor := &testSupervisor{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "cleaning-intent-save-failure", Package: pkg}
+	if _, err := manager.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Destroy(context.Background(), request.ExecutionID); !errors.Is(err, ErrJournal) {
+		t.Fatalf("Destroy error = %v", err)
+	}
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found || record.State != StatePrepared {
+		t.Fatalf("durable record = %#v, found=%v, err=%v", record, found, err)
+	}
+	if cleaner.removes != 0 || supervisor.stops != 0 {
+		t.Fatalf("remove calls=%d stop calls=%d", cleaner.removes, supervisor.stops)
+	}
+}
+
+func TestFailedQuarantineWriteLeavesDurableCleaningAndBlocksAdmission(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	journal := &failOnSaveJournal{inner: NewMemoryJournal(), failAt: 3}
+	cleaner := &controlledCleaner{removeErr: errors.New("injected cleanup failure")}
+	supervisor := &testSupervisor{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "quarantine-save-failure", Package: pkg}
+	if _, err := manager.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Destroy(context.Background(), request.ExecutionID); !errors.Is(err, ErrJournal) {
+		t.Fatalf("Destroy error = %v", err)
+	}
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found || record.State != StateCleaning || record.Tombstone {
+		t.Fatalf("durable cleanup intent = %#v, found=%v, err=%v", record, found, err)
+	}
+	if _, err := manager.EnsurePrepared(context.Background(), request); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("EnsurePrepared after failed quarantine = %v", err)
+	}
+	jit := &callbackJIT{calls: 1, value: "jit-value"}
+	if _, err := manager.EnsureRunning(context.Background(), Start{Preparation: request, JIT: jit}); !errors.Is(err, ErrReconciliationRequired) {
+		t.Fatalf("EnsureRunning after failed quarantine = %v", err)
+	}
+	if supervisor.prepared != (ContainmentRef{}) || supervisor.starts != 0 || jit.deliveries != 0 {
+		t.Fatalf("containment=%#v starts=%d jit deliveries=%d", supervisor.prepared, supervisor.starts, jit.deliveries)
+	}
+	journal.failAt = 0
+	cleaner.removeErr = nil
+	released, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("retry Destroy = %#v, %v", released, err)
 	}
 }

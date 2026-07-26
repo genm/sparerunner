@@ -46,6 +46,10 @@ type Cleaner interface {
 	RemoveAndVerify(context.Context, *os.Root, string) error
 	StrongWorkspaceOwnership() bool
 	ValidateRuntimeRoot(context.Context, string) error
+	// PrepareWorkspace may apply the platform runner identity and returns the
+	// durable identity observation that later cleanup must match.
+	PrepareWorkspace(context.Context, *os.Root, string) (string, error)
+	// WorkspaceRef observes only; it must never repair ownership during cleanup.
 	WorkspaceRef(context.Context, *os.Root, string) (string, error)
 }
 
@@ -63,6 +67,9 @@ type rootCleaner struct{}
 func (rootCleaner) StrongWorkspaceOwnership() bool { return false }
 func (rootCleaner) ValidateRuntimeRoot(context.Context, string) error {
 	return ErrStrongOwnershipUnavailable
+}
+func (rootCleaner) PrepareWorkspace(context.Context, *os.Root, string) (string, error) {
+	return "", ErrStrongOwnershipUnavailable
 }
 func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (string, error) {
 	return "", ErrStrongOwnershipUnavailable
@@ -146,7 +153,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		if record.SpecDigest != digest {
 			return Snapshot{}, ErrExecutionConflict
 		}
-		if (record.State == StatePrepared || record.State == StateStarting || record.State == StateRunning) && !m.executionRootExists(record.RootName) {
+		if activeState(record.State) && !m.workspaceMatches(ctx, record) {
 			return snapshot(record), ErrReconciliationRequired
 		}
 		return snapshot(record), stateError(record)
@@ -172,7 +179,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		}
 		return Snapshot{}, ErrCleanupFailed
 	}
-	workspaceRef, err := m.workspaceRef(ctx, rootName)
+	workspaceRef, err := m.prepareWorkspace(ctx, rootName)
 	if err != nil || workspaceRef == "" {
 		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
 			return m.quarantinePreparation(ctx, request, digest, rootName, "")
@@ -227,6 +234,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	if !validRecord(record) {
 		return Snapshot{}, ErrReconciliationRequired
 	}
+	// EnsurePrepared releases the manager lock before this point. Re-observe the
+	// workspace identity while holding it again so a replaced directory never
+	// reaches containment creation or the one-shot JIT handoff.
+	if activeState(record.State) && !m.workspaceMatches(ctx, record) {
+		return snapshot(record), ErrReconciliationRequired
+	}
 	jitDigest := request.JIT.Digest()
 	switch record.State {
 	case StateRunning:
@@ -238,7 +251,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 			return snapshot(record), ErrReconciliationRequired
 		}
 		return snapshot(record), nil
-	case StateStarting:
+	case StateStarting, StateCleaning:
 		return Snapshot{}, ErrReconciliationRequired
 	case StatePrepared:
 		// continue below
@@ -337,6 +350,9 @@ func (m *Manager) Inspect(ctx context.Context, executionID string) (Snapshot, er
 	if !validRecord(record) {
 		return Snapshot{}, ErrReconciliationRequired
 	}
+	if activeState(record.State) && !m.workspaceMatches(ctx, record) {
+		return snapshot(record), ErrReconciliationRequired
+	}
 	if record.State == StateRunning {
 		alive, observeErr := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment})
 		if observeErr != nil || !alive {
@@ -368,6 +384,15 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if record.State == StateCleanupFailed {
 		return snapshot(record), ErrQuarantined
 	}
+	if record.State != StateCleaning {
+		// Persist teardown intent before the first destructive side effect. If a
+		// later quarantine write fails, replay still sees Cleaning and can never
+		// admit this workspace as Prepared or Running.
+		record.State = StateCleaning
+		if err := m.save(ctx, record); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	if !m.cleaner.StrongWorkspaceOwnership() {
 		return m.quarantine(ctx, record)
 	}
@@ -380,7 +405,7 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
 		return m.quarantine(ctx, record)
 	}
-	if record.State == StateStarting || record.State == StateRunning {
+	if record.PID > 0 || validContainment(record.Containment) {
 		if !m.supervisor.StrongDescendantOwnership() || !validContainment(record.Containment) {
 			return m.quarantine(ctx, record)
 		}
@@ -490,19 +515,29 @@ func (m *Manager) workspaceRef(ctx context.Context, name string) (string, error)
 	return m.cleaner.WorkspaceRef(ctx, executions, name)
 }
 
-func (m *Manager) executionRootExists(name string) bool {
+func (m *Manager) prepareWorkspace(ctx context.Context, name string) (string, error) {
 	parent, err := os.OpenRoot(m.runtimeRoot)
 	if err != nil {
-		return false
+		return "", ErrCleanupFailed
 	}
 	defer parent.Close()
 	executions, err := parent.OpenRoot("executions")
 	if err != nil {
-		return false
+		return "", ErrCleanupFailed
 	}
 	defer executions.Close()
-	info, err := executions.Stat(name)
-	return err == nil && info.IsDir()
+	return m.cleaner.PrepareWorkspace(ctx, executions, name)
+}
+
+func (m *Manager) workspaceMatches(ctx context.Context, record Record) bool {
+	if record.WorkspaceRef == "" {
+		return false
+	}
+	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
+		return false
+	}
+	ref, err := m.workspaceRef(ctx, record.RootName)
+	return err == nil && ref == record.WorkspaceRef
 }
 
 func validatePreparation(request Preparation) error {
@@ -549,11 +584,15 @@ func snapshot(record Record) Snapshot {
 	return Snapshot{ExecutionID: record.ExecutionID, State: record.State, Prepared: record.State == StatePrepared || record.State == StateStarting || record.State == StateRunning, Running: record.State == StateRunning, Quarantined: record.State == StateCleanupFailed || record.Tombstone}
 }
 
+func activeState(state State) bool {
+	return state == StatePrepared || state == StateStarting || state == StateRunning
+}
+
 func stateError(record Record) error {
 	switch record.State {
 	case StateCleanupFailed:
 		return ErrQuarantined
-	case StateStarting:
+	case StateStarting, StateCleaning:
 		return ErrReconciliationRequired
 	case StateReleased:
 		return ErrExecutionConflict
@@ -588,6 +627,11 @@ func validRecord(record Record) bool {
 		return record.PID == 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
 	case StateRunning:
 		return record.PID > 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
+	case StateCleaning:
+		prepared := record.PID == 0 && record.JITDigest == "" && record.Containment == (ContainmentRef{})
+		starting := record.PID == 0 && record.JITDigest != "" && validContainment(record.Containment)
+		running := record.PID > 0 && record.JITDigest != "" && validContainment(record.Containment)
+		return record.WorkspaceRef != "" && !record.Tombstone && (prepared || starting || running)
 	case StateReleased:
 		return record.PID == 0 && record.WorkspaceRef != "" && !record.Tombstone
 	case StateCleanupFailed:

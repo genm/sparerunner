@@ -11,6 +11,7 @@ const (
 	StatePrepared      State = "prepared"
 	StateStarting      State = "starting"
 	StateRunning       State = "running"
+	StateCleaning      State = "cleaning"
 	StateReleased      State = "released"
 	StateCleanupFailed State = "cleanup_failed"
 )

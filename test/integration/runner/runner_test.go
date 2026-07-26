@@ -40,6 +40,9 @@ func (failingCleaner) StrongWorkspaceOwnership() bool { return true }
 func (failingCleaner) ValidateRuntimeRoot(context.Context, string) error {
 	return nil
 }
+func (failingCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
+}
 func (failingCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
 	return "test:" + name, nil
 }
@@ -57,6 +60,9 @@ func (strongTestCleaner) ValidateRuntimeRoot(_ context.Context, root string) err
 		return runner.ErrStrongOwnershipUnavailable
 	}
 	return nil
+}
+func (strongTestCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
 }
 func (strongTestCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
 	return "test:" + name, nil
