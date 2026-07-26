@@ -57,8 +57,11 @@ func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied en
 	if len(digest) != len(supplied.SecretDigest) || subtle.ConstantTimeCompare(digest, supplied.SecretDigest[:]) != 1 {
 		return enroll.ErrTokenSecretMismatch
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO enrolled_nodes(node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked, enrollment_token_id, enrollment_secret_digest, public_key_digest, certificate_der, ca_der) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`, node.NodeID, node.Credential.Serial, node.Credential.Epoch, before, after, supplied.ID[:], supplied.SecretDigest[:], node.PublicKeyDigest[:], node.CertificateDER, node.CACertificateDER); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO enrolled_nodes(node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked) VALUES (?, ?, ?, ?, ?, 0)`, node.NodeID, node.Credential.Serial, node.Credential.Epoch, before, after); err != nil {
 		return fmt.Errorf("create enrolled node: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO enrollment_replays(token_id, secret_digest, controller_epoch, public_key_digest, node_id, certificate_der, ca_der) VALUES (?, ?, ?, ?, ?, ?, ?)`, supplied.ID[:], supplied.SecretDigest[:], supplied.Epoch, node.PublicKeyDigest[:], node.NodeID, node.CertificateDER, node.CACertificateDER); err != nil {
+		return fmt.Errorf("create enrollment replay: %w", err)
 	}
 	if result, err := tx.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, supplied.ID[:]); err != nil {
 		return err
@@ -80,14 +83,15 @@ func (store *ControllerStore) ReplayEnrollment(ctx context.Context, supplied enr
 	var before, after int64
 	var revoked int
 	var storedSecret, storedDigest, certificateDER, caDER []byte
-	err := store.db.QueryRowContext(ctx, `SELECT node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked, enrollment_secret_digest, public_key_digest, certificate_der, ca_der FROM enrolled_nodes WHERE enrollment_token_id = ?`, supplied.ID[:]).Scan(&nodeID, &serial, &epoch, &before, &after, &revoked, &storedSecret, &storedDigest, &certificateDER, &caDER)
+	var storedEpoch uint64
+	err := store.db.QueryRowContext(ctx, `SELECT n.node_id, n.current_serial, n.credential_epoch, n.not_before_unix_nano, n.not_after_unix_nano, n.revoked, r.secret_digest, r.controller_epoch, r.public_key_digest, r.certificate_der, r.ca_der FROM enrollment_replays r JOIN enrolled_nodes n ON n.node_id = r.node_id WHERE r.token_id = ?`, supplied.ID[:]).Scan(&nodeID, &serial, &epoch, &before, &after, &revoked, &storedSecret, &storedEpoch, &storedDigest, &certificateDER, &caDER)
 	if errors.Is(err, sql.ErrNoRows) {
 		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
 	}
 	if err != nil {
 		return enroll.NodeRecord{}, err
 	}
-	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
+	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || storedEpoch != supplied.Epoch || revoked != 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
 		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
 	}
 	return enroll.NodeRecord{NodeID: nodeID, Credential: enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: time.Unix(0, before), NotAfter: time.Unix(0, after)}, Revoked: revoked != 0, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: caDER}, nil
@@ -100,24 +104,41 @@ func (store *ControllerStore) FinalizeEnrollment(ctx context.Context, credential
 	if err := store.AuthorizeCredential(ctx, credential, time.Now()); err != nil {
 		return err
 	}
-	// The replay material is currently co-located with the issued node row and
-	// cannot be deleted independently. A follow-up migration separates it before
-	// CLI join is wired; this method deliberately does not claim finalization.
-	return nil
+	_, err := store.db.ExecContext(ctx, `DELETE FROM enrollment_replays WHERE node_id = ?`, credential.NodeID)
+	return err
 }
 
 func (store *ControllerStore) CancelToken(ctx context.Context, tokenID [16]byte) error {
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	result, err := store.db.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, tokenID[:])
+	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}
-	if affected, _ := result.RowsAffected(); affected != 1 {
-		return enroll.ErrTokenNotFound
+	defer tx.Rollback()
+	if result, deleteErr := tx.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, tokenID[:]); deleteErr != nil {
+		return deleteErr
+	} else if affected, _ := result.RowsAffected(); affected == 1 {
+		return tx.Commit()
 	}
-	return nil
+	var nodeID string
+	var epoch uint64
+	if err := tx.QueryRowContext(ctx, `SELECT n.node_id, n.credential_epoch FROM enrollment_replays r JOIN enrolled_nodes n ON n.node_id=r.node_id WHERE r.token_id=?`, tokenID[:]).Scan(&nodeID, &epoch); errors.Is(err, sql.ErrNoRows) {
+		return enroll.ErrTokenNotFound
+	} else if err != nil {
+		return err
+	}
+	if epoch >= maxSQLiteInteger {
+		return enroll.ErrCredentialRejected
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE enrolled_nodes SET revoked=1, credential_epoch=? WHERE node_id=? AND revoked=0`, epoch+1, nodeID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM enrollment_replays WHERE token_id=?`, tokenID[:]); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (store *ControllerStore) LookupNode(ctx context.Context, nodeID string) (enroll.NodeRecord, error) {
@@ -200,6 +221,7 @@ func (store *ControllerStore) RevokeNode(ctx context.Context, nodeID string) (en
 	if credential.Epoch >= maxSQLiteInteger {
 		return enroll.Credential{}, enroll.ErrCredentialRejected
 	}
+	previous := credential
 	credential.Epoch++
 	result, err := tx.ExecContext(ctx, `UPDATE enrolled_nodes SET revoked = 1, credential_epoch = ? WHERE node_id = ? AND revoked = 0`, credential.Epoch, nodeID)
 	if err != nil {
@@ -208,10 +230,20 @@ func (store *ControllerStore) RevokeNode(ctx context.Context, nodeID string) (en
 	if affected, _ := result.RowsAffected(); affected != 1 {
 		return enroll.Credential{}, enroll.ErrCredentialRejected
 	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM enrollment_replays WHERE node_id = ?`, nodeID); err != nil {
+		return enroll.Credential{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return enroll.Credential{}, err
 	}
+	if store.revocationHook != nil {
+		store.revocationHook(previous)
+	}
 	return credential, nil
+}
+
+func (store *ControllerStore) SetCredentialRevocationHook(hook func(enroll.Credential)) {
+	store.revocationHook = hook
 }
 
 func (store *ControllerStore) AuthorizeCredential(ctx context.Context, credential enroll.Credential, now time.Time) error {

@@ -11,10 +11,15 @@ CREATE TABLE enrolled_nodes (
     not_before_unix_nano INTEGER NOT NULL,
     not_after_unix_nano INTEGER NOT NULL,
     revoked INTEGER NOT NULL CHECK (revoked IN (0, 1)),
-    enrollment_token_id BLOB NOT NULL UNIQUE CHECK (length(enrollment_token_id) = 16),
-    enrollment_secret_digest BLOB NOT NULL CHECK (length(enrollment_secret_digest) = 32),
-    public_key_digest BLOB NOT NULL CHECK (length(public_key_digest) = 32),
-    certificate_der BLOB NOT NULL CHECK (length(certificate_der) > 0),
-    ca_der BLOB NOT NULL CHECK (length(ca_der) > 0),
     CHECK (not_after_unix_nano > not_before_unix_nano)
+);
+
+CREATE TABLE enrollment_replays (
+    token_id BLOB PRIMARY KEY CHECK (length(token_id) = 16 AND token_id != zeroblob(16)),
+    secret_digest BLOB NOT NULL CHECK (length(secret_digest) = 32 AND secret_digest != zeroblob(32)),
+    controller_epoch INTEGER NOT NULL CHECK (controller_epoch > 0),
+    public_key_digest BLOB NOT NULL CHECK (length(public_key_digest) = 32),
+    node_id TEXT NOT NULL UNIQUE REFERENCES enrolled_nodes(node_id) ON DELETE CASCADE,
+    certificate_der BLOB NOT NULL CHECK (length(certificate_der) > 0),
+    ca_der BLOB NOT NULL CHECK (length(ca_der) > 0)
 );

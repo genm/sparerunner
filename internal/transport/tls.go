@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -120,6 +121,51 @@ func validateNodeMaterial(key crypto.PrivateKey, certificate, ca *x509.Certifica
 
 type SessionHandler func(context.Context, *AuthenticatedSession) error
 
+type ActiveSessionRegistry struct {
+	mu       sync.Mutex
+	sessions map[string]map[*AuthenticatedSession]struct{}
+}
+
+func NewActiveSessionRegistry() *ActiveSessionRegistry {
+	return &ActiveSessionRegistry{sessions: make(map[string]map[*AuthenticatedSession]struct{})}
+}
+func credentialKey(credential enroll.Credential) string {
+	return credential.NodeID + ":" + credential.Serial + ":" + fmt.Sprint(credential.Epoch)
+}
+func (registry *ActiveSessionRegistry) Register(session *AuthenticatedSession) func() {
+	if registry == nil {
+		return func() {}
+	}
+	key := credentialKey(session.credential)
+	registry.mu.Lock()
+	if registry.sessions[key] == nil {
+		registry.sessions[key] = map[*AuthenticatedSession]struct{}{}
+	}
+	registry.sessions[key][session] = struct{}{}
+	registry.mu.Unlock()
+	return func() {
+		registry.mu.Lock()
+		delete(registry.sessions[key], session)
+		if len(registry.sessions[key]) == 0 {
+			delete(registry.sessions, key)
+		}
+		registry.mu.Unlock()
+	}
+}
+func (registry *ActiveSessionRegistry) Revoke(credential enroll.Credential) {
+	if registry == nil {
+		return
+	}
+	key := credentialKey(credential)
+	registry.mu.Lock()
+	sessions := registry.sessions[key]
+	delete(registry.sessions, key)
+	registry.mu.Unlock()
+	for session := range sessions {
+		session.connection.Close(websocket.StatusPolicyViolation, "credential revoked")
+	}
+}
+
 // AuthenticatedSession rechecks current credential state before each inbound or
 // outbound protocol operation. Revocation therefore terminates a live WSS
 // session on its next heartbeat/command exchange instead of only on reconnect.
@@ -136,7 +182,15 @@ func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error)
 		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
 		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
 	}
-	return ReadEnvelope(ctx, session.connection)
+	envelope, err := ReadEnvelope(ctx, session.connection)
+	if err != nil {
+		return Envelope{}, err
+	}
+	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
+		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
+	}
+	return envelope, nil
 }
 
 func (session *AuthenticatedSession) Write(ctx context.Context, envelope Envelope) error {
@@ -151,6 +205,9 @@ func (session *AuthenticatedSession) Write(ctx context.Context, envelope Envelop
 // authorization before the WebSocket is accepted, so rejected nodes cannot send
 // protocol frames or be treated as capacity-bearing sessions.
 func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, authorizer CredentialAuthorizer, handler SessionHandler) error {
+	return UpgradeAuthenticatedWithSessions(writer, request, authorizer, handler, nil)
+}
+func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.Request, authorizer CredentialAuthorizer, handler SessionHandler, sessions *ActiveSessionRegistry) error {
 	if handler == nil || authorizer == nil {
 		return errors.New("missing authenticated session dependency")
 	}
@@ -165,11 +222,6 @@ func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, aut
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
 		return fmt.Errorf("node credential rejected: %w", err)
 	}
-	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
-		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {
-			return fmt.Errorf("node enrollment finalization failed: %w", err)
-		}
-	}
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
 	if err != nil {
 		return err
@@ -179,7 +231,15 @@ func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, aut
 	if connection.Subprotocol() != "tewake.v1" {
 		return errors.New("missing tewake.v1 subprotocol")
 	}
-	return handler(request.Context(), &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential})
+	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
+		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {
+			return fmt.Errorf("node enrollment finalization failed: %w", err)
+		}
+	}
+	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
+	deregister := sessions.Register(session)
+	defer deregister()
+	return handler(request.Context(), session)
 }
 
 func DialNodeWSS(ctx context.Context, endpoint string, config *tls.Config) (*websocket.Conn, *http.Response, error) {

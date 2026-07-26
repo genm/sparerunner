@@ -18,7 +18,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"runtime"
 	"time"
 )
 
@@ -360,9 +359,6 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 }
 
 func atomicPrivateFile(path string, contents []byte) error {
-	if runtime.GOOS != "linux" {
-		return errors.New("private material persistence requires the platform credential store adapter")
-	}
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0700); err != nil {
 		return err
@@ -408,44 +404,4 @@ func atomicPrivateFile(path string, contents []byte) error {
 		return err
 	}
 	return nil
-}
-
-func requirePrivateDirectory(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("private material parent is unsafe")
-	}
-	if runtime.GOOS != "linux" || info.Mode().Perm()&0o077 != 0 {
-		return errors.New("private material parent is not private")
-	}
-	return nil
-}
-
-func requirePrivateRegularFile(path string) error {
-	info, err := os.Lstat(path)
-	if err != nil {
-		return err
-	}
-	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("private material path is unsafe")
-	}
-	if runtime.GOOS != "linux" || info.Mode().Perm() != 0o600 {
-		return errors.New("private material is not private")
-	}
-	return nil
-}
-
-func syncDirectory(path string) error {
-	if runtime.GOOS != "linux" {
-		return errors.New("private material durability requires the platform credential store adapter")
-	}
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
