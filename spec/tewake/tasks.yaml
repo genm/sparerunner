@@ -299,7 +299,10 @@ tasks:
       - internal/scheduler
     ci_targets: [lint, test, build]
     pr_order: 10
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-26: The in-memory scheduler now wraps the domain SlotLedger with concrete per-target grants, deterministic round-robin, eligibility and ranking, exact bind/release ownership, and stable capacity reporting. Restored reservations are claimed before admission; an Agent-reported active execution without matching durable ownership blocks that node and conservatively consumes fleet capacity rather than being reused."
+      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain twk-011/twk-014 responsibilities."
     acceptance:
       - Randomized multi-target histories never exceed node or fleet capacity.
       - One free slot is never advertised to two targets concurrently.
