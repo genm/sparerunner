@@ -803,7 +803,8 @@ func copyAndSync(destination *os.File, source string) error {
 }
 
 func syncFile(path string) error {
-	file, err := os.Open(path)
+	// Windows requires a writable handle for FlushFileBuffers, which backs Sync.
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
