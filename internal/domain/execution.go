@@ -26,6 +26,16 @@ func (s ExecutionState) Validate(field string) error {
 // Execution holds desired lifecycle state; agents keep OS observations separately.
 type Execution struct {
 	mu       sync.RWMutex
+	id       ExecutionID
+	targetID TargetID
+	slot     SlotKey
+	state    ExecutionState
+}
+
+// ExecutionSnapshot is the durable, copy-safe representation of an execution.
+// Mutating a snapshot cannot alter a live Execution; RestoreExecution is the only
+// rehydration boundary and validates every field before reconstructing one.
+type ExecutionSnapshot struct {
 	ID       ExecutionID
 	TargetID TargetID
 	Slot     SlotKey
@@ -33,41 +43,75 @@ type Execution struct {
 }
 
 func NewExecution(id ExecutionID, targetID TargetID, slot SlotKey) (*Execution, error) {
-	if err := required(string(id), "execution.id"); err != nil {
+	return RestoreExecution(ExecutionSnapshot{
+		ID:       id,
+		TargetID: targetID,
+		Slot:     slot,
+		State:    ExecutionPending,
+	})
+}
+
+// RestoreExecution rehydrates a durable desired state without allowing stores or
+// schedulers to mutate a live execution directly.
+func RestoreExecution(snapshot ExecutionSnapshot) (*Execution, error) {
+	if err := snapshot.Validate(); err != nil {
 		return nil, err
 	}
-	if err := required(string(targetID), "execution.target_id"); err != nil {
-		return nil, err
+	return &Execution{
+		id:       snapshot.ID,
+		targetID: snapshot.TargetID,
+		slot:     snapshot.Slot,
+		state:    snapshot.State,
+	}, nil
+}
+
+func (s ExecutionSnapshot) Validate() error {
+	if err := required(string(s.ID), "execution.id"); err != nil {
+		return err
 	}
-	if err := required(string(slot.NodeID), "execution.slot.node_id"); err != nil {
-		return nil, err
+	if err := required(string(s.TargetID), "execution.target_id"); err != nil {
+		return err
 	}
-	if slot.Index < 0 {
-		return nil, invalid("invalid_slot_index", "execution.slot.index", "must not be negative")
+	if err := required(string(s.Slot.NodeID), "execution.slot.node_id"); err != nil {
+		return err
 	}
-	return &Execution{ID: id, TargetID: targetID, Slot: slot, State: ExecutionPending}, nil
+	if s.Slot.Index < 0 {
+		return invalid("invalid_slot_index", "execution.slot.index", "must not be negative")
+	}
+	return s.State.Validate("execution.state")
+}
+
+func (e *Execution) Snapshot() ExecutionSnapshot {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return ExecutionSnapshot{
+		ID:       e.id,
+		TargetID: e.targetID,
+		Slot:     e.slot,
+		State:    e.state,
+	}
 }
 
 func (e *Execution) CurrentState() ExecutionState {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return e.State
+	return e.state
 }
 
 func (e *Execution) Transition(next ExecutionState) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	if !validExecutionTransition(e.State, next) {
+	if !validExecutionTransition(e.state, next) {
 		return invalid("invalid_execution_transition", "execution.state", "transition is not allowed")
 	}
-	e.State = next
+	e.state = next
 	return nil
 }
 
 func (e *Execution) IsTerminal() bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	return isTerminalExecutionState(e.State)
+	return isTerminalExecutionState(e.state)
 }
 
 func validExecutionTransition(current, next ExecutionState) bool {

@@ -102,10 +102,6 @@ func TestSlotLedgerRejectsCapacityOverflowAndMismatchedRelease(t *testing.T) {
 }
 
 func TestExecutionInvalidTransitionsDoNotMutateState(t *testing.T) {
-	execution, err := NewExecution("execution-1", "target-1", SlotKey{NodeID: "node-1", Index: 0})
-	if err != nil {
-		t.Fatal(err)
-	}
 	tests := []struct {
 		name string
 		from ExecutionState
@@ -117,7 +113,7 @@ func TestExecutionInvalidTransitionsDoNotMutateState(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			execution.State = test.from
+			execution := restoredExecution(t, test.from)
 			assertValidationCode(t, execution.Transition(test.to), "invalid_execution_transition")
 			if got := execution.CurrentState(); got != test.from {
 				t.Fatalf("state after rejected transition = %q, want %q", got, test.from)
@@ -132,11 +128,7 @@ func TestTerminalExecutionStatesCannotBecomeActive(t *testing.T) {
 	for _, terminal := range terminalStates {
 		for _, active := range activeStates {
 			t.Run(string(terminal)+"-to-"+string(active), func(t *testing.T) {
-				execution, err := NewExecution("execution-1", "target-1", SlotKey{NodeID: "node-1", Index: 0})
-				if err != nil {
-					t.Fatal(err)
-				}
-				execution.State = terminal
+				execution := restoredExecution(t, terminal)
 				assertValidationCode(t, execution.Transition(active), "invalid_execution_transition")
 				if got := execution.CurrentState(); got != terminal {
 					t.Fatalf("terminal state changed to %q", got)
@@ -296,6 +288,20 @@ func slotKeys(ledger *SlotLedger) []SlotKey {
 		keys = append(keys, slot.Key)
 	}
 	return keys
+}
+
+func restoredExecution(t *testing.T, state ExecutionState) *Execution {
+	t.Helper()
+	execution, err := RestoreExecution(ExecutionSnapshot{
+		ID:       "execution-1",
+		TargetID: "target-1",
+		Slot:     SlotKey{NodeID: "node-1", Index: 0},
+		State:    state,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return execution
 }
 
 func intPointer(value int) *int {
