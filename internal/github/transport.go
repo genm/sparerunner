@@ -41,18 +41,16 @@ func newHardenedRetryableClientWith(r resolver, dial dialContext, next http.Roun
 	outer := &http.Transport{Proxy: nil}
 	outer.RegisterProtocol("https", policy)
 	outer.RegisterProtocol("http", policy)
-	client := &http.Client{Transport: outer, CheckRedirect: sameOriginRedirect}
+	client := &http.Client{Transport: outer, CheckRedirect: rejectRedirect}
 	return &retryablehttp.Client{HTTPClient: client, RetryMax: 0, CheckRetry: neverRetry, Logger: nil}
 }
 
 func neverRetry(context.Context, *http.Response, error) (bool, error) { return false, nil }
 
-func sameOriginRedirect(request *http.Request, via []*http.Request) error {
-	if len(via) == 0 || request.URL.Scheme != via[0].URL.Scheme || request.URL.Host != via[0].URL.Host {
-		return ErrUnsafeGitHubEndpoint
-	}
-	return nil
-}
+// Redirects can replay a mutating request after the first endpoint already applied
+// it. Canonical GitHub API endpoints must respond directly; reconciliation, not an
+// HTTP redirect or retry, owns recovery from an ambiguous result.
+func rejectRedirect(*http.Request, []*http.Request) error { return ErrUnsafeGitHubEndpoint }
 
 type endpointTransport struct{ next http.RoundTripper }
 
@@ -119,7 +117,29 @@ func unsafeIP(ip netip.Addr) bool {
 	return false
 }
 
-var blockedSpecialPrefixes = []netip.Prefix{netip.MustParsePrefix("0.0.0.0/8"), netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("192.0.2.0/24"), netip.MustParsePrefix("198.18.0.0/15"), netip.MustParsePrefix("198.51.100.0/24"), netip.MustParsePrefix("203.0.113.0/24"), netip.MustParsePrefix("240.0.0.0/4"), netip.MustParsePrefix("::/128"), netip.MustParsePrefix("2001:db8::/32"), netip.MustParsePrefix("fec0::/10")}
+var blockedSpecialPrefixes = []netip.Prefix{
+	netip.MustParsePrefix("0.0.0.0/8"),
+	netip.MustParsePrefix("100.64.0.0/10"), // shared address space
+	netip.MustParsePrefix("192.0.0.0/24"),  // IETF protocol assignments
+	netip.MustParsePrefix("192.0.2.0/24"),  // documentation
+	netip.MustParsePrefix("192.31.196.0/24"),
+	netip.MustParsePrefix("192.52.193.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("192.175.48.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"), // benchmarking
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+	netip.MustParsePrefix("240.0.0.0/4"), // reserved
+	netip.MustParsePrefix("64:ff9b::/96"),
+	netip.MustParsePrefix("64:ff9b:1::/48"),
+	netip.MustParsePrefix("100::/64"),
+	netip.MustParsePrefix("2001::/23"),
+	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2002::/16"),
+	netip.MustParsePrefix("3fff::/20"),
+	netip.MustParsePrefix("5f00::/16"),
+	netip.MustParsePrefix("fec0::/10"),
+}
 
 type boundedReadCloser struct {
 	io.ReadCloser

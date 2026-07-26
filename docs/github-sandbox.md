@@ -65,10 +65,11 @@ The adapter's production retryable client disables environment proxies and
 transparent retries. Before a request can carry an admin or message bearer it
 requires HTTPS, no userinfo or explicit port, and one of `github.com`,
 `api.github.com`, or a nonempty label ending exactly in
-`.actions.githubusercontent.com`. Redirects may stay on the exact same origin
-only. DNS results are resolved at dial time and private, loopback, link-local,
-unspecified, and multicast IPv4/IPv6 addresses are rejected before the vetted
-IP is dialed; TLS continues to use the original hostname.
+`.actions.githubusercontent.com`. Redirects are rejected because 307/308 can replay
+a mutating request after the original endpoint already applied it. DNS results are
+resolved at dial time and private, loopback, link-local, special-use, reserved,
+unspecified, and multicast IPv4/IPv6 addresses are rejected before the vetted IP is
+dialed; TLS continues to use the original hostname.
 
 Responses are limited to 1 MiB before the upstream preview client performs its
 unbounded read. This limit covers its JSON control-plane payloads only—runner

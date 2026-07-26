@@ -92,11 +92,13 @@ func TestHardenedRetryClientLimitsBodyAndDoesNotRetryPOST(t *testing.T) {
 	}
 }
 
-func TestRedirectPolicyRejectsCrossOrigin(t *testing.T) {
+func TestRedirectPolicyRejectsEveryRedirect(t *testing.T) {
 	from, _ := http.NewRequest(http.MethodGet, "https://api.github.com/a", nil)
-	to, _ := http.NewRequest(http.MethodGet, "https://evil.test/a", nil)
-	if !errors.Is(sameOriginRedirect(to, []*http.Request{from}), ErrUnsafeGitHubEndpoint) {
-		t.Fatal("cross-origin redirect accepted")
+	for _, raw := range []string{"https://api.github.com/b", "https://evil.test/a"} {
+		to, _ := http.NewRequest(http.MethodGet, raw, nil)
+		if !errors.Is(rejectRedirect(to, []*http.Request{from}), ErrUnsafeGitHubEndpoint) {
+			t.Fatalf("redirect to %s accepted", raw)
+		}
 	}
 }
 
@@ -104,7 +106,21 @@ func TestHostAndSpecialIPPolicy(t *testing.T) {
 	if allowedGitHubHost("API.GITHUB.COM") {
 		t.Fatal("case variant accepted")
 	}
-	for _, raw := range []string{"::ffff:127.0.0.1", "100.64.0.1", "192.0.2.1", "198.18.0.1", "240.0.0.1", "2001:db8::1", "fec0::1"} {
+	for _, raw := range []string{
+		"::ffff:127.0.0.1",
+		"100.64.0.1",
+		"192.0.0.1",
+		"192.0.2.1",
+		"198.18.0.1",
+		"240.0.0.1",
+		"64:ff9b::1",
+		"100::1",
+		"2001::1",
+		"2001:db8::1",
+		"2002::1",
+		"3fff::1",
+		"fec0::1",
+	} {
 		if !unsafeIP(netip.MustParseAddr(raw)) {
 			t.Fatalf("special IP %s accepted", raw)
 		}
