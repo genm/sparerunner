@@ -18,7 +18,10 @@ type unixSupervisor struct {
 
 func newPlatformSupervisor() Supervisor { return &unixSupervisor{processes: make(map[int]*exec.Cmd)} }
 
-func (*unixSupervisor) StrongDescendantOwnership() bool { return true }
+// A process group is not a production containment boundary: a job may setsid(2)
+// out of it and PID/Wait races are not durable ownership. twk-007/008 must
+// provide cgroup/launchd ownership before native admission is enabled.
+func (*unixSupervisor) StrongDescendantOwnership() bool { return false }
 
 func (s *unixSupervisor) Start(_ context.Context, request StartRequest) (Process, error) {
 	if request.Executable == "" || request.Directory == "" {

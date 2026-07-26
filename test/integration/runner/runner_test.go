@@ -38,6 +38,9 @@ func (failingCleaner) RemoveAndVerify(context.Context, *os.Root, string) error {
 }
 
 func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
+	if !runner.NewSupervisor().StrongDescendantOwnership() {
+		t.Skip("platform containment adapter is a later gate")
+	}
 	content := fakeRunner(t)
 	journal := runner.NewMemoryJournal()
 	manager, runtimeRoot := newManager(t, content, journal, nil)
@@ -87,6 +90,9 @@ func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
 }
 
 func TestChangedExecutionSpecAndCrashStartingFailClosed(t *testing.T) {
+	if !runner.NewSupervisor().StrongDescendantOwnership() {
+		t.Skip("platform containment adapter is a later gate")
+	}
 	content := fakeRunner(t)
 	journal := runner.NewMemoryJournal()
 	manager, _ := newManager(t, content, journal, nil)

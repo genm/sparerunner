@@ -55,10 +55,7 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (string, error) {
 	}
 	entry := path.Join("packages", pkg.key())
 	if validCacheEntry(root, entry, pkg) {
-		if err := rebuildCachedContent(root, entry, pkg); err != nil {
-			return "", err
-		}
-		return filepath.Join(c.Root, entry, "content"), nil
+		return filepath.Join(c.Root, entry), nil
 	}
 
 	temporary, err := cacheTemporaryName(root)
@@ -94,7 +91,7 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (string, error) {
 			return "", ErrPackageIntegrity
 		}
 	}
-	return filepath.Join(c.Root, entry, "content"), nil
+	return filepath.Join(c.Root, entry), nil
 }
 
 // rebuildCachedContent treats the pinned archive, not the mutable extracted

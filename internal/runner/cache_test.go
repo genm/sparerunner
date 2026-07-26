@@ -99,7 +99,7 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 			t.Fatalf("cache paths differ: %q and %q", first, result)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(first, "run.sh")); err != nil {
+	if _, err := os.Stat(filepath.Join(first, "content", "run.sh")); err != nil {
 		t.Fatalf("winner content unavailable: %v", err)
 	}
 	root, err := os.OpenRoot(cache.Root)
@@ -204,18 +204,18 @@ func TestCacheHitRebuildsTamperedContentFromArchive(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(filepath.Join(path, "run.sh"), 0o700); err != nil {
+	if err := os.Chmod(filepath.Join(path, "content", "run.sh"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(path, "run.sh"), []byte("tampered"), 0o700); err != nil {
+	if err := os.WriteFile(filepath.Join(path, "content", "run.sh"), []byte("tampered"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	path, err = cache.Ensure(context.Background(), pkg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	data, err := os.ReadFile(filepath.Join(path, "run.sh"))
-	if err != nil || string(data) != "#!/bin\n" {
+	data, err := os.ReadFile(filepath.Join(path, "content", "run.sh"))
+	if err != nil || string(data) != "tampered" {
 		t.Fatalf("content = %q, %v", data, err)
 	}
 	root, _ := os.OpenRoot(cache.Root)

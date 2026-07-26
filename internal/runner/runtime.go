@@ -53,6 +53,11 @@ type PackageCache interface {
 type rootCleaner struct{}
 
 func (rootCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
+	// Absence before cleanup is not success: a renamed root can still contain
+	// credentials. Platform adapters add durable file identity in twk-007/008.
+	if _, err := root.Lstat(name); err != nil {
+		return ErrCleanupFailed
+	}
 	if err := root.RemoveAll(name); err != nil {
 		return ErrCleanupFailed
 	}
@@ -130,7 +135,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err := copyTree(content, root); err != nil {
+	if err := materializePackage(content, request.Package, root); err != nil {
 		root.Close()
 		_ = m.removeRoot(ctx, rootName)
 		return Snapshot{}, err
@@ -145,6 +150,17 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		return Snapshot{}, err
 	}
 	return snapshot(record), nil
+}
+
+func materializePackage(source string, pkg Package, destination *os.Root) error {
+	archivePath := filepath.Join(source, "archive")
+	if archive, err := os.Open(archivePath); err == nil {
+		defer archive.Close()
+		return extractArchive(destination, archive, pkg.Format)
+	}
+	// Test-only PackageCache implementations may supply an already materialized
+	// tree. Production Cache supplies a pinned archive directory above.
+	return copyTree(source, destination)
 }
 
 func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, error) {
