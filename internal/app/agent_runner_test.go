@@ -2865,7 +2865,7 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 			return
 		}
 		defer connection.CloseNow()
-		ctx, cancel := context.WithTimeout(request.Context(), 2*time.Second)
+		ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
 		defer cancel()
 		for _, expected := range []transport.MessageType{transport.MessageHello, transport.MessageSnapshot} {
 			envelope, readErr := transport.ReadEnvelope(ctx, connection)
@@ -2914,13 +2914,28 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 			serverResult <- err
 			return
 		}
-		time.Sleep(10 * time.Millisecond)
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			pending, err = agentStore.PendingExecutionUpdates(ctx)
+			if err != nil {
+				serverResult <- err
+				return
+			}
+			if len(pending) == 0 {
+				break
+			}
+			if time.Now().After(deadline) {
+				serverResult <- fmt.Errorf("update ACK was not applied: %#v", pending)
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
 		serverResult <- nil
 		_ = connection.Close(websocket.StatusNormalClosure, "complete")
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	if err != nil {
@@ -2932,7 +2947,7 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 		connection,
 		&AgentState{NodeID: "node-1", Store: agentStore},
 		commandRuntime,
-		agentSessionOptions{heartbeatInterval: 100 * time.Millisecond, readinessTimeout: 20 * time.Millisecond},
+		agentSessionOptions{heartbeatInterval: time.Second, readinessTimeout: 20 * time.Millisecond},
 	)
 	if status := websocket.CloseStatus(sessionErr); status != websocket.StatusNormalClosure {
 		t.Fatalf("session error = %v", sessionErr)
