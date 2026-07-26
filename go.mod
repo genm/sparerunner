@@ -6,6 +6,8 @@ toolchain go1.26.5
 
 require (
 	github.com/actions/scaleset v0.4.0
+	github.com/coder/websocket v1.8.15
+	github.com/hashicorp/mdns v1.0.7
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.4

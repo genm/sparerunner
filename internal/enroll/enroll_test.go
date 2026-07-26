@@ -1,0 +1,268 @@
+package enroll
+
+import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"os"
+	"sync"
+	"testing"
+	"time"
+)
+
+func testService(t *testing.T) (Service, *MemoryRegistry, time.Time) {
+	t.Helper()
+	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
+	identity, err := NewControllerIdentity(now, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digestKey [32]byte
+	if _, err := rand.Read(digestKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	registry := NewMemoryRegistry()
+	return Service{Registry: registry, Identity: identity, DigestKey: digestKey, Epoch: 7, Now: func() time.Time { return now }}, registry, now
+}
+
+func nodeCSR(t *testing.T) ([]byte, ed25519.PrivateKey) {
+	t.Helper()
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := CreateNodeCSR(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return csr, key
+}
+
+func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
+	var fingerprint [32]byte
+	if _, err := rand.Read(fingerprint[:]); err != nil {
+		t.Fatal(err)
+	}
+	code, err := NewJoinCode(fingerprint, []string{"controller.example.test:443"}, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := code.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeJoinCode(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TokenID != code.TokenID || decoded.Secret != code.Secret || decoded.CAFingerprint != fingerprint {
+		t.Fatal("join code changed during canonical round-trip")
+	}
+	for _, malformed := range []string{encoded + "=", encoded + "A", "twk_"} {
+		if _, err := DecodeJoinCode(malformed); err == nil {
+			t.Fatalf("accepted noncanonical code %q", malformed[:4])
+		}
+	}
+	var key [32]byte
+	if _, err := rand.Read(key[:]); err != nil {
+		t.Fatal(err)
+	}
+	digest := SecretDigest(key, code.Secret)
+	if !VerifySecretDigest(digest, SecretDigest(key, code.Secret)) {
+		t.Fatal("valid digest rejected")
+	}
+	var different [32]byte
+	if _, err := rand.Read(different[:]); err != nil {
+		t.Fatal(err)
+	}
+	if VerifySecretDigest(digest, SecretDigest(key, different)) {
+		t.Fatal("different secret accepted")
+	}
+}
+
+func TestEnrollmentConsumesOnceAndFailsClosed(t *testing.T) {
+	service, registry, _ := testService(t)
+	code, err := service.CreateJoinCode(context.Background(), []string{"controller.example.test:443"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := nodeCSR(t)
+	result, err := service.Enroll(context.Background(), code, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.NodeID == "" || result.Credential.NodeID != result.NodeID || result.Credential.Epoch != 1 {
+		t.Fatal("missing node identity")
+	}
+	if _, err := service.Enroll(context.Background(), code, csr); !errors.Is(err, ErrTokenNotFound) {
+		t.Fatalf("replay = %v, want unavailable token", err)
+	}
+	if err := registry.AuthorizeCredential(context.Background(), result.Credential, service.Now()); err != nil {
+		t.Fatalf("fresh credential rejected: %v", err)
+	}
+
+	cancelCode, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeJoinCode(cancelCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cancel(context.Background(), decoded.TokenID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Enroll(context.Background(), cancelCode, csr); !errors.Is(err, ErrTokenNotFound) {
+		t.Fatalf("cancelled token = %v", err)
+	}
+
+	other := service
+	other.Epoch++
+	if _, err := other.Enroll(context.Background(), serviceMustCode(t, service), csr); !errors.Is(err, ErrTokenEpochMismatch) {
+		t.Fatalf("epoch mismatch = %v", err)
+	}
+}
+
+func serviceMustCode(t *testing.T, service Service) string {
+	t.Helper()
+	code, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return code
+}
+
+func TestEnrollmentRaceHasExactlyOneWinner(t *testing.T) {
+	service, _, _ := testService(t)
+	code := serviceMustCode(t, service)
+	var winners int
+	var mutex sync.Mutex
+	var group sync.WaitGroup
+	for range 32 {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			csr, _ := nodeCSR(t)
+			if _, err := service.Enroll(context.Background(), code, csr); err == nil {
+				mutex.Lock()
+				winners++
+				mutex.Unlock()
+			}
+		}()
+	}
+	group.Wait()
+	if winners != 1 {
+		t.Fatalf("token race winners = %d, want 1", winners)
+	}
+}
+
+func TestCSRSubjectAndSANTamperingCannotControlNodeIdentity(t *testing.T) {
+	service, _, now := testService(t)
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{Subject: pkix.Name{CommonName: "attacker"}, DNSNames: []string{"attacker.example.test"}}, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nodeID, err := NewNodeID(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate, _, err := service.Identity.IssueNodeCertificate(csr, nodeID, service.Epoch, now, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certificate.Subject.CommonName == "attacker" || len(certificate.DNSNames) != 0 || len(certificate.URIs) != 1 {
+		t.Fatal("CSR subject or SAN leaked into certificate")
+	}
+	if got, _, epoch, err := NodeCredentialIdentity(certificate); err != nil || got != nodeID || epoch != service.Epoch {
+		t.Fatalf("controller identity = %q, %d, %v", got, epoch, err)
+	}
+	broken := append([]byte(nil), csr...)
+	broken[len(broken)-1] ^= 0x01
+	if _, _, err := service.Identity.IssueNodeCertificate(broken, nodeID, service.Epoch, now, rand.Reader); err == nil {
+		t.Fatal("tampered CSR accepted")
+	}
+}
+
+func TestRenewalPreservesNodeAndSupersedesOldCredential(t *testing.T) {
+	service, registry, now := testService(t)
+	code := serviceMustCode(t, service)
+	csr, _ := nodeCSR(t)
+	initial, err := service.Enroll(context.Background(), code, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A controller restart changes the token epoch, not the node credential epoch.
+	restarted := service
+	restarted.Epoch++
+	renewed, err := restarted.Renew(context.Background(), initial.Credential, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renewed.NodeID != initial.NodeID || renewed.Credential.Serial == initial.Credential.Serial {
+		t.Fatal("renewal did not preserve identity and replace serial")
+	}
+	if err := registry.AuthorizeCredential(context.Background(), initial.Credential, now); !errors.Is(err, ErrCredentialRejected) {
+		t.Fatalf("superseded credential = %v", err)
+	}
+	if err := registry.AuthorizeCredential(context.Background(), renewed.Credential, now); err != nil {
+		t.Fatalf("renewed credential = %v", err)
+	}
+	if _, err := registry.RevokeNode(context.Background(), initial.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.AuthorizeCredential(context.Background(), renewed.Credential, now); !errors.Is(err, ErrCredentialRejected) {
+		t.Fatalf("revoked credential = %v", err)
+	}
+	if err := registry.AuthorizeCredential(context.Background(), renewed.Credential, renewed.Credential.NotAfter); !errors.Is(err, ErrCredentialRejected) {
+		t.Fatalf("expired credential = %v", err)
+	}
+}
+
+func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
+	service, _, now := testService(t)
+	path := t.TempDir() + "/controller-identity.pem"
+	if err := service.Identity.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("controller identity permissions = %v, %v", info.Mode().Perm(), err)
+	}
+	loaded, err := LoadControllerIdentity(path)
+	if err != nil || loaded.CAFingerprint() != service.Identity.CAFingerprint() {
+		t.Fatalf("identity persistence = %v", err)
+	}
+	keyPath := t.TempDir() + "/node-key.pem"
+	key, err := GenerateAndPersistNodeKey(keyPath, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(keyPath); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("node key permissions = %v, %v", info.Mode().Perm(), err)
+	}
+	if loadedKey, err := LoadNodePrivateKey(keyPath); err != nil || !loadedKey.Equal(key) {
+		t.Fatalf("node key persistence = %v", err)
+	}
+	certificate, err := x509.ParseCertificate(service.Identity.Certificate.Raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if due, err := RenewalDue(certificate, now, bytesReader{0}); err != nil || due {
+		t.Fatalf("renewal before jitter window = %v, %v", due, err)
+	}
+}
+
+type bytesReader struct{ value byte }
+
+func (reader bytesReader) Read(buffer []byte) (int, error) {
+	for index := range buffer {
+		buffer[index] = reader.value
+	}
+	return len(buffer), nil
+}
