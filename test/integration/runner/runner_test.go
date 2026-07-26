@@ -37,12 +37,38 @@ func (j fakeJIT) Deliver(deliver func(string) error) error { return deliver(j.va
 type failingCleaner struct{}
 
 func (failingCleaner) StrongWorkspaceOwnership() bool { return true }
+func (failingCleaner) ValidateRuntimeRoot(context.Context, string) error {
+	return nil
+}
 func (failingCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
 	return "test:" + name, nil
 }
 
 func (failingCleaner) RemoveAndVerify(context.Context, *os.Root, string) error {
 	return errors.New("permission denied: secret path")
+}
+
+type strongTestCleaner struct{}
+
+func (strongTestCleaner) StrongWorkspaceOwnership() bool { return true }
+func (strongTestCleaner) ValidateRuntimeRoot(_ context.Context, root string) error {
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return runner.ErrStrongOwnershipUnavailable
+	}
+	return nil
+}
+func (strongTestCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
+}
+func (strongTestCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
+	if err := root.RemoveAll(name); err != nil {
+		return err
+	}
+	if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+		return runner.ErrCleanupFailed
+	}
+	return nil
 }
 
 func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
@@ -92,8 +118,8 @@ func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
 	if _, err := os.Stat(executionRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("execution root still exists: %v", err)
 	}
-	if _, err := manager.Destroy(context.Background(), request.ExecutionID); !errors.Is(err, runner.ErrExecutionConflict) {
-		t.Fatalf("destroy replay error: %v", err)
+	if replay, err := manager.Destroy(context.Background(), request.ExecutionID); err != nil || replay.State != runner.StateReleased {
+		t.Fatalf("destroy replay = %#v, %v", replay, err)
 	}
 }
 
@@ -142,6 +168,42 @@ func TestCleanupFailureWritesTombstoneAndQuarantines(t *testing.T) {
 	}
 }
 
+func TestPreparedCleanupRemovesRunnerCredentialAndWorkspaceMaterial(t *testing.T) {
+	content := fakeRunner(t)
+	journal := runner.NewMemoryJournal()
+	manager, runtimeRoot := newManager(t, content, journal, strongTestCleaner{})
+	request := runner.Preparation{ExecutionID: "execution-sensitive-files", Package: currentPackage(t)}
+	if _, err := manager.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found {
+		t.Fatalf("prepared record = %#v, found=%v, err=%v", record, found, err)
+	}
+	executionRoot := filepath.Join(runtimeRoot, "executions", record.RootName)
+	for name, value := range map[string]string{
+		".runner":                "runner-registration-canary",
+		".credentials":           "credential-canary",
+		".credentials_rsaparams": "rsa-canary",
+		"_work/job/secret":       "workspace-canary",
+	} {
+		path := filepath.Join(executionRoot, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	released, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != runner.StateReleased {
+		t.Fatalf("Destroy = %#v, %v", released, err)
+	}
+	if _, err := os.Lstat(executionRoot); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("execution root remained after cleanup: %v", err)
+	}
+}
+
 func TestThirtyTwoDistinctPreparationsRemainUnique(t *testing.T) {
 	content := fakeRunner(t)
 	manager, runtimeRoot := newManager(t, content, runner.NewMemoryJournal(), nil)
@@ -176,7 +238,7 @@ func BenchmarkPreparedCacheHit(b *testing.B) {
 	packageValue, _ := runner.OfficialPackage(runner.CurrentPlatform())
 	for b.Loop() {
 		journal := runner.NewMemoryJournal()
-		manager, err := runner.NewManager(runner.Options{RuntimeRoot: b.TempDir(), Cache: fakeCache{content}, Journal: journal})
+		manager, err := runner.NewManager(runner.Options{RuntimeRoot: b.TempDir(), Cache: fakeCache{content}, Journal: journal, Cleaner: strongTestCleaner{}})
 		if err != nil {
 			b.Fatal(err)
 		}
@@ -188,6 +250,9 @@ func BenchmarkPreparedCacheHit(b *testing.B) {
 
 func newManager(t *testing.T, content string, journal runner.Journal, cleaner runner.Cleaner) (*runner.Manager, string) {
 	t.Helper()
+	if cleaner == nil {
+		cleaner = strongTestCleaner{}
+	}
 	runtimeRoot := t.TempDir()
 	manager, err := runner.NewManager(runner.Options{RuntimeRoot: runtimeRoot, Cache: fakeCache{content}, Journal: journal, Cleaner: cleaner})
 	if err != nil {

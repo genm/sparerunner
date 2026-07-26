@@ -102,6 +102,9 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(first.Directory, "archive")); err != nil {
 		t.Fatalf("winner content unavailable: %v", err)
 	}
+	if fetcher.calls != 1 {
+		t.Fatalf("concurrent first download fetched %d times, want 1", fetcher.calls)
+	}
 	root, err := os.OpenRoot(cache.Root)
 	if err != nil || !validCacheEntry(root, "packages/"+pkg.key(), pkg) {
 		t.Fatal("cache winner is not a complete verified entry")

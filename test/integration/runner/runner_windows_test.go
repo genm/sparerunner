@@ -14,7 +14,9 @@ import (
 
 type windowsCache struct{}
 
-func (windowsCache) Ensure(context.Context, runner.Package) (string, error) { return "", nil }
+func (windowsCache) Ensure(context.Context, runner.Package) (runner.ArchiveRef, error) {
+	return runner.ArchiveRef{}, nil
+}
 
 type windowsJIT struct{}
 

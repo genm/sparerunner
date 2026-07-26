@@ -12,6 +12,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"sync"
 )
 
 // Cache stores verified official artifacts separately from per-execution roots.
@@ -35,6 +36,16 @@ type cacheManifest struct {
 	Format   string   `json:"format"`
 }
 
+var cacheGates = struct {
+	sync.Mutex
+	entries map[string]*cacheGate
+}{entries: make(map[string]*cacheGate)}
+
+type cacheGate struct {
+	token chan struct{}
+	refs  int
+}
+
 // Ensure returns the immutable content directory. A complete cache entry becomes
 // visible only through an atomic directory rename; concurrent creators either win
 // that rename or discard their verified temporary copy and use the winner.
@@ -42,8 +53,18 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (ArchiveRef, error) {
 	if c.Root == "" || c.Fetcher == nil || !c.validPackage(pkg) {
 		return ArchiveRef{}, ErrInvalidRequest
 	}
+	absoluteRoot, err := filepath.Abs(c.Root)
+	if err != nil {
+		return ArchiveRef{}, ErrPackageIntegrity
+	}
+	c.Root = filepath.Clean(absoluteRoot)
 	if err := os.MkdirAll(c.Root, 0o700); err != nil {
 		return ArchiveRef{}, ErrPackageIntegrity
+	}
+	if c.verifyPackage == nil {
+		if err := requirePrivateCacheRoot(c.Root); err != nil {
+			return ArchiveRef{}, ErrPackageIntegrity
+		}
 	}
 	root, err := os.OpenRoot(c.Root)
 	if err != nil {
@@ -54,6 +75,17 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (ArchiveRef, error) {
 		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	entry := path.Join("packages", pkg.key())
+	if validCacheEntry(root, entry, pkg) {
+		return ArchiveRef{Directory: filepath.Join(c.Root, entry), Archive: "archive"}, nil
+	}
+	release, err := acquireCacheGate(ctx, filepath.Join(c.Root, entry))
+	if err != nil {
+		return ArchiveRef{}, err
+	}
+	defer release()
+	// Another caller in this process may have completed the immutable entry
+	// while this caller waited. Separate agent processes still converge through
+	// the atomic no-replacement rename below.
 	if validCacheEntry(root, entry, pkg) {
 		return ArchiveRef{Directory: filepath.Join(c.Root, entry), Archive: "archive"}, nil
 	}
@@ -94,42 +126,6 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (ArchiveRef, error) {
 	return ArchiveRef{Directory: filepath.Join(c.Root, entry), Archive: "archive"}, nil
 }
 
-// rebuildCachedContent treats the pinned archive, not the mutable extracted
-// tree or manifest, as the trust anchor before any runner receives its files.
-func rebuildCachedContent(root *os.Root, entry string, pkg Package) error {
-	if err := thawCacheEntry(root, entry); err != nil {
-		return ErrPackageIntegrity
-	}
-	entryRoot, err := root.OpenRoot(entry)
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer entryRoot.Close()
-	if err := entryRoot.RemoveAll("content"); err != nil {
-		return ErrPackageIntegrity
-	}
-	if err := entryRoot.Mkdir("content", 0o700); err != nil {
-		return ErrPackageIntegrity
-	}
-	content, err := entryRoot.OpenRoot("content")
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer content.Close()
-	archive, err := entryRoot.Open("archive")
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer archive.Close()
-	if err := extractArchive(content, archive, pkg.Format); err != nil {
-		return err
-	}
-	if err := freezeCacheEntry(entryRoot); err != nil {
-		return ErrPackageIntegrity
-	}
-	return nil
-}
-
 func freezeCacheEntry(root *os.Root) error {
 	return fs.WalkDir(root.FS(), ".", func(name string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil || name == "." {
@@ -151,6 +147,38 @@ func freezeCacheEntry(root *os.Root) error {
 		}
 		return root.Chmod(name, mode)
 	})
+}
+
+func acquireCacheGate(ctx context.Context, key string) (func(), error) {
+	cacheGates.Lock()
+	gate := cacheGates.entries[key]
+	if gate == nil {
+		gate = &cacheGate{token: make(chan struct{}, 1)}
+		cacheGates.entries[key] = gate
+	}
+	gate.refs++
+	cacheGates.Unlock()
+
+	select {
+	case gate.token <- struct{}{}:
+		return func() {
+			<-gate.token
+			cacheGates.Lock()
+			gate.refs--
+			if gate.refs == 0 {
+				delete(cacheGates.entries, key)
+			}
+			cacheGates.Unlock()
+		}, nil
+	case <-ctx.Done():
+		cacheGates.Lock()
+		gate.refs--
+		if gate.refs == 0 {
+			delete(cacheGates.entries, key)
+		}
+		cacheGates.Unlock()
+		return nil, ctx.Err()
+	}
 }
 
 func thawCacheEntry(root *os.Root, name string) error {

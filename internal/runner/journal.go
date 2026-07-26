@@ -30,8 +30,16 @@ type Record struct {
 }
 
 // ContainmentRef is durable platform ownership metadata. PID is observation
-// only; twk-007 fills this with a systemd unit/cgroup/boot/invocation identity.
-type ContainmentRef struct{ Backend, Unit, ControlGroup, BootID, InvocationID string }
+// only. OwnerID is the platform authority (systemd unit, exclusive macOS slot
+// UID, or Windows Job Object name); Scope and epoch fields carry backend-specific
+// reconciliation observations without making the core lifecycle Linux-shaped.
+type ContainmentRef struct {
+	Backend      string
+	OwnerID      string
+	Scope        string
+	HostEpoch    string
+	InvocationID string
+}
 
 // Journal is the durable local observation boundary. A future SQLite journal may
 // implement it without changing lifecycle behavior or receiving JIT material.

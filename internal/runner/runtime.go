@@ -45,6 +45,7 @@ type Snapshot struct {
 type Cleaner interface {
 	RemoveAndVerify(context.Context, *os.Root, string) error
 	StrongWorkspaceOwnership() bool
+	ValidateRuntimeRoot(context.Context, string) error
 	WorkspaceRef(context.Context, *os.Root, string) (string, error)
 }
 
@@ -60,6 +61,9 @@ type ArchiveRef struct{ Directory, Archive string }
 type rootCleaner struct{}
 
 func (rootCleaner) StrongWorkspaceOwnership() bool { return false }
+func (rootCleaner) ValidateRuntimeRoot(context.Context, string) error {
+	return ErrStrongOwnershipUnavailable
+}
 func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (string, error) {
 	return "", ErrStrongOwnershipUnavailable
 }
@@ -120,6 +124,14 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	if err := validatePreparation(request); err != nil {
 		return Snapshot{}, err
 	}
+	if !m.cleaner.StrongWorkspaceOwnership() {
+		// Creating a root that cannot later be identity-checked would turn a
+		// cancelled preparation into an unrecoverable credential workspace.
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
+	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	record, found, err := m.load(ctx, request.ExecutionID)
@@ -149,16 +161,29 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	}
 	if err := materializePackage(archive, request.Package, root); err != nil {
 		root.Close()
-		_ = m.removeRoot(ctx, rootName)
+		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
+			return m.quarantinePreparation(ctx, request, digest, rootName, "")
+		}
 		return Snapshot{}, err
 	}
 	if err := root.Close(); err != nil {
-		_ = m.removeRoot(ctx, rootName)
+		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
+			return m.quarantinePreparation(ctx, request, digest, rootName, "")
+		}
 		return Snapshot{}, ErrCleanupFailed
 	}
-	record = Record{ExecutionID: request.ExecutionID, SpecDigest: digest, State: StatePrepared, RootName: rootName}
+	workspaceRef, err := m.workspaceRef(ctx, rootName)
+	if err != nil || workspaceRef == "" {
+		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
+			return m.quarantinePreparation(ctx, request, digest, rootName, "")
+		}
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
+	record = Record{ExecutionID: request.ExecutionID, SpecDigest: digest, State: StatePrepared, RootName: rootName, WorkspaceRef: workspaceRef}
 	if err := m.save(ctx, record); err != nil {
-		_ = m.removeRoot(ctx, rootName)
+		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
+			return m.quarantinePreparation(ctx, request, digest, rootName, workspaceRef)
+		}
 		return Snapshot{}, err
 	}
 	return snapshot(record), nil
@@ -202,16 +227,6 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	if !validRecord(record) {
 		return Snapshot{}, ErrReconciliationRequired
 	}
-	if record.WorkspaceRef == "" {
-		ref, refErr := m.workspaceRef(ctx, record.RootName)
-		if refErr != nil || ref == "" {
-			return Snapshot{}, ErrStrongOwnershipUnavailable
-		}
-		record.WorkspaceRef = ref
-		if err := m.save(ctx, record); err != nil {
-			return Snapshot{}, err
-		}
-	}
 	jitDigest := request.JIT.Digest()
 	switch record.State {
 	case StateRunning:
@@ -230,9 +245,17 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	default:
 		return snapshot(record), ErrExecutionConflict
 	}
+	containment, err := m.supervisor.PrepareContainment(ctx, record.ExecutionID)
+	if err != nil || !validContainment(containment) {
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
 	record.State = StateStarting
 	record.JITDigest = jitDigest
+	record.Containment = containment
 	if err := m.save(ctx, record); err != nil {
+		if stopErr := m.supervisor.Stop(ctx, Process{Containment: containment}); stopErr != nil {
+			return m.quarantine(ctx, record)
+		}
 		return Snapshot{}, err
 	}
 	var process Process
@@ -248,29 +271,37 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		started = true
 		var startErr error
 		process, startErr = m.supervisor.Start(ctx, StartRequest{
-			Executable: runnerExecutable(m.runtimeRoot, record.RootName),
-			Directory:  executionPath(m.runtimeRoot, record.RootName),
-			Arguments:  runnerArguments(request.DisableUpdate),
-			jit:        jitArgument{value: value},
+			Executable:  runnerExecutable(m.runtimeRoot, record.RootName),
+			Directory:   executionPath(m.runtimeRoot, record.RootName),
+			Arguments:   runnerArguments(request.DisableUpdate),
+			Containment: containment,
+			jit:         jitArgument{value: value},
 		})
 		return startErr
 	}); err != nil {
-		if process.PID > 0 {
-			if stopErr := m.supervisor.Stop(ctx, process); stopErr != nil {
-				return m.quarantine(ctx, record)
-			}
+		if stopErr := m.supervisor.Stop(ctx, Process{PID: process.PID, Containment: containment}); stopErr != nil {
+			return m.quarantine(ctx, record)
 		}
 		record.State = StatePrepared
 		record.JITDigest = ""
 		record.PID = 0
+		record.Containment = ContainmentRef{}
 		if saveErr := m.save(ctx, record); saveErr != nil {
 			return Snapshot{}, saveErr
 		}
 		return Snapshot{}, ErrInvalidRequest
 	}
-	if !started || process.PID <= 0 {
+	if !started || process.PID <= 0 || process.Containment != containment {
+		if stopErr := m.supervisor.Stop(ctx, Process{PID: process.PID, Containment: containment}); stopErr != nil {
+			return m.quarantine(ctx, record)
+		}
+		if process.Containment != containment {
+			return m.quarantine(ctx, record)
+		}
 		record.State = StatePrepared
 		record.JITDigest = ""
+		record.PID = 0
+		record.Containment = ContainmentRef{}
 		if saveErr := m.save(ctx, record); saveErr != nil {
 			return m.quarantine(ctx, record)
 		}
@@ -332,15 +363,15 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		return Snapshot{}, ErrReconciliationRequired
 	}
 	if record.State == StateReleased {
-		return snapshot(record), ErrExecutionConflict
+		return snapshot(record), nil
 	}
 	if record.State == StateCleanupFailed {
 		return snapshot(record), ErrQuarantined
 	}
-	if record.State == StateStarting {
-		// A crash could have occurred after process creation but before PID
-		// persistence. There is no ownership proof, so do not delete the root or
-		// release capacity on the strength of an unobservable guess.
+	if !m.cleaner.StrongWorkspaceOwnership() {
+		return m.quarantine(ctx, record)
+	}
+	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
 		return m.quarantine(ctx, record)
 	}
 	if record.WorkspaceRef == "" {
@@ -349,7 +380,10 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
 		return m.quarantine(ctx, record)
 	}
-	if record.PID > 0 {
+	if record.State == StateStarting || record.State == StateRunning {
+		if !m.supervisor.StrongDescendantOwnership() || !validContainment(record.Containment) {
+			return m.quarantine(ctx, record)
+		}
 		if err := m.supervisor.Stop(ctx, Process{PID: record.PID, Containment: record.Containment}); err != nil {
 			return m.quarantine(ctx, record)
 		}
@@ -372,6 +406,17 @@ func (m *Manager) quarantine(ctx context.Context, record Record) (Snapshot, erro
 		return Snapshot{}, ErrJournal
 	}
 	return snapshot(record), ErrQuarantined
+}
+
+func (m *Manager) quarantinePreparation(ctx context.Context, request Preparation, specDigest, rootName, workspaceRef string) (Snapshot, error) {
+	return m.quarantine(ctx, Record{
+		ExecutionID:  request.ExecutionID,
+		SpecDigest:   specDigest,
+		State:        StateCleanupFailed,
+		RootName:     rootName,
+		Tombstone:    true,
+		WorkspaceRef: workspaceRef,
+	})
 }
 
 func (m *Manager) load(ctx context.Context, id string) (Record, bool, error) {
@@ -538,16 +583,20 @@ func validRecord(record Record) bool {
 	}
 	switch record.State {
 	case StatePrepared:
-		return record.PID == 0 && record.JITDigest == "" && !record.Tombstone
+		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef != "" && record.Containment == (ContainmentRef{}) && !record.Tombstone
 	case StateStarting:
-		return record.PID == 0 && record.JITDigest != "" && !record.Tombstone
+		return record.PID == 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
 	case StateRunning:
-		return record.PID > 0 && record.JITDigest != "" && record.Containment.Backend != "" && record.Containment.Unit != "" && !record.Tombstone
+		return record.PID > 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
 	case StateReleased:
-		return record.PID == 0 && !record.Tombstone
+		return record.PID == 0 && record.WorkspaceRef != "" && !record.Tombstone
 	case StateCleanupFailed:
 		return record.Tombstone
 	default:
 		return false
 	}
+}
+
+func validContainment(ref ContainmentRef) bool {
+	return ref.Backend != "" && ref.OwnerID != ""
 }

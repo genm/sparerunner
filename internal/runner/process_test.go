@@ -8,22 +8,19 @@ import (
 	"testing"
 )
 
-func TestRecreatedSupervisorRejectsUnownedPID(t *testing.T) {
-	owner := NewSupervisor()
-	process, err := owner.Start(context.Background(), StartRequest{Executable: "/bin/sh", Directory: t.TempDir(), Arguments: []string{"-c", "while :; do sleep 1; done"}})
-	if err != nil {
-		t.Fatal(err)
+func TestUnixSupervisorOperationsFailClosedWithoutPlatformContainment(t *testing.T) {
+	supervisor := NewSupervisor()
+	if _, err := supervisor.PrepareContainment(context.Background(), "execution"); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+		t.Fatalf("PrepareContainment error = %v", err)
 	}
-	t.Cleanup(func() { _ = owner.Stop(context.Background(), process) })
-	recreated := NewSupervisor()
-	if err := recreated.Stop(context.Background(), process); !errors.Is(err, ErrReconciliationRequired) {
-		t.Fatalf("recreated Stop error = %v", err)
+	if _, err := supervisor.Start(context.Background(), StartRequest{}); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+		t.Fatalf("Start error = %v", err)
 	}
-	if _, err := recreated.Alive(process); !errors.Is(err, ErrReconciliationRequired) {
-		t.Fatalf("recreated Alive error = %v", err)
+	if err := supervisor.Stop(context.Background(), Process{}); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+		t.Fatalf("Stop error = %v", err)
 	}
-	if alive, err := owner.Alive(process); err != nil || !alive {
-		t.Fatalf("owner process unexpectedly signalled: alive=%v err=%v", alive, err)
+	if _, err := supervisor.Alive(Process{}); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+		t.Fatalf("Alive error = %v", err)
 	}
 }
 

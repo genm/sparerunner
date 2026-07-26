@@ -11,6 +11,9 @@ type windowsSupervisor struct{}
 
 func newPlatformSupervisor() Supervisor                   { return windowsSupervisor{} }
 func (windowsSupervisor) StrongDescendantOwnership() bool { return false }
+func (windowsSupervisor) PrepareContainment(context.Context, string) (ContainmentRef, error) {
+	return ContainmentRef{}, ErrStrongOwnershipUnavailable
+}
 func (windowsSupervisor) Start(context.Context, StartRequest) (Process, error) {
 	return Process{}, ErrStrongOwnershipUnavailable
 }
