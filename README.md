@@ -76,8 +76,12 @@ Common commands:
 ```bash
 just check       # formatting, lint, tests, and builds
 just build-all   # cross-compile controller and agent
-just dev         # controller and Vite through Process Compose
+just dev         # Vite Web UI only through Process Compose
 ```
+
+`tewake serve` is intentionally unavailable in this bootstrap snapshot. Until the
+controller exists, `just dev` starts only the Web UI and does not imply that its
+API, readiness endpoint, or controller-backed flows are available.
 
 Tests write machine-readable results below `output/test-results/`, which is ignored
 by Git.
