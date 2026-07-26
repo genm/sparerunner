@@ -34,12 +34,35 @@ func (StartRequest) MarshalJSON() ([]byte, error) {
 // last possible point before exec. A strong Supervisor must call it while
 // holding the same fence that linearizes Start with Stop.
 func (request StartRequest) VerifyWorkspaceAtExec(ctx context.Context) error {
-	if request.verify == nil {
+	lease := request.jit.lease
+	if request.verify == nil || lease == nil {
 		return ErrWorkspaceChanged
 	}
-	if err := request.verify(ctx); err != nil {
+	lease.mu.Lock()
+	if lease.revoked || lease.verificationAttempted || lease.consumed {
+		if !lease.revoked {
+			lease.contractFailed = true
+			lease.consumed = true
+			lease.value = ""
+		}
+		lease.mu.Unlock()
 		return ErrWorkspaceChanged
 	}
+	lease.verificationAttempted = true
+	lease.mu.Unlock()
+
+	verifyErr := request.verify(ctx)
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if verifyErr != nil || lease.revoked || lease.consumed || lease.contractFailed {
+		if !lease.revoked {
+			lease.contractFailed = true
+			lease.consumed = true
+			lease.value = ""
+		}
+		return ErrWorkspaceChanged
+	}
+	lease.workspaceVerified = true
 	return nil
 }
 
@@ -48,22 +71,63 @@ func (request StartRequest) VerifyWorkspaceAtExec(ctx context.Context) error {
 // Consumption is committed before the callback, so an error can never cause the
 // same one-job credential to be delivered again.
 func (request StartRequest) DeliverJIT(deliver func(string) error) error {
-	if request.jit.lease == nil || deliver == nil {
+	lease := request.jit.lease
+	if lease == nil || deliver == nil {
 		return ErrInvalidRequest
 	}
-	request.jit.lease.mu.Lock()
-	if request.jit.lease.consumed {
-		request.jit.lease.mu.Unlock()
+	lease.mu.Lock()
+	if lease.revoked {
+		lease.mu.Unlock()
 		return ErrInvalidRequest
 	}
-	request.jit.lease.consumed = true
-	value := request.jit.lease.value
-	request.jit.lease.value = ""
-	request.jit.lease.mu.Unlock()
-	if err := deliver(value); err != nil {
+	if lease.consumed {
+		lease.contractFailed = true
+		lease.mu.Unlock()
+		return ErrInvalidRequest
+	}
+	if !lease.workspaceVerified || lease.contractFailed {
+		lease.contractFailed = true
+		lease.consumed = true
+		lease.value = ""
+		lease.mu.Unlock()
+		return ErrWorkspaceChanged
+	}
+	lease.consumed = true
+	lease.deliveryInProgress = true
+	value := lease.value
+	lease.value = ""
+	lease.mu.Unlock()
+
+	deliverErr := deliver(value)
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	lease.deliveryInProgress = false
+	if deliverErr != nil || lease.revoked || lease.contractFailed {
+		lease.contractFailed = true
 		return ErrStartFailed
 	}
+	lease.deliverySucceeded = true
 	return nil
+}
+
+// finishStart atomically expires every retained StartRequest copy and proves
+// that the platform completed the required verify-then-deliver sequence before
+// returning success.
+func (request StartRequest) finishStart() bool {
+	lease := request.jit.lease
+	if lease == nil {
+		return false
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	satisfied := lease.workspaceVerified &&
+		lease.deliverySucceeded &&
+		!lease.deliveryInProgress &&
+		!lease.contractFailed &&
+		!lease.revoked
+	lease.revoked = true
+	lease.value = ""
+	return satisfied
 }
 
 // jitArgument is one-way runtime material. It intentionally cannot be formatted
@@ -71,9 +135,15 @@ func (request StartRequest) DeliverJIT(deliver func(string) error) error {
 type jitArgument struct{ lease *jitLease }
 
 type jitLease struct {
-	mu       sync.Mutex
-	consumed bool
-	value    string
+	mu                    sync.Mutex
+	value                 string
+	verificationAttempted bool
+	workspaceVerified     bool
+	consumed              bool
+	deliveryInProgress    bool
+	deliverySucceeded     bool
+	contractFailed        bool
+	revoked               bool
 }
 
 func newJITArgument(value string) jitArgument {

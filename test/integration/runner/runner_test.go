@@ -22,8 +22,23 @@ import (
 
 type fakeCache struct{ content string }
 
-func (f fakeCache) Ensure(context.Context, runner.Package) (runner.ArchiveRef, error) {
-	return runner.ArchiveRef{Directory: f.content, Archive: "test-tree"}, nil
+type fakePreparedPackage struct{ content string }
+
+func (prepared fakePreparedPackage) Materialize(destination *os.Root) error {
+	info, err := os.Stat(filepath.Join(prepared.content, "run.sh"))
+	if err != nil {
+		return err
+	}
+	data, err := os.ReadFile(filepath.Join(prepared.content, "run.sh"))
+	if err != nil {
+		return err
+	}
+	return destination.WriteFile("run.sh", data, info.Mode().Perm())
+}
+func (fakePreparedPackage) Close() error { return nil }
+
+func (f fakeCache) Ensure(context.Context, runner.Package) (runner.PreparedPackage, error) {
+	return fakePreparedPackage{content: f.content}, nil
 }
 
 type fakeJIT struct{ value string }
@@ -138,6 +153,96 @@ func (supervisor *packageBoundarySupervisor) Alive(process runner.Process) (bool
 	return supervisor.running[process.Containment.FenceToken], nil
 }
 
+// retainedRequestSupervisor models an external platform adapter that performs
+// the workspace check but accidentally returns a successful Process without
+// consuming the one-job JIT lease. It retains the request to prove the core
+// revokes every copy before returning to its caller.
+type retainedRequestSupervisor struct {
+	mu       sync.Mutex
+	request  runner.StartRequest
+	starts   int
+	stops    int
+	delivers int
+}
+
+func (*retainedRequestSupervisor) StrongDescendantOwnership() bool { return true }
+func (*retainedRequestSupervisor) WorkspaceBackend() string        { return "test-v1" }
+func (*retainedRequestSupervisor) PrepareContainment(_ context.Context, executionID string) (runner.ContainmentRef, error) {
+	return runner.ContainmentRef{Backend: "external-test", OwnerID: "retained-" + executionID}, nil
+}
+func (supervisor *retainedRequestSupervisor) Start(ctx context.Context, request runner.StartRequest) (runner.Process, error) {
+	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
+		return runner.Process{Containment: request.Containment}, err
+	}
+	supervisor.mu.Lock()
+	supervisor.request = request
+	supervisor.starts++
+	pid := supervisor.starts
+	supervisor.mu.Unlock()
+	return runner.Process{PID: pid, Containment: request.Containment}, nil
+}
+func (supervisor *retainedRequestSupervisor) Stop(_ context.Context, process runner.Process) error {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	supervisor.stops++
+	return nil
+}
+func (*retainedRequestSupervisor) Alive(runner.Process) (bool, error) { return false, nil }
+
+func (supervisor *retainedRequestSupervisor) attemptRetainedDelivery() (int, error) {
+	supervisor.mu.Lock()
+	request := supervisor.request
+	supervisor.mu.Unlock()
+	err := request.DeliverJIT(func(string) error {
+		supervisor.mu.Lock()
+		supervisor.delivers++
+		supervisor.mu.Unlock()
+		return nil
+	})
+	supervisor.mu.Lock()
+	deliveries := supervisor.delivers
+	supervisor.mu.Unlock()
+	return deliveries, err
+}
+
+// verifyOrderSupervisor models a platform adapter that tries to consume JIT
+// before it has proved the workspace identity at its exec boundary.
+type verifyOrderSupervisor struct {
+	mu       sync.Mutex
+	starts   int
+	stops    int
+	delivers int
+}
+
+func (*verifyOrderSupervisor) StrongDescendantOwnership() bool { return true }
+func (*verifyOrderSupervisor) WorkspaceBackend() string        { return "test-v1" }
+func (*verifyOrderSupervisor) PrepareContainment(_ context.Context, executionID string) (runner.ContainmentRef, error) {
+	return runner.ContainmentRef{Backend: "external-test", OwnerID: "wrong-order-" + executionID}, nil
+}
+func (supervisor *verifyOrderSupervisor) Start(_ context.Context, request runner.StartRequest) (runner.Process, error) {
+	err := request.DeliverJIT(func(string) error {
+		supervisor.mu.Lock()
+		supervisor.delivers++
+		supervisor.mu.Unlock()
+		return nil
+	})
+	if err != nil {
+		return runner.Process{Containment: request.Containment}, err
+	}
+	supervisor.mu.Lock()
+	supervisor.starts++
+	pid := supervisor.starts
+	supervisor.mu.Unlock()
+	return runner.Process{PID: pid, Containment: request.Containment}, nil
+}
+func (supervisor *verifyOrderSupervisor) Stop(_ context.Context, process runner.Process) error {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	supervisor.stops++
+	return nil
+}
+func (*verifyOrderSupervisor) Alive(runner.Process) (bool, error) { return false, nil }
+
 func TestExternalPlatformSupervisorConsumesJITOnceWithoutRawAccessor(t *testing.T) {
 	content := fakeRunner(t)
 	runtimeRoot := t.TempDir()
@@ -174,6 +279,79 @@ func TestExternalPlatformSupervisorConsumesJITOnceWithoutRawAccessor(t *testing.
 	released, err := manager.Destroy(context.Background(), request.ExecutionID)
 	if err != nil || released.State != runner.StateReleased || supervisor.stops != 1 {
 		t.Fatalf("Destroy = %#v, %v stops=%d", released, err, supervisor.stops)
+	}
+}
+
+func TestExternalSupervisorCannotSucceedWithoutConsumingJIT(t *testing.T) {
+	content := fakeRunner(t)
+	runtimeRoot := t.TempDir()
+	supervisor := &retainedRequestSupervisor{}
+	journal := runner.NewMemoryJournal()
+	manager, err := runner.NewManager(runner.Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       fakeCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongTestCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runner.Preparation{ExecutionID: "external-no-jit-consume", Package: currentPackage(t)}
+	state, err := manager.EnsureRunning(context.Background(), runner.Start{
+		Preparation: request,
+		JIT:         fakeJIT{"retained-jit.example.test"},
+	})
+	if !errors.Is(err, runner.ErrStartFailed) || state.State != runner.StateFailed {
+		t.Fatalf("EnsureRunning = %#v, %v", state, err)
+	}
+	if supervisor.starts != 1 || supervisor.stops != 1 {
+		t.Fatalf("starts=%d stops=%d", supervisor.starts, supervisor.stops)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != runner.StateFailed {
+		t.Fatalf("failed record = %#v, found=%v, err=%v", record, found, loadErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", record.RootName)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed execution root remained: %v", statErr)
+	}
+	if deliveries, deliveryErr := supervisor.attemptRetainedDelivery(); !errors.Is(deliveryErr, runner.ErrInvalidRequest) || deliveries != 0 {
+		t.Fatalf("retained delivery calls=%d err=%v", deliveries, deliveryErr)
+	}
+}
+
+func TestExternalSupervisorCannotConsumeJITBeforeWorkspaceVerification(t *testing.T) {
+	content := fakeRunner(t)
+	runtimeRoot := t.TempDir()
+	supervisor := &verifyOrderSupervisor{}
+	journal := runner.NewMemoryJournal()
+	manager, err := runner.NewManager(runner.Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       fakeCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongTestCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runner.Preparation{ExecutionID: "external-jit-before-workspace", Package: currentPackage(t)}
+	state, err := manager.EnsureRunning(context.Background(), runner.Start{
+		Preparation: request,
+		JIT:         fakeJIT{"wrong-order-jit.example.test"},
+	})
+	if !errors.Is(err, runner.ErrQuarantined) || !state.Quarantined {
+		t.Fatalf("EnsureRunning = %#v, %v", state, err)
+	}
+	if supervisor.starts != 0 || supervisor.stops != 1 || supervisor.delivers != 0 {
+		t.Fatalf("starts=%d stops=%d deliveries=%d", supervisor.starts, supervisor.stops, supervisor.delivers)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != runner.StateCleanupFailed || !record.Tombstone {
+		t.Fatalf("quarantine record = %#v, found=%v, err=%v", record, found, loadErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", record.RootName)); statErr != nil {
+		t.Fatalf("quarantined execution root = %v", statErr)
 	}
 }
 

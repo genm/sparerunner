@@ -58,13 +58,16 @@ type Cleaner interface {
 }
 
 type PackageCache interface {
-	Ensure(context.Context, Package) (ArchiveRef, error)
+	Ensure(context.Context, Package) (PreparedPackage, error)
 }
 
-// ArchiveRef points only at a verified immutable release artifact. A shared
-// extracted tree is never executable input; each execution extracts this archive
-// beneath its own private root.
-type ArchiveRef struct{ Directory, Archive string }
+// PreparedPackage is a capability for one verified package object. Production
+// Cache implementations keep the verified archive file descriptor open so
+// materialization never resolves a path after validation.
+type PreparedPackage interface {
+	Materialize(*os.Root) error
+	Close() error
+}
 
 type rootCleaner struct{}
 
@@ -181,10 +184,14 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		}
 		return snapshot(record.Record), stateError(record.Record)
 	}
-	archive, err := m.cache.Ensure(ctx, request.Package)
+	preparedPackage, err := m.cache.Ensure(ctx, request.Package)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if preparedPackage == nil {
+		return Snapshot{}, ErrPackageIntegrity
+	}
+	defer preparedPackage.Close()
 	rootName := executionRootName(request.ExecutionID)
 	record, created, err := m.create(ctx, Record{
 		ExecutionID: request.ExecutionID,
@@ -204,7 +211,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		// from a crashed owner. Without a captured identity, absence is unproven.
 		return m.quarantine(ctx, record)
 	}
-	if err := materializePackage(archive, request.Package, root); err != nil {
+	if err := preparedPackage.Materialize(root); err != nil {
 		root.Close()
 		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
 			return m.quarantine(ctx, record)
@@ -233,21 +240,6 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		return Snapshot{}, err
 	}
 	return snapshot(record.Record), nil
-}
-
-func materializePackage(source ArchiveRef, pkg Package, destination *os.Root) error {
-	if source.Archive == "test-tree" {
-		return copyTree(source.Directory, destination)
-	}
-	if source.Directory == "" || source.Archive != "archive" {
-		return ErrPackageIntegrity
-	}
-	archive, err := os.Open(filepath.Join(source.Directory, source.Archive))
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer archive.Close()
-	return extractArchive(destination, archive, pkg.Format)
 }
 
 func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, error) {
@@ -354,7 +346,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 			return ErrWorkspaceChanged
 		}
 		started = true
-		process, supervisorErr = m.supervisor.Start(ctx, StartRequest{
+		startRequest := StartRequest{
 			Executable:   runnerExecutable(m.runtimeRoot, record.RootName),
 			Directory:    executionPath(m.runtimeRoot, record.RootName),
 			Arguments:    runnerArguments(request.DisableUpdate),
@@ -367,7 +359,13 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 				}
 				return nil
 			},
-		})
+		}
+		process, supervisorErr = m.supervisor.Start(ctx, startRequest)
+		if contractSatisfied := startRequest.finishStart(); supervisorErr == nil && !contractSatisfied {
+			// A platform adapter cannot defer or retain the one-job secret past
+			// Start. Revoke all request copies before cleanup and fail closed.
+			supervisorErr = ErrStartFailed
+		}
 		return supervisorErr
 	}); err != nil {
 		if stopErr := m.supervisor.Stop(ctx, Process{PID: process.PID, Containment: containment}); stopErr != nil {

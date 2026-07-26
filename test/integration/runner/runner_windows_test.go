@@ -14,8 +14,8 @@ import (
 
 type windowsCache struct{}
 
-func (windowsCache) Ensure(context.Context, runner.Package) (runner.ArchiveRef, error) {
-	return runner.ArchiveRef{}, nil
+func (windowsCache) Ensure(context.Context, runner.Package) (runner.PreparedPackage, error) {
+	return nil, errors.New("runner cache must not be reached without a Job Object")
 }
 
 type windowsJIT struct{}

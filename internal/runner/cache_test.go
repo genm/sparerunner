@@ -70,7 +70,7 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 	fetcher := &bytesFetcher{data: archive}
 	cache := Cache{Root: t.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
 	const callers = 32
-	paths := make(chan ArchiveRef, callers)
+	packages := make(chan PreparedPackage, callers)
 	errs := make(chan error, callers)
 	var group sync.WaitGroup
 	for range callers {
@@ -78,36 +78,54 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 		go func() {
 			defer group.Done()
 			result, err := cache.Ensure(context.Background(), pkg)
-			paths <- result
+			packages <- result
 			errs <- err
 		}()
 	}
 	group.Wait()
-	close(paths)
+	close(packages)
 	close(errs)
-	var first ArchiveRef
 	for err := range errs {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
-	for result := range paths {
-		if first.Directory == "" {
-			first = result
+	for prepared := range packages {
+		if prepared == nil {
+			t.Fatal("cache returned a nil prepared package")
 		}
-		if result != first {
-			t.Fatalf("cache paths differ: %q and %q", first, result)
+		destination, err := os.OpenRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := prepared.Materialize(destination); err != nil {
+			destination.Close()
+			t.Fatal(err)
+		}
+		if err := destination.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := prepared.Close(); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(first.Directory, "archive")); err != nil {
+	entryPath := filepath.Join(cache.Root, "packages", pkg.key())
+	if _, err := os.Stat(filepath.Join(entryPath, "archive")); err != nil {
 		t.Fatalf("winner content unavailable: %v", err)
 	}
 	if fetcher.calls != 1 {
 		t.Fatalf("concurrent first download fetched %d times, want 1", fetcher.calls)
 	}
 	root, err := os.OpenRoot(cache.Root)
-	if err != nil || !validCacheEntry(root, "packages/"+pkg.key(), pkg) {
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, valid := openValidCacheEntry(root, "packages/"+pkg.key(), pkg)
+	if !valid {
 		t.Fatal("cache winner is not a complete verified entry")
+	}
+	if err := verified.Close(); err != nil {
+		t.Fatal(err)
 	}
 	// Production never mutates verified cache content. The test unlocks its own
 	// temporary entry solely so testing.T can remove its sandbox afterward.
@@ -137,10 +155,13 @@ func TestCacheRequiresExactOfficialAssetSize(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			cache := Cache{Root: t.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
-			_, err := cache.Ensure(context.Background(), pkg)
+			prepared, err := cache.Ensure(context.Background(), pkg)
 			if name == "chunked" {
 				if err != nil {
 					t.Fatalf("chunked Ensure error = %v", err)
+				}
+				if closeErr := prepared.Close(); closeErr != nil {
+					t.Fatal(closeErr)
 				}
 				root, openErr := os.OpenRoot(cache.Root)
 				if openErr != nil {
@@ -165,7 +186,11 @@ func TestCacheHitRejectsTamperedArtifact(t *testing.T) {
 	pkg := Package{Version: "test", Platform: Platform{"test", "test"}, Asset: "runner.tar.gz", Checksum: hex.EncodeToString(sum[:]), Size: int64(len(archive)), Format: ArchiveTarGz}
 	fetcher := &bytesFetcher{data: archive}
 	cache := Cache{Root: t.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
-	if _, err := cache.Ensure(context.Background(), pkg); err != nil {
+	prepared, err := cache.Ensure(context.Background(), pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := prepared.Close(); err != nil {
 		t.Fatal(err)
 	}
 	root, err := os.OpenRoot(cache.Root)
@@ -243,7 +268,11 @@ func BenchmarkCacheHit(b *testing.B) {
 	pkg := Package{Version: "test", Platform: Platform{"test", "test"}, Asset: "runner.tar.gz", Checksum: hex.EncodeToString(sum[:]), Size: int64(len(archive)), Format: ArchiveTarGz}
 	fetcher := &bytesFetcher{data: archive}
 	cache := Cache{Root: b.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
-	if _, err := cache.Ensure(context.Background(), pkg); err != nil {
+	prepared, err := cache.Ensure(context.Background(), pkg)
+	if err != nil {
+		b.Fatal(err)
+	}
+	if err := prepared.Close(); err != nil {
 		b.Fatal(err)
 	}
 	b.Cleanup(func() {
@@ -259,7 +288,11 @@ func BenchmarkCacheHit(b *testing.B) {
 	})
 	b.ResetTimer()
 	for b.Loop() {
-		if _, err := cache.Ensure(context.Background(), pkg); err != nil {
+		prepared, err := cache.Ensure(context.Background(), pkg)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := prepared.Close(); err != nil {
 			b.Fatal(err)
 		}
 	}

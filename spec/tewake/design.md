@@ -295,8 +295,14 @@ claiming launchd process-group ownership is sufficient.
 Runtime directories are created below a node-owned root using directory handles and
 validated descendants; symlinks and traversal outside the root are rejected.
 Runner packages are downloaded from GitHub, checked against the official digest
-metadata, extracted into a content-addressed cache, and copied or linked into an
-execution-specific directory.
+metadata, and stored as content-addressed archives. The cache root must already
+exist as an absolute, service-owned `0700` directory; every original path component
+must be a real directory rather than a symlink, and unsafe owners or writable
+ancestors fail before download. Cache validation returns a single-use capability
+holding the exact open archive object whose manifest, regular-file identity, exact
+size, and SHA-256 were checked. The Agent extracts from that same object into the
+execution-specific directory, so a later cache path rename, symlink retarget, or
+directory-entry replacement cannot substitute executable input.
 
 Preparation captures a typed, opaque platform workspace identity containing a
 versioned backend and canonical owner value. The Cleaner and Supervisor must name
@@ -330,6 +336,15 @@ explicit retention policy, workspace, and execution directory after the expected
 identity is re-observed, then verifies absence. Tewake does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
+
+The JIT lease records the required verify-then-deliver order. Delivery before the
+exec-boundary workspace check invokes no consumer, a failed check permanently
+revokes the lease, and a second delivery is rejected. Immediately when
+`Supervisor.Start` returns, the core atomically requires completed verification and
+synchronous delivery, then revokes every retained `StartRequest` copy. A platform
+adapter that returns success without delivery or leaves delivery running
+asynchronously is stopped and cleaned as a failed start; it cannot consume the
+credential later.
 
 Once the JIT callback has entered `Start`, any callback, spawn, or journal failure
 first stops the fenced containment and transitions through `Cleaning`; it removes

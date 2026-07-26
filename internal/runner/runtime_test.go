@@ -14,8 +14,15 @@ import (
 
 type testCache struct{ root string }
 
-func (c testCache) Ensure(context.Context, Package) (ArchiveRef, error) {
-	return ArchiveRef{Directory: c.root, Archive: "test-tree"}, nil
+type testPreparedPackage struct{ root string }
+
+func (prepared testPreparedPackage) Materialize(destination *os.Root) error {
+	return copyTree(prepared.root, destination)
+}
+func (testPreparedPackage) Close() error { return nil }
+
+func (c testCache) Ensure(context.Context, Package) (PreparedPackage, error) {
+	return testPreparedPackage{root: c.root}, nil
 }
 
 type testSupervisor struct {
@@ -24,6 +31,7 @@ type testSupervisor struct {
 	stopErr                     error
 	materializeOnStart          bool
 	deliverTwice                bool
+	skipJITDelivery             bool
 	workspaceBackend            string
 	jitDeliveries               int
 	prepared                    ContainmentRef
@@ -65,6 +73,10 @@ func (s *testSupervisor) Start(ctx context.Context, request StartRequest) (Proce
 	s.startRequest = request
 	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
 		return Process{Containment: request.Containment}, err
+	}
+	if s.skipJITDelivery {
+		s.starts++
+		return Process{PID: s.starts, Containment: request.Containment}, nil
 	}
 	if err := request.DeliverJIT(func(value string) error {
 		if value == "" {
@@ -504,6 +516,50 @@ func TestSupervisorCannotConsumeOneJobJITTwice(t *testing.T) {
 			supervisor.starts,
 			supervisor.stops,
 		)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed JIT root remained: %v", statErr)
+	}
+}
+
+func TestSupervisorSuccessWithoutJITDeliveryStopsAndCleansRuntime(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &testSupervisor{skipJITDelivery: true}
+	journal := NewMemoryJournal()
+	runtimeRoot := t.TempDir()
+	manager, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "jit-not-delivered", Package: pkg}
+	state, err := manager.EnsureRunning(context.Background(), Start{
+		Preparation: request,
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	})
+	if !errors.Is(err, ErrStartFailed) || state.State != StateFailed {
+		t.Fatalf("EnsureRunning = %#v, %v", state, err)
+	}
+	if supervisor.jitDeliveries != 0 || supervisor.starts != 1 || supervisor.stops != 1 {
+		t.Fatalf(
+			"deliveries=%d starts=%d stops=%d",
+			supervisor.jitDeliveries,
+			supervisor.starts,
+			supervisor.stops,
+		)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != StateFailed || record.JITDigest != "" {
+		t.Fatalf("record = %#v, found=%v, err=%v", record, found, loadErr)
 	}
 	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed JIT root remained: %v", statErr)
@@ -1250,9 +1306,9 @@ func TestStartingCrashUsesDurableContainmentForCleanupWithoutRestart(t *testing.
 
 type countingCache struct{ calls int }
 
-func (cache *countingCache) Ensure(context.Context, Package) (ArchiveRef, error) {
+func (cache *countingCache) Ensure(context.Context, Package) (PreparedPackage, error) {
 	cache.calls++
-	return ArchiveRef{}, errors.New("unexpected cache call")
+	return nil, errors.New("unexpected cache call")
 }
 
 func TestWorkspaceBackendMismatchFailsBeforePreparationOrJIT(t *testing.T) {
@@ -1291,8 +1347,13 @@ func TestWorkspaceBackendMismatchFailsBeforePreparationOrJIT(t *testing.T) {
 
 type brokenArchiveCache struct{}
 
-func (brokenArchiveCache) Ensure(context.Context, Package) (ArchiveRef, error) {
-	return ArchiveRef{Archive: "archive"}, nil
+type brokenPreparedPackage struct{}
+
+func (brokenPreparedPackage) Materialize(*os.Root) error { return ErrPackageIntegrity }
+func (brokenPreparedPackage) Close() error               { return nil }
+
+func (brokenArchiveCache) Ensure(context.Context, Package) (PreparedPackage, error) {
+	return brokenPreparedPackage{}, nil
 }
 
 func TestPreparationFailureRemovesRootAndCommitsTerminalFailure(t *testing.T) {
