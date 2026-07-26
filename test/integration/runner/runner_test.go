@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -138,6 +139,34 @@ func TestCleanupFailureWritesTombstoneAndQuarantines(t *testing.T) {
 	record, found, err := journal.Load(context.Background(), request.ExecutionID)
 	if err != nil || !found || !record.Tombstone || record.State != runner.StateCleanupFailed {
 		t.Fatalf("tombstone = %#v, %v, found=%v", record, err, found)
+	}
+}
+
+func TestThirtyTwoDistinctPreparationsRemainUnique(t *testing.T) {
+	content := fakeRunner(t)
+	manager, runtimeRoot := newManager(t, content, runner.NewMemoryJournal(), nil)
+	pkg := currentPackage(t)
+	const count = 32
+	errs := make(chan error, count)
+	var group sync.WaitGroup
+	for index := range count {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			_, err := manager.EnsurePrepared(context.Background(), runner.Preparation{ExecutionID: fmt.Sprintf("concurrent-%d", index), Package: pkg})
+			errs <- err
+		}()
+	}
+	group.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	entries, err := os.ReadDir(filepath.Join(runtimeRoot, "executions"))
+	if err != nil || len(entries) != count {
+		t.Fatalf("execution roots=%d err=%v", len(entries), err)
 	}
 }
 
