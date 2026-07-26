@@ -19,7 +19,7 @@ func TestStartRequestRedactsJITAcrossFormattingJSONAndStructuredLogs(t *testing.
 		Executable:   "/runtime/run",
 		Directory:    "/runtime/" + directoryCanary,
 		Arguments:    []string{"--ephemeral"},
-		WorkspaceRef: identityCanary,
+		WorkspaceRef: WorkspaceRef{Backend: "test-v1", OwnerID: identityCanary},
 		Containment:  ContainmentRef{Backend: "test", OwnerID: "owner"},
 		jit:          jitArgument{value: jitCanary},
 	}

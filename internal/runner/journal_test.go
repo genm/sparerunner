@@ -16,11 +16,13 @@ func TestMemoryJournalCreateAndCompareAndSwapHaveSingleWinners(t *testing.T) {
 		State:       StatePreparing,
 		RootName:    executionRootName("journal-cas"),
 	}
-	created, won, err := journal.Create(ctx, initial)
+	createToken := strings.Repeat("a", 32)
+	casToken := strings.Repeat("b", 32)
+	created, won, err := journal.Create(ctx, createToken, initial)
 	if err != nil || !won || created.Revision != 1 {
 		t.Fatalf("Create = %#v, won=%v, err=%v", created, won, err)
 	}
-	if existing, won, err := journal.Create(ctx, initial); err != nil || won || existing != created {
+	if existing, won, err := journal.Create(ctx, strings.Repeat("c", 32), initial); err != nil || won || existing != created {
 		t.Fatalf("duplicate Create = %#v, won=%v, err=%v", existing, won, err)
 	}
 
@@ -32,7 +34,7 @@ func TestMemoryJournalCreateAndCompareAndSwapHaveSingleWinners(t *testing.T) {
 		group.Add(1)
 		go func() {
 			defer group.Done()
-			_, swapped, swapErr := journal.CompareAndSwap(ctx, initial.ExecutionID, created.Revision, next)
+			_, swapped, swapErr := journal.CompareAndSwap(ctx, initial.ExecutionID, created.Revision, casToken, next)
 			if swapErr != nil {
 				t.Errorf("CompareAndSwap error = %v", swapErr)
 			}
@@ -60,7 +62,7 @@ func TestMemoryJournalRejectsInvalidCASAuthority(t *testing.T) {
 	ctx := context.Background()
 	journal := NewMemoryJournal()
 	record := Record{ExecutionID: "journal-authority"}
-	created, won, err := journal.Create(ctx, record)
+	created, won, err := journal.Create(ctx, strings.Repeat("a", 32), record)
 	if err != nil || !won {
 		t.Fatalf("Create = %#v, won=%v, err=%v", created, won, err)
 	}
@@ -73,12 +75,12 @@ func TestMemoryJournalRejectsInvalidCASAuthority(t *testing.T) {
 		"changed ID":    {record.ExecutionID, created.Revision, Record{ExecutionID: "other"}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, swapped, err := journal.CompareAndSwap(ctx, testCase.executionID, testCase.revision, testCase.next); err == nil || swapped {
+			if _, swapped, err := journal.CompareAndSwap(ctx, testCase.executionID, testCase.revision, strings.Repeat("b", 32), testCase.next); err == nil || swapped {
 				t.Fatalf("CompareAndSwap swapped=%v err=%v", swapped, err)
 			}
 		})
 	}
-	if _, swapped, err := journal.CompareAndSwap(ctx, record.ExecutionID, created.Revision+1, record); err != nil || swapped {
+	if _, swapped, err := journal.CompareAndSwap(ctx, record.ExecutionID, created.Revision+1, strings.Repeat("b", 32), record); err != nil || swapped {
 		t.Fatalf("stale CompareAndSwap swapped=%v err=%v", swapped, err)
 	}
 }

@@ -37,14 +37,15 @@ func (j fakeJIT) Deliver(deliver func(string) error) error { return deliver(j.va
 type failingCleaner struct{}
 
 func (failingCleaner) StrongWorkspaceOwnership() bool { return true }
+func (failingCleaner) WorkspaceBackend() string       { return "test-v1" }
 func (failingCleaner) ValidateRuntimeRoot(context.Context, string) error {
 	return nil
 }
-func (failingCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (string, error) {
-	return "test:" + name, nil
+func (failingCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (runner.WorkspaceRef, error) {
+	return runner.WorkspaceRef{Backend: "test-v1", OwnerID: "test:" + name}, nil
 }
-func (failingCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
-	return "test:" + name, nil
+func (failingCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (runner.WorkspaceRef, error) {
+	return runner.WorkspaceRef{Backend: "test-v1", OwnerID: "test:" + name}, nil
 }
 
 func (failingCleaner) RemoveAndVerify(context.Context, *os.Root, string) error {
@@ -54,6 +55,7 @@ func (failingCleaner) RemoveAndVerify(context.Context, *os.Root, string) error {
 type strongTestCleaner struct{}
 
 func (strongTestCleaner) StrongWorkspaceOwnership() bool { return true }
+func (strongTestCleaner) WorkspaceBackend() string       { return "test-v1" }
 func (strongTestCleaner) ValidateRuntimeRoot(_ context.Context, root string) error {
 	info, err := os.Lstat(root)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
@@ -61,11 +63,11 @@ func (strongTestCleaner) ValidateRuntimeRoot(_ context.Context, root string) err
 	}
 	return nil
 }
-func (strongTestCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (string, error) {
-	return "test:" + name, nil
+func (strongTestCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string) (runner.WorkspaceRef, error) {
+	return runner.WorkspaceRef{Backend: "test-v1", OwnerID: "test:" + name}, nil
 }
-func (strongTestCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
-	return "test:" + name, nil
+func (strongTestCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (runner.WorkspaceRef, error) {
+	return runner.WorkspaceRef{Backend: "test-v1", OwnerID: "test:" + name}, nil
 }
 func (strongTestCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
 	if err := root.RemoveAll(name); err != nil {
@@ -154,9 +156,9 @@ func TestChangedExecutionSpecAndCrashStartingFailClosed(t *testing.T) {
 	record.State = runner.StateStarting
 	record.RootName = strings.Repeat("a", 64)
 	record.JITDigest = fakeJIT{"hang"}.Digest()
-	record.WorkspaceRef = ""
+	record.WorkspaceRef = runner.WorkspaceRef{}
 	record.Containment = runner.ContainmentRef{}
-	if _, swapped, err := journal.CompareAndSwap(context.Background(), record.ExecutionID, record.Revision, record.Record); err != nil || !swapped {
+	if _, swapped, err := journal.CompareAndSwap(context.Background(), record.ExecutionID, record.Revision, strings.Repeat("b", 32), record.Record); err != nil || !swapped {
 		t.Fatalf("persist invalid crash record: swapped=%v err=%v", swapped, err)
 	}
 	reopened, _ := newManager(t, content, journal, nil)

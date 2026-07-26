@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -45,12 +46,15 @@ type Snapshot struct {
 type Cleaner interface {
 	RemoveAndVerify(context.Context, *os.Root, string) error
 	StrongWorkspaceOwnership() bool
+	// WorkspaceBackend identifies the versioned identity encoding and verifier,
+	// not the process containment backend.
+	WorkspaceBackend() string
 	ValidateRuntimeRoot(context.Context, string) error
 	// PrepareWorkspace may apply the platform runner identity and returns the
 	// durable identity observation that later cleanup must match.
-	PrepareWorkspace(context.Context, *os.Root, string) (string, error)
+	PrepareWorkspace(context.Context, *os.Root, string) (WorkspaceRef, error)
 	// WorkspaceRef observes only; it must never repair ownership during cleanup.
-	WorkspaceRef(context.Context, *os.Root, string) (string, error)
+	WorkspaceRef(context.Context, *os.Root, string) (WorkspaceRef, error)
 }
 
 type PackageCache interface {
@@ -65,14 +69,15 @@ type ArchiveRef struct{ Directory, Archive string }
 type rootCleaner struct{}
 
 func (rootCleaner) StrongWorkspaceOwnership() bool { return false }
+func (rootCleaner) WorkspaceBackend() string       { return "" }
 func (rootCleaner) ValidateRuntimeRoot(context.Context, string) error {
 	return ErrStrongOwnershipUnavailable
 }
-func (rootCleaner) PrepareWorkspace(context.Context, *os.Root, string) (string, error) {
-	return "", ErrStrongOwnershipUnavailable
+func (rootCleaner) PrepareWorkspace(context.Context, *os.Root, string) (WorkspaceRef, error) {
+	return WorkspaceRef{}, ErrStrongOwnershipUnavailable
 }
-func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (string, error) {
-	return "", ErrStrongOwnershipUnavailable
+func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (WorkspaceRef, error) {
+	return WorkspaceRef{}, ErrStrongOwnershipUnavailable
 }
 
 func (rootCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
@@ -103,12 +108,19 @@ type Options struct {
 // start-before-PID-persist window is deliberately reconciliation-required so it
 // cannot create a second runner merely to regain liveness.
 type Manager struct {
-	runtimeRoot string
-	cache       PackageCache
-	journal     Journal
-	supervisor  Supervisor
-	cleaner     Cleaner
-	mu          sync.Mutex
+	runtimeRoot  string
+	cache        PackageCache
+	journal      Journal
+	supervisor   Supervisor
+	cleaner      Cleaner
+	owned        map[string]runtimeOwnership
+	cleanupOwned map[string]uint64
+	mu           sync.Mutex
+}
+
+type runtimeOwnership struct {
+	Revision    uint64
+	Containment ContainmentRef
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -124,7 +136,15 @@ func NewManager(options Options) (*Manager, error) {
 	if err := os.MkdirAll(options.RuntimeRoot, 0o700); err != nil {
 		return nil, ErrInvalidRequest
 	}
-	return &Manager{options.RuntimeRoot, options.Cache, options.Journal, options.Supervisor, options.Cleaner, sync.Mutex{}}, nil
+	return &Manager{
+		runtimeRoot:  options.RuntimeRoot,
+		cache:        options.Cache,
+		journal:      options.Journal,
+		supervisor:   options.Supervisor,
+		cleaner:      options.Cleaner,
+		owned:        make(map[string]runtimeOwnership),
+		cleanupOwned: make(map[string]uint64),
+	}, nil
 }
 
 func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snapshot, error) {
@@ -134,6 +154,9 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	if !m.cleaner.StrongWorkspaceOwnership() {
 		// Creating a root that cannot later be identity-checked would turn a
 		// cancelled preparation into an unrecoverable credential workspace.
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
+	if m.cleaner.WorkspaceBackend() == "" {
 		return Snapshot{}, ErrStrongOwnershipUnavailable
 	}
 	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
@@ -195,7 +218,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		return m.failPreparation(ctx, record, ErrCleanupFailed)
 	}
 	workspaceRef, err := m.prepareWorkspace(ctx, rootName)
-	if err != nil || workspaceRef == "" {
+	if err != nil || !validWorkspaceRef(workspaceRef) || workspaceRef.Backend != m.cleaner.WorkspaceBackend() {
 		if removeErr := m.removeRoot(ctx, rootName); removeErr != nil {
 			return m.quarantine(ctx, record)
 		}
@@ -237,6 +260,11 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	if !m.cleaner.StrongWorkspaceOwnership() {
 		return Snapshot{}, ErrStrongOwnershipUnavailable
 	}
+	if m.cleaner.WorkspaceBackend() == "" || m.supervisor.WorkspaceBackend() != m.cleaner.WorkspaceBackend() {
+		// The process boundary must understand exactly the same durable identity
+		// encoding before preparation or JIT delivery can have side effects.
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
 	prepared, err := m.EnsurePrepared(ctx, request.Preparation)
 	if err != nil {
 		return prepared, err
@@ -262,6 +290,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		if record.JITDigest != jitDigest {
 			return Snapshot{}, ErrExecutionConflict
 		}
+		if !m.owns(record) {
+			// A recreated or overlapping Manager must reconcile OS state before
+			// adopting a persisted Running observation. This also fences an
+			// ambiguous commit whose caller never received success.
+			return snapshot(record.Record), ErrReconciliationRequired
+		}
 		alive, err := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment})
 		if err != nil || !alive {
 			return snapshot(record.Record), ErrReconciliationRequired
@@ -275,9 +309,14 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		return snapshot(record.Record), ErrExecutionConflict
 	}
 	containment, err := m.supervisor.PrepareContainment(ctx, record.ExecutionID)
-	if err != nil || !validContainment(containment) {
+	if err != nil || !validContainment(containment) || containment.FenceToken != "" {
 		return Snapshot{}, ErrStrongOwnershipUnavailable
 	}
+	fenceToken, err := newOpaqueToken()
+	if err != nil {
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
+	containment.FenceToken = fenceToken
 	record.State = StateStarting
 	record.JITDigest = jitDigest
 	record.Containment = containment
@@ -291,7 +330,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	started := false
 	workspaceChanged := false
 	var supervisorErr error
+	var deliveryMu sync.Mutex
 	if err := request.JIT.Deliver(func(value string) error {
+		// Deliver is an internal one-shot contract, but serialize callbacks here
+		// so a buggy concurrent implementation still cannot start two listeners.
+		deliveryMu.Lock()
+		defer deliveryMu.Unlock()
 		actual := sha256.Sum256([]byte(value))
 		if hex.EncodeToString(actual[:]) != jitDigest {
 			return ErrInvalidRequest
@@ -314,6 +358,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 			WorkspaceRef: record.WorkspaceRef,
 			Containment:  containment,
 			jit:          jitArgument{value: value},
+			verify: func(verifyCtx context.Context) error {
+				if !m.workspaceMatches(verifyCtx, record.Record) {
+					return ErrWorkspaceChanged
+				}
+				return nil
+			},
 		})
 		return supervisorErr
 	}); err != nil {
@@ -326,6 +376,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		if workspaceChanged || errors.Is(supervisorErr, ErrWorkspaceChanged) {
 			return m.quarantine(ctx, record)
 		}
+		if errors.Is(supervisorErr, ErrStartFenced) {
+			return Snapshot{}, ErrReconciliationRequired
+		}
+		if started {
+			return m.failStartedExecution(ctx, record, record.Record, ErrStartFailed)
+		}
 		record.State = StatePrepared
 		record.JITDigest = ""
 		record.PID = 0
@@ -337,11 +393,8 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		}
 		return Snapshot{}, ErrInvalidRequest
 	}
-	if !started || process.PID <= 0 || process.Containment != containment {
+	if !started {
 		if stopErr := m.supervisor.Stop(ctx, Process{PID: process.PID, Containment: containment}); stopErr != nil {
-			return m.quarantine(ctx, record)
-		}
-		if process.Containment != containment {
 			return m.quarantine(ctx, record)
 		}
 		record.State = StatePrepared
@@ -355,9 +408,19 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		}
 		return Snapshot{}, ErrInvalidRequest
 	}
+	if process.PID <= 0 || process.Containment != containment {
+		if stopErr := m.supervisor.Stop(ctx, Process{PID: process.PID, Containment: containment}); stopErr != nil {
+			return m.quarantine(ctx, record)
+		}
+		if process.Containment != containment {
+			return m.quarantine(ctx, record)
+		}
+		return m.failStartedExecution(ctx, record, record.Record, ErrStartFailed)
+	}
 	record.State = StateRunning
 	record.PID = process.PID
 	record.Containment = process.Containment
+	expectedRuntime := record.Record
 	record, err = m.compareAndSwap(ctx, record)
 	if err != nil {
 		// A started process without a durable PID must not be replayed. Stop it
@@ -365,8 +428,12 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		if stopErr := m.supervisor.Stop(ctx, process); stopErr != nil {
 			return m.quarantine(ctx, record)
 		}
+		if sameStartedRuntime(record.Record, expectedRuntime) {
+			return m.failStartedExecution(ctx, record, expectedRuntime, err)
+		}
 		return Snapshot{}, err
 	}
+	m.remember(record)
 	return snapshot(record.Record), nil
 }
 
@@ -390,6 +457,9 @@ func (m *Manager) Inspect(ctx context.Context, executionID string) (Snapshot, er
 		return snapshot(record.Record), ErrReconciliationRequired
 	}
 	if record.State == StateRunning {
+		if !m.owns(record) {
+			return snapshot(record.Record), ErrReconciliationRequired
+		}
 		alive, observeErr := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment})
 		if observeErr != nil || !alive {
 			return snapshot(record.Record), ErrReconciliationRequired
@@ -415,9 +485,13 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		return Snapshot{}, ErrReconciliationRequired
 	}
 	if record.State == StateReleased || record.State == StateFailed {
+		m.forget(record.ExecutionID)
+		m.forgetCleanup(record.ExecutionID)
 		return snapshot(record.Record), nil
 	}
 	if record.State == StateCleanupFailed {
+		m.forget(record.ExecutionID)
+		m.forgetCleanup(record.ExecutionID)
 		return snapshot(record.Record), ErrQuarantined
 	}
 	if record.State != StateCleaning {
@@ -429,14 +503,21 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		if err != nil {
 			return Snapshot{}, err
 		}
+		m.rememberCleanup(record)
+	} else if !m.ownsCleanup(record) {
+		// Only the Manager that won the Cleaning CAS may perform teardown. A
+		// recreated Manager must reconcile the platform journal before adopting
+		// destructive ownership.
+		return snapshot(record.Record), ErrReconciliationRequired
 	}
+	m.forget(record.ExecutionID)
 	if !m.cleaner.StrongWorkspaceOwnership() {
 		return m.quarantine(ctx, record)
 	}
 	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
 		return m.quarantine(ctx, record)
 	}
-	if record.WorkspaceRef == "" {
+	if !validWorkspaceRef(record.WorkspaceRef) {
 		return m.quarantine(ctx, record)
 	}
 	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
@@ -453,22 +534,38 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if err := m.removeRoot(ctx, record.RootName); err != nil {
 		return m.quarantine(ctx, record)
 	}
-	record.State = StateReleased
-	record.PID = 0
-	record, err = m.compareAndSwap(ctx, record)
+	terminal := record.Record
+	terminal.State = StateReleased
+	terminal.PID = 0
+	record, err = m.commitCleanupTerminal(ctx, record, terminal)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	m.forgetCleanup(record.ExecutionID)
 	return snapshot(record.Record), nil
 }
 
 func (m *Manager) quarantine(ctx context.Context, record VersionedRecord) (Snapshot, error) {
-	record.State = StateCleanupFailed
-	record.Tombstone = true
-	record, err := m.compareAndSwap(ctx, record)
+	m.forget(record.ExecutionID)
+	latest, found, err := m.load(ctx, record.ExecutionID)
 	if err != nil {
 		return Snapshot{}, err
 	}
+	if !found || !validVersionedRecord(latest) {
+		return Snapshot{}, ErrReconciliationRequired
+	}
+	if latest.State == StateCleanupFailed {
+		m.forgetCleanup(latest.ExecutionID)
+		return snapshot(latest.Record), ErrQuarantined
+	}
+	record = latest
+	record.State = StateCleanupFailed
+	record.Tombstone = true
+	record, err = m.compareAndSwap(ctx, record)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	m.forgetCleanup(record.ExecutionID)
 	return snapshot(record.Record), ErrQuarantined
 }
 
@@ -481,6 +578,46 @@ func (m *Manager) failPreparation(ctx context.Context, record VersionedRecord, c
 	return snapshot(record.Record), cause
 }
 
+func (m *Manager) failStartedExecution(ctx context.Context, record VersionedRecord, expected Record, cause error) (Snapshot, error) {
+	for {
+		record.State = StateCleaning
+		updated, err := m.compareAndSwap(ctx, record)
+		if err == nil {
+			record = updated
+			m.rememberCleanup(record)
+			break
+		}
+		if !errors.Is(err, ErrReconciliationRequired) || !sameStartedRuntime(updated.Record, expected) {
+			return Snapshot{}, err
+		}
+		record = updated
+		select {
+		case <-ctx.Done():
+			return Snapshot{}, ErrReconciliationRequired
+		default:
+		}
+	}
+	m.forget(record.ExecutionID)
+	if !m.cleaner.StrongWorkspaceOwnership() || !m.workspaceMatches(ctx, record.Record) {
+		return m.quarantine(ctx, record)
+	}
+	if err := m.removeRoot(ctx, record.RootName); err != nil {
+		return m.quarantine(ctx, record)
+	}
+	terminal := record.Record
+	terminal.State = StateFailed
+	terminal.PID = 0
+	terminal.JITDigest = ""
+	terminal.WorkspaceRef = WorkspaceRef{}
+	terminal.Containment = ContainmentRef{}
+	record, err := m.commitCleanupTerminal(ctx, record, terminal)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	m.forgetCleanup(record.ExecutionID)
+	return snapshot(record.Record), cause
+}
+
 func (m *Manager) load(ctx context.Context, id string) (VersionedRecord, bool, error) {
 	record, found, err := m.journal.Load(ctx, id)
 	if err != nil {
@@ -490,28 +627,116 @@ func (m *Manager) load(ctx context.Context, id string) (VersionedRecord, bool, e
 }
 
 func (m *Manager) create(ctx context.Context, record Record) (VersionedRecord, bool, error) {
-	created, ok, err := m.journal.Create(ctx, record)
+	mutationToken, err := newOpaqueToken()
 	if err != nil {
 		return VersionedRecord{}, false, ErrJournal
 	}
-	if ok && (created.Revision != 1 || created.Record != record) {
+	created, ok, err := m.journal.Create(ctx, mutationToken, record)
+	if err != nil {
+		return VersionedRecord{}, false, ErrJournal
+	}
+	if ok && (created.Revision != 1 || created.MutationToken != mutationToken || created.Record != record) {
 		return VersionedRecord{}, false, ErrJournal
 	}
 	return created, ok, nil
 }
 
 func (m *Manager) compareAndSwap(ctx context.Context, record VersionedRecord) (VersionedRecord, error) {
-	updated, swapped, err := m.journal.CompareAndSwap(ctx, record.ExecutionID, record.Revision, record.Record)
-	if err != nil {
+	mutationToken, tokenErr := newOpaqueToken()
+	if tokenErr != nil {
 		return record, ErrJournal
 	}
-	if !swapped {
-		return record, ErrReconciliationRequired
+	updated, swapped, err := m.journal.CompareAndSwap(ctx, record.ExecutionID, record.Revision, mutationToken, record.Record)
+	if err != nil {
+		current, found, loadErr := m.journal.Load(ctx, record.ExecutionID)
+		if loadErr != nil {
+			return record, ErrJournal
+		}
+		if !found || !validVersionedRecord(current) {
+			return record, ErrReconciliationRequired
+		}
+		if record.Revision != ^uint64(0) && current.Revision == record.Revision+1 && current.MutationToken == mutationToken && current.Record == record.Record {
+			return current, nil
+		}
+		if current.Revision == record.Revision {
+			return current, ErrJournal
+		}
+		return current, ErrReconciliationRequired
 	}
-	if record.Revision == ^uint64(0) || updated.Revision != record.Revision+1 || updated.Record != record.Record {
+	if !swapped {
+		if !validVersionedRecord(updated) {
+			return record, ErrReconciliationRequired
+		}
+		return updated, ErrReconciliationRequired
+	}
+	if record.Revision == ^uint64(0) || updated.Revision != record.Revision+1 || updated.MutationToken != mutationToken || updated.Record != record.Record {
 		return record, ErrJournal
 	}
 	return updated, nil
+}
+
+func (m *Manager) owns(record VersionedRecord) bool {
+	ownership, found := m.owned[record.ExecutionID]
+	return found && ownership.Revision == record.Revision && ownership.Containment == record.Containment
+}
+
+func (m *Manager) remember(record VersionedRecord) {
+	m.owned[record.ExecutionID] = runtimeOwnership{Revision: record.Revision, Containment: record.Containment}
+}
+
+func (m *Manager) forget(executionID string) {
+	delete(m.owned, executionID)
+}
+
+func (m *Manager) ownsCleanup(record VersionedRecord) bool {
+	revision, found := m.cleanupOwned[record.ExecutionID]
+	return found && revision == record.Revision && record.State == StateCleaning
+}
+
+func (m *Manager) rememberCleanup(record VersionedRecord) {
+	m.cleanupOwned[record.ExecutionID] = record.Revision
+}
+
+func (m *Manager) forgetCleanup(executionID string) {
+	delete(m.cleanupOwned, executionID)
+}
+
+func (m *Manager) commitCleanupTerminal(ctx context.Context, cleaning VersionedRecord, terminal Record) (VersionedRecord, error) {
+	candidate := cleaning
+	candidate.Record = terminal
+	updated, err := m.compareAndSwap(ctx, candidate)
+	if err == nil {
+		return updated, nil
+	}
+	if validVersionedRecord(updated) && updated.Revision > cleaning.Revision && updated.Record == terminal {
+		return updated, nil
+	}
+	if errors.Is(err, ErrJournal) {
+		current, found, loadErr := m.load(ctx, cleaning.ExecutionID)
+		if loadErr != nil {
+			return cleaning, loadErr
+		}
+		if !found || !validVersionedRecord(current) {
+			return cleaning, ErrReconciliationRequired
+		}
+		if current.Record == terminal {
+			return current, nil
+		}
+		updated = current
+	}
+	if !m.ownsCleanup(updated) || updated.Record != cleaning.Record {
+		return updated, err
+	}
+	candidate = updated
+	candidate.Record = terminal
+	updated, retryErr := m.compareAndSwap(ctx, candidate)
+	if retryErr == nil {
+		return updated, nil
+	}
+	if validVersionedRecord(updated) && updated.Revision > cleaning.Revision && updated.Record == terminal {
+		return updated, nil
+	}
+	return updated, retryErr
 }
 
 func (m *Manager) makeExecutionRoot(executionID string) (*os.Root, string, error) {
@@ -556,36 +781,36 @@ func (m *Manager) removeRoot(ctx context.Context, name string) error {
 	return nil
 }
 
-func (m *Manager) workspaceRef(ctx context.Context, name string) (string, error) {
+func (m *Manager) workspaceRef(ctx context.Context, name string) (WorkspaceRef, error) {
 	parent, err := os.OpenRoot(m.runtimeRoot)
 	if err != nil {
-		return "", ErrCleanupFailed
+		return WorkspaceRef{}, ErrCleanupFailed
 	}
 	defer parent.Close()
 	executions, err := parent.OpenRoot("executions")
 	if err != nil {
-		return "", ErrCleanupFailed
+		return WorkspaceRef{}, ErrCleanupFailed
 	}
 	defer executions.Close()
 	return m.cleaner.WorkspaceRef(ctx, executions, name)
 }
 
-func (m *Manager) prepareWorkspace(ctx context.Context, name string) (string, error) {
+func (m *Manager) prepareWorkspace(ctx context.Context, name string) (WorkspaceRef, error) {
 	parent, err := os.OpenRoot(m.runtimeRoot)
 	if err != nil {
-		return "", ErrCleanupFailed
+		return WorkspaceRef{}, ErrCleanupFailed
 	}
 	defer parent.Close()
 	executions, err := parent.OpenRoot("executions")
 	if err != nil {
-		return "", ErrCleanupFailed
+		return WorkspaceRef{}, ErrCleanupFailed
 	}
 	defer executions.Close()
 	return m.cleaner.PrepareWorkspace(ctx, executions, name)
 }
 
 func (m *Manager) workspaceMatches(ctx context.Context, record Record) bool {
-	if record.WorkspaceRef == "" {
+	if !validWorkspaceRef(record.WorkspaceRef) {
 		return false
 	}
 	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
@@ -668,6 +893,28 @@ func canonicalDigest(value string) bool {
 	return true
 }
 
+func newOpaqueToken() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
+}
+
+func canonicalOpaqueToken(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	for _, c := range value {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func canonicalFenceToken(value string) bool { return canonicalOpaqueToken(value) }
+
 func validRecord(record Record) bool {
 	if record.ExecutionID == "" || record.RootName != executionRootName(record.ExecutionID) || !canonicalDigest(record.SpecDigest) {
 		return false
@@ -677,24 +924,26 @@ func validRecord(record Record) bool {
 	}
 	switch record.State {
 	case StatePreparing:
-		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == "" && record.Containment == (ContainmentRef{}) && !record.Tombstone
+		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == (WorkspaceRef{}) && record.Containment == (ContainmentRef{}) && !record.Tombstone
 	case StatePrepared:
-		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef != "" && record.Containment == (ContainmentRef{}) && !record.Tombstone
+		return record.PID == 0 && record.JITDigest == "" && validWorkspaceRef(record.WorkspaceRef) && record.Containment == (ContainmentRef{}) && !record.Tombstone
 	case StateStarting:
-		return record.PID == 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
+		return record.PID == 0 && record.JITDigest != "" && validWorkspaceRef(record.WorkspaceRef) && validFencedContainment(record.Containment) && !record.Tombstone
 	case StateRunning:
-		return record.PID > 0 && record.JITDigest != "" && record.WorkspaceRef != "" && validContainment(record.Containment) && !record.Tombstone
+		return record.PID > 0 && record.JITDigest != "" && validWorkspaceRef(record.WorkspaceRef) && validFencedContainment(record.Containment) && !record.Tombstone
 	case StateCleaning:
-		preparing := record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == "" && record.Containment == (ContainmentRef{})
+		preparing := record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == (WorkspaceRef{}) && record.Containment == (ContainmentRef{})
 		prepared := record.PID == 0 && record.JITDigest == "" && record.Containment == (ContainmentRef{})
-		starting := record.PID == 0 && record.JITDigest != "" && validContainment(record.Containment)
-		running := record.PID > 0 && record.JITDigest != "" && validContainment(record.Containment)
-		active := record.WorkspaceRef != "" && (prepared || starting || running)
+		starting := record.PID == 0 && record.JITDigest != "" && validFencedContainment(record.Containment)
+		running := record.PID > 0 && record.JITDigest != "" && validFencedContainment(record.Containment)
+		active := validWorkspaceRef(record.WorkspaceRef) && (prepared || starting || running)
 		return !record.Tombstone && (preparing || active)
 	case StateReleased:
-		return record.PID == 0 && record.WorkspaceRef != "" && !record.Tombstone
+		prepared := record.JITDigest == "" && record.Containment == (ContainmentRef{})
+		started := record.JITDigest != "" && validFencedContainment(record.Containment)
+		return record.PID == 0 && validWorkspaceRef(record.WorkspaceRef) && !record.Tombstone && (prepared || started)
 	case StateFailed:
-		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == "" && record.Containment == (ContainmentRef{}) && !record.Tombstone
+		return record.PID == 0 && record.JITDigest == "" && record.WorkspaceRef == (WorkspaceRef{}) && record.Containment == (ContainmentRef{}) && !record.Tombstone
 	case StateCleanupFailed:
 		return record.Tombstone
 	default:
@@ -703,9 +952,36 @@ func validRecord(record Record) bool {
 }
 
 func validVersionedRecord(record VersionedRecord) bool {
-	return record.Revision > 0 && validRecord(record.Record)
+	return record.Revision > 0 && canonicalOpaqueToken(record.MutationToken) && validRecord(record.Record)
 }
 
 func validContainment(ref ContainmentRef) bool {
 	return ref.Backend != "" && ref.OwnerID != ""
+}
+
+func validWorkspaceRef(ref WorkspaceRef) bool {
+	return ref.Backend != "" && ref.OwnerID != ""
+}
+
+func validFencedContainment(ref ContainmentRef) bool {
+	return validContainment(ref) && canonicalFenceToken(ref.FenceToken)
+}
+
+func sameStartedRuntime(current, expected Record) bool {
+	if current.ExecutionID != expected.ExecutionID ||
+		current.SpecDigest != expected.SpecDigest ||
+		current.JITDigest != expected.JITDigest ||
+		current.RootName != expected.RootName ||
+		current.WorkspaceRef != expected.WorkspaceRef ||
+		current.Containment != expected.Containment {
+		return false
+	}
+	switch current.State {
+	case StateStarting:
+		return current.PID == 0
+	case StateRunning:
+		return current.PID > 0 && (expected.PID == 0 || current.PID == expected.PID)
+	default:
+		return false
+	}
 }

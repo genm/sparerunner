@@ -174,10 +174,19 @@ tasks:
       references before process start, and makes prepare/start/destroy replays
       idempotent. A revisioned journal claims Preparing before root creation and
       compare-and-swaps every transition; a two-Manager race proves exactly one
-      Starting winner, one JIT delivery, and one runner start. Workspace identity is
-      re-observed on replay, before JIT delivery, and by the platform start contract
-      at exec. Teardown persists a Cleaning intent before any destructive side effect,
-      so even a failed quarantine write cannot return the execution to admission.
+      Starting winner, one JIT delivery, and one runner start. Per-revision mutation
+      tokens distinguish an acknowledged or write-then-error own commit from an
+      identical foreign mutation. Workspace identity is typed and re-observed on
+      replay, before JIT delivery, and through a runtime-only verifier called by the
+      platform start contract at exec; backend mismatch fails before preparation.
+      A unique Starting fence linearizes Start and Stop, with regression coverage for
+      both stop-first and start-first races. Once JIT reaches Start, every failure
+      stops containment and fully removes the credential-bearing root instead of
+      returning it to Prepared. Only the Cleaning CAS winner performs destructive
+      teardown, and terminal write-before/write-after failures are reconciled after
+      absence verification. Teardown persists a Cleaning intent before any destructive
+      side effect, so even a failed quarantine write cannot return the execution to
+      admission.
       Restricted Linux-container evidence demonstrates a real setsid child escaping
       a bare process group, so the default Unix/Windows supervisors fail closed;
       cleanup failure writes a durable quarantine tombstone and successful prepared

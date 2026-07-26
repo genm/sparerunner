@@ -8,6 +8,7 @@ type unsupportedSupervisor struct{}
 
 func newPlatformSupervisor() Supervisor                       { return unsupportedSupervisor{} }
 func (unsupportedSupervisor) StrongDescendantOwnership() bool { return false }
+func (unsupportedSupervisor) WorkspaceBackend() string        { return "" }
 func (unsupportedSupervisor) PrepareContainment(context.Context, string) (ContainmentRef, error) {
 	return ContainmentRef{}, ErrStrongOwnershipUnavailable
 }

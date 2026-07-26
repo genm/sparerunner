@@ -12,6 +12,7 @@ type unixSupervisor struct{}
 func newPlatformSupervisor() Supervisor { return unixSupervisor{} }
 
 func (unixSupervisor) StrongDescendantOwnership() bool { return false }
+func (unixSupervisor) WorkspaceBackend() string        { return "" }
 func (unixSupervisor) PrepareContainment(context.Context, string) (ContainmentRef, error) {
 	return ContainmentRef{}, ErrStrongOwnershipUnavailable
 }

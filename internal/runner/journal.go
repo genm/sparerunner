@@ -29,15 +29,26 @@ type Record struct {
 	PID          int
 	Tombstone    bool
 	Containment  ContainmentRef
-	WorkspaceRef string
+	WorkspaceRef WorkspaceRef
 }
 
 // VersionedRecord separates the storage concurrency token from lifecycle data.
 // Revision is strictly positive for persisted records and is never supplied by
-// a controller command or derived from process state.
+// a controller command or derived from process state. MutationToken identifies
+// the writer of the latest revision so a write-then-error can be resolved without
+// mistaking another Manager's identical transition for success.
 type VersionedRecord struct {
 	Record
-	Revision uint64
+	Revision      uint64
+	MutationToken string
+}
+
+// WorkspaceRef is a durable, comparable observation produced by the platform
+// workspace authority. Backend identifies the authority and OwnerID is its
+// canonical opaque identity. Neither field is a path or a credential.
+type WorkspaceRef struct {
+	Backend string
+	OwnerID string
 }
 
 // ContainmentRef is durable platform ownership metadata. PID is observation
@@ -50,6 +61,7 @@ type ContainmentRef struct {
 	Scope        string
 	HostEpoch    string
 	InvocationID string
+	FenceToken   string
 }
 
 // Journal is the durable local observation boundary. Create and CompareAndSwap
@@ -59,8 +71,8 @@ type ContainmentRef struct {
 // material.
 type Journal interface {
 	Load(context.Context, string) (VersionedRecord, bool, error)
-	Create(context.Context, Record) (VersionedRecord, bool, error)
-	CompareAndSwap(context.Context, string, uint64, Record) (VersionedRecord, bool, error)
+	Create(context.Context, string, Record) (VersionedRecord, bool, error)
+	CompareAndSwap(context.Context, string, uint64, string, Record) (VersionedRecord, bool, error)
 }
 
 type MemoryJournal struct {
@@ -82,8 +94,8 @@ func (j *MemoryJournal) Load(_ context.Context, executionID string) (VersionedRe
 	return record, ok, nil
 }
 
-func (j *MemoryJournal) Create(_ context.Context, record Record) (VersionedRecord, bool, error) {
-	if j == nil || record.ExecutionID == "" {
+func (j *MemoryJournal) Create(_ context.Context, mutationToken string, record Record) (VersionedRecord, bool, error) {
+	if j == nil || record.ExecutionID == "" || !canonicalOpaqueToken(mutationToken) {
 		return VersionedRecord{}, false, ErrJournal
 	}
 	j.mu.Lock()
@@ -91,13 +103,13 @@ func (j *MemoryJournal) Create(_ context.Context, record Record) (VersionedRecor
 	if existing, found := j.records[record.ExecutionID]; found {
 		return existing, false, nil
 	}
-	created := VersionedRecord{Record: record, Revision: 1}
+	created := VersionedRecord{Record: record, Revision: 1, MutationToken: mutationToken}
 	j.records[record.ExecutionID] = created
 	return created, true, nil
 }
 
-func (j *MemoryJournal) CompareAndSwap(_ context.Context, executionID string, expectedRevision uint64, next Record) (VersionedRecord, bool, error) {
-	if j == nil || executionID == "" || next.ExecutionID != executionID || expectedRevision == 0 {
+func (j *MemoryJournal) CompareAndSwap(_ context.Context, executionID string, expectedRevision uint64, mutationToken string, next Record) (VersionedRecord, bool, error) {
+	if j == nil || executionID == "" || next.ExecutionID != executionID || expectedRevision == 0 || !canonicalOpaqueToken(mutationToken) {
 		return VersionedRecord{}, false, ErrJournal
 	}
 	j.mu.Lock()
@@ -109,7 +121,7 @@ func (j *MemoryJournal) CompareAndSwap(_ context.Context, executionID string, ex
 	if expectedRevision == ^uint64(0) {
 		return VersionedRecord{}, false, ErrJournal
 	}
-	updated := VersionedRecord{Record: next, Revision: expectedRevision + 1}
+	updated := VersionedRecord{Record: next, Revision: expectedRevision + 1, MutationToken: mutationToken}
 	j.records[executionID] = updated
 	return updated, true, nil
 }

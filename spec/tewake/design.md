@@ -267,7 +267,11 @@ created; every later lifecycle mutation is a compare-and-swap against the revisi
 that was loaded. This storage contract, rather than an in-process mutex, ensures
 that overlapping agent instances cannot both transition one execution from
 `Prepared` to `Starting`. Only the CAS winner may receive JIT material or start the
-runner. A stale writer returns an explicit reconciliation error.
+runner. Each revision also stores a random mutation token. After a write-then-error,
+the caller accepts the mutation as its own only when a reload proves the exact next
+revision, token, and record; an identical record written under another token remains
+a reconciliation error. A stale writer never becomes the runtime owner merely
+because its desired value matches.
 
 Protocol version mismatch is an explicit error before 1.0. Future WAN transport is
 limited to internal `PeerID`, discovery, and authenticated-session interfaces;
@@ -294,11 +298,25 @@ Runner packages are downloaded from GitHub, checked against the official digest
 metadata, extracted into a content-addressed cache, and copied or linked into an
 execution-specific directory.
 
-Preparation captures an opaque platform workspace identity. The core re-observes
-that identity on replay, before claiming `Starting`, and inside the one-shot JIT
-callback. The platform supervisor receives the same identity and must validate it
-again in the start transaction immediately before exec. A replacement, missing
-directory, or unverifiable identity starts no process and quarantines the execution.
+Preparation captures a typed, opaque platform workspace identity containing a
+versioned backend and canonical owner value. The Cleaner and Supervisor must name
+the same workspace backend before runner preparation can begin. The core
+re-observes that identity on replay, before claiming `Starting`, and inside the
+one-shot JIT callback. The platform supervisor receives both the durable identity
+and a runtime-only verifier, and must invoke the verifier while holding its start
+fence immediately before exec. A replacement, missing directory, backend mismatch,
+or unverifiable identity starts no process and quarantines the execution.
+
+Every `Starting` claim carries a unique fence token. Platform `Start` and `Stop`
+linearize on the complete containment reference and that token. After `Stop`
+returns success, an in-flight or future `Start` for the same token cannot create a
+process and returns a fenced error; when `Start` linearizes first, `Stop` must prove
+the resulting descendant boundary empty before returning. This closes both
+stop-before-start and start-before-running-journal races across Agent managers.
+Likewise, only the Manager that wins the revisioned `Cleaning` claim performs
+destructive teardown; overlapping managers return reconciliation instead of racing
+the same workspace. Once absence is verified, a transient or ambiguous terminal
+journal write is resolved before the slot can become `Released` or `Failed`.
 
 The runtime is prepared before JIT generation. The Agent passes the opaque value to
 the official runner through its required `--jitconfig` argument; the official runner
@@ -308,6 +326,12 @@ material, runner diagnostics subject to explicit retention policy, workspace, an
 the execution directory, then verifies absence. Tewake does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
+
+Once the JIT callback has entered `Start`, any callback, spawn, or journal failure
+first stops the fenced containment and transitions through `Cleaning`; it removes
+and verifies the whole execution root before recording `Failed`. Such a root never
+rolls back to `Prepared`, because the official runner may already have materialized
+credential files even when process start reports an error.
 
 Native mode narrows accidental blast radius; it is not a sandbox for malicious code.
 Host credentials, sockets, interactive users, and personal data must not be

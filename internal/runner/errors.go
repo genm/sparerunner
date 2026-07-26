@@ -17,6 +17,8 @@ var (
 	ErrQuarantined                = errors.New("runner: node is quarantined")
 	ErrCleanupFailed              = errors.New("runner: cleanup verification failed")
 	ErrWorkspaceChanged           = errors.New("runner: workspace identity changed")
+	ErrStartFenced                = errors.New("runner: start fence was revoked")
+	ErrStartFailed                = errors.New("runner: process start failed")
 	ErrStrongOwnershipUnavailable = errors.New("runner: strong descendant ownership unavailable")
 	ErrJournal                    = errors.New("runner: journal operation failed")
 )
