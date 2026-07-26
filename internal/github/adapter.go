@@ -20,6 +20,7 @@ var (
 	ErrInvalidMessageID  = errors.New("github message ID must be positive")
 	ErrInvalidCapacity   = errors.New("github max capacity must not be negative")
 	ErrInvalidStatistics = errors.New("github scale-set statistics are missing or inconsistent")
+	ErrInvalidSession    = errors.New("github message session is invalid")
 	ErrNilMessageSource  = errors.New("github message source is required")
 	ErrNilMessageHandler = errors.New("github durable message handler is required")
 )
@@ -179,6 +180,21 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 		p.logger.Debug("github_message_empty", slog.String("component", "github"))
 		return nil, nil
 	}
+	// GetMessage may refresh the upstream session token before returning a
+	// message. Re-read its snapshot before the message can be committed or acked.
+	refreshed, err := p.source.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("reading refreshed GitHub message session snapshot: %w", err)
+	}
+	if err := validateSessionSnapshot(refreshed); err != nil {
+		return nil, err
+	}
+	if refreshed.ID != p.lastSessionSnapshotID {
+		if err := p.handler.CommitSessionDemand(ctx, refreshed); err != nil {
+			return nil, fmt.Errorf("durably committing refreshed GitHub session demand: %w", err)
+		}
+		p.lastSessionSnapshotID = refreshed.ID
+	}
 	if message.ScaleSetID <= 0 {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "scale_set_id"))
 		return nil, ErrInvalidScaleSetID
@@ -230,7 +246,7 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 
 func validateSessionSnapshot(snapshot SessionSnapshot) error {
 	if snapshot.ScaleSetID <= 0 || snapshot.ID == "" {
-		return ErrInvalidStatistics
+		return ErrInvalidSession
 	}
 	return validateStatistics(snapshot.Statistics)
 }

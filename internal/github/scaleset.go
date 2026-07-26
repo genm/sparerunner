@@ -60,7 +60,7 @@ func NewAppClient(config AppClientConfig) (*Client, error) {
 			CommitSHA: config.CommitSHA,
 			Subsystem: config.Subsystem,
 		},
-	}, scaleset.WithRetryMax(0))
+	}, scaleset.WithRetryableHTTPClint(newHardenedRetryableClient()))
 	if err != nil {
 		return nil, fmt.Errorf("creating GitHub scale-set client: %w", err)
 	}
@@ -157,7 +157,8 @@ func (c *Client) DeleteScaleSet(ctx context.Context, scaleSetID ScaleSetID) erro
 	if scaleSetID <= 0 {
 		return ErrInvalidScaleSetID
 	}
-	if err := c.client.DeleteRunnerScaleSet(ctx, int(scaleSetID)); err != nil {
+	_, err := contain(func() (struct{}, error) { return struct{}{}, c.client.DeleteRunnerScaleSet(ctx, int(scaleSetID)) })
+	if err != nil {
 		return fmt.Errorf("deleting GitHub runner scale set: %w", err)
 	}
 	return nil
@@ -241,7 +242,10 @@ func (c *Client) OpenMessageSession(ctx context.Context, scaleSetID ScaleSetID, 
 // Snapshot returns only the values needed for durable demand handling. Queue
 // endpoint and bearer token remain encapsulated in the official client.
 func (s *MessageSession) Snapshot() (SessionSnapshot, error) {
-	session := s.client.Session()
+	session, err := contain(func() (scaleset.RunnerScaleSetSession, error) { return s.client.Session(), nil })
+	if err != nil {
+		return SessionSnapshot{}, err
+	}
 	statistics, err := fromStatistics(session.Statistics)
 	if err != nil || statistics == nil || session.SessionID.String() == "00000000-0000-0000-0000-000000000000" {
 		return SessionSnapshot{}, ErrInvalidPreviewResponse
@@ -254,7 +258,9 @@ func (s *MessageSession) Poll(ctx context.Context, lastAcknowledgedMessageID, ma
 	if maxCapacity < 0 {
 		return nil, ErrInvalidCapacity
 	}
-	message, err := s.client.GetMessage(ctx, lastAcknowledgedMessageID, maxCapacity)
+	message, err := contain(func() (*scaleset.RunnerScaleSetMessage, error) {
+		return s.client.GetMessage(ctx, lastAcknowledgedMessageID, maxCapacity)
+	})
 	if err != nil {
 		return nil, fmt.Errorf("getting GitHub scale-set message: %w", err)
 	}
@@ -274,7 +280,8 @@ func (s *MessageSession) DeleteMessage(ctx context.Context, messageID int) error
 	if messageID <= 0 {
 		return ErrInvalidMessageID
 	}
-	if err := s.client.DeleteMessage(ctx, messageID); err != nil {
+	_, err := contain(func() (struct{}, error) { return struct{}{}, s.client.DeleteMessage(ctx, messageID) })
+	if err != nil {
 		return fmt.Errorf("deleting GitHub scale-set message: %w", err)
 	}
 	return nil
@@ -284,7 +291,7 @@ func (s *MessageSession) DeleteMessage(ctx context.Context, messageID int) error
 // intentionally not hidden inside Poller because acquisition has its own later
 // durable scheduling contract.
 func (s *MessageSession) AcquireJobs(ctx context.Context, requestIDs []int64) ([]int64, error) {
-	ids, err := s.client.AcquireJobs(ctx, requestIDs)
+	ids, err := contain(func() ([]int64, error) { return s.client.AcquireJobs(ctx, requestIDs) })
 	if err != nil {
 		return nil, fmt.Errorf("acquiring GitHub scale-set jobs: %w", err)
 	}
@@ -293,7 +300,8 @@ func (s *MessageSession) AcquireJobs(ctx context.Context, requestIDs []int64) ([
 
 // Close ends the GitHub message session.
 func (s *MessageSession) Close(ctx context.Context) error {
-	if err := s.client.Close(ctx); err != nil {
+	_, err := contain(func() (struct{}, error) { return struct{}{}, s.client.Close(ctx) })
+	if err != nil {
 		return fmt.Errorf("closing GitHub message session: %w", err)
 	}
 	return nil

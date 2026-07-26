@@ -59,6 +59,23 @@ arguments, test fixtures, logs, or uploaded artifacts. Obtain credentials from
 the configured OS/managed credential store and inject them directly into the
 controller process through its future secret-store integration.
 
+## Preview HTTP boundary
+
+The adapter's production retryable client disables environment proxies and
+transparent retries. Before a request can carry an admin or message bearer it
+requires HTTPS, no userinfo or explicit port, and one of `github.com`,
+`api.github.com`, or a nonempty label ending exactly in
+`.actions.githubusercontent.com`. Redirects may stay on the exact same origin
+only. DNS results are resolved at dial time and private, loopback, link-local,
+unspecified, and multicast IPv4/IPv6 addresses are rejected before the vetted
+IP is dialed; TLS continues to use the original hostname.
+
+Responses are limited to 1 MiB before the upstream preview client performs its
+unbounded read. This limit covers its JSON control-plane payloads only—runner
+logs and artifacts are not adapter responses. The Actions-host allowlist and
+1 MiB payload assumption are provisional and must be measured in the private
+GitHub sandbox before release evidence can close this task.
+
 Record the following in an access-controlled release-evidence location:
 
 1. Create a dedicated GitHub App from the manifest flow and install it into two
