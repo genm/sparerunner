@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/coder/websocket"
@@ -29,7 +30,10 @@ func ControllerServerTLSConfig(identity enroll.ControllerIdentity) (*tls.Config,
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(identity.CA)
-	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientCAs: pool, ClientAuth: tls.RequireAndVerifyClientCert}, nil
+	// Enrollment starts on this listener and deliberately has no client
+	// certificate. WSS authentication below still requires a verified, current
+	// client certificate before accepting an upgraded session.
+	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, ClientCAs: pool, ClientAuth: tls.VerifyClientCertIfGiven}, nil
 }
 
 // PinnedControllerTLSConfig does full verification in VerifyConnection because a
@@ -69,25 +73,84 @@ func NodeTLSCertificate(key crypto.PrivateKey, certificateDER, caDER []byte) (tl
 	if err != nil {
 		return tls.Certificate{}, err
 	}
+	ca, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		return tls.Certificate{}, err
+	}
+	if err := validateNodeMaterial(key, certificate, ca, time.Now()); err != nil {
+		return tls.Certificate{}, err
+	}
 	return tls.Certificate{Certificate: [][]byte{certificateDER, caDER}, PrivateKey: key, Leaf: certificate}, nil
 }
 
 func NodeClientTLSConfig(certificate tls.Certificate, ca *x509.Certificate) (*tls.Config, error) {
-	if ca == nil {
+	if ca == nil || certificate.Leaf == nil {
 		return nil, errors.New("missing controller CA")
+	}
+	if err := validateNodeMaterial(certificate.PrivateKey, certificate.Leaf, ca, time.Now()); err != nil {
+		return nil, err
 	}
 	pool := x509.NewCertPool()
 	pool.AddCert(ca)
 	return &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, RootCAs: pool, ServerName: enroll.ControllerDNSName}, nil
 }
 
-type SessionHandler func(context.Context, *websocket.Conn, enroll.Credential) error
+func validateNodeMaterial(key crypto.PrivateKey, certificate, ca *x509.Certificate, now time.Time) error {
+	if certificate == nil || ca == nil || !ca.IsCA || ca.CheckSignatureFrom(ca) != nil || !ca.NotAfter.After(now) {
+		return errors.New("invalid controller CA")
+	}
+	if _, _, _, err := enroll.NodeCredentialIdentity(certificate); err != nil {
+		return err
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(ca)
+	if _, err := certificate.Verify(x509.VerifyOptions{Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}, CurrentTime: now}); err != nil {
+		return err
+	}
+	public, ok := key.(crypto.Signer)
+	if !ok || !publicKeysEqual(public.Public(), certificate.PublicKey) {
+		return errors.New("node private key does not match certificate")
+	}
+	return nil
+}
+
+type SessionHandler func(context.Context, *AuthenticatedSession) error
+
+// AuthenticatedSession rechecks current credential state before each inbound or
+// outbound protocol operation. Revocation therefore terminates a live WSS
+// session on its next heartbeat/command exchange instead of only on reconnect.
+type AuthenticatedSession struct {
+	connection *websocket.Conn
+	authorizer CredentialAuthorizer
+	credential enroll.Credential
+}
+
+func (session *AuthenticatedSession) Credential() enroll.Credential { return session.credential }
+
+func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error) {
+	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
+		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
+	}
+	return ReadEnvelope(ctx, session.connection)
+}
+
+func (session *AuthenticatedSession) Write(ctx context.Context, envelope Envelope) error {
+	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
+		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		return fmt.Errorf("node credential rejected: %w", err)
+	}
+	return WriteEnvelope(ctx, session.connection, envelope)
+}
 
 // UpgradeAuthenticated performs certificate identity and current-credential
 // authorization before the WebSocket is accepted, so rejected nodes cannot send
 // protocol frames or be treated as capacity-bearing sessions.
 func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, authorizer CredentialAuthorizer, handler SessionHandler) error {
-	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 {
+	if handler == nil || authorizer == nil {
+		return errors.New("missing authenticated session dependency")
+	}
+	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 || len(request.TLS.VerifiedChains) == 0 {
 		return errors.New("missing node client certificate")
 	}
 	nodeID, serial, epoch, err := enroll.NodeCredentialIdentity(request.TLS.PeerCertificates[0])
@@ -95,28 +158,37 @@ func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, aut
 		return err
 	}
 	credential := enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: request.TLS.PeerCertificates[0].NotBefore, NotAfter: request.TLS.PeerCertificates[0].NotAfter}
-	if authorizer == nil {
-		return errors.New("missing credential authorizer")
-	}
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
 		return fmt.Errorf("node credential rejected: %w", err)
 	}
-	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled})
+	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
 	if err != nil {
 		return err
 	}
-	connection.SetReadLimit(GitHubAdapterResponseLimit)
+	connection.SetReadLimit(MaxEnvelopeBytes)
 	defer connection.CloseNow()
-	return handler(request.Context(), connection, credential)
+	if connection.Subprotocol() != "tewake.v1" {
+		return errors.New("missing tewake.v1 subprotocol")
+	}
+	return handler(request.Context(), &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential})
 }
 
 func DialNodeWSS(ctx context.Context, endpoint string, config *tls.Config) (*websocket.Conn, *http.Response, error) {
 	if config == nil {
 		return nil, nil, errors.New("missing node TLS config")
 	}
-	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{TLSClientConfig: config}}, CompressionMode: websocket.CompressionDisabled})
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+		return nil, nil, errors.New("invalid secure WebSocket endpoint")
+	}
+	client := &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("WebSocket redirects are forbidden") }}
+	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: client, CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
 	if err == nil {
-		connection.SetReadLimit(GitHubAdapterResponseLimit)
+		connection.SetReadLimit(MaxEnvelopeBytes)
+		if connection.Subprotocol() != "tewake.v1" {
+			connection.CloseNow()
+			return nil, response, errors.New("controller did not negotiate tewake.v1")
+		}
 	}
 	return connection, response, err
 }

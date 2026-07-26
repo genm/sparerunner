@@ -5,10 +5,10 @@ import (
 	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/x509"
 	"errors"
 	"io"
-	"math/big"
 	"time"
 )
 
@@ -44,7 +44,7 @@ func (service Service) CreateJoinCode(ctx context.Context, hints []string) (stri
 	if err != nil {
 		return "", err
 	}
-	if err := service.Registry.CreateToken(ctx, TokenRecord{ID: code.TokenID, SecretDigest: SecretDigest(service.DigestKey, code.Secret), Epoch: service.Epoch}); err != nil {
+	if err := service.Registry.CreateToken(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.DigestKey, code.tokenID, code.secret), Epoch: service.Epoch}); err != nil {
 		return "", err
 	}
 	return code.Encode()
@@ -58,7 +58,7 @@ func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []
 	if err != nil {
 		return EnrollmentResult{}, err
 	}
-	if code.CAFingerprint != service.Identity.CAFingerprint() {
+	if code.caFingerprint != service.Identity.CAFingerprint() {
 		return EnrollmentResult{}, ErrControllerFingerprintMismatch
 	}
 	nodeID, err := NewNodeID(service.random())
@@ -74,13 +74,16 @@ func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []
 		return EnrollmentResult{}, err
 	}
 	credential := credentialFor(nodeID, certificate, 1)
-	if err := service.Registry.ConsumeEnrollment(ctx, TokenRecord{ID: code.TokenID, SecretDigest: SecretDigest(service.DigestKey, code.Secret), Epoch: service.Epoch}, NodeRecord{NodeID: nodeID, Credential: credential}); err != nil {
+	if err := service.Registry.ConsumeEnrollment(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.DigestKey, code.tokenID, code.secret), Epoch: service.Epoch}, NodeRecord{NodeID: nodeID, Credential: credential}); err != nil {
 		return EnrollmentResult{}, err
 	}
 	return EnrollmentResult{NodeID: nodeID, CertificateDER: certificateDER, CACertificateDER: service.Identity.CA.Raw, Credential: credential}, nil
 }
 
 func (service Service) Cancel(ctx context.Context, tokenID [16]byte) error {
+	if err := service.valid(); err != nil {
+		return err
+	}
 	return service.Registry.CancelToken(ctx, tokenID)
 }
 
@@ -103,10 +106,10 @@ func (service Service) Renew(ctx context.Context, current Credential, csrDER []b
 }
 
 func (service Service) valid() error {
-	if service.Registry == nil || service.Identity.CA == nil || service.Epoch == 0 {
+	if service.Registry == nil || service.Epoch == 0 || zeroBytes(service.DigestKey[:]) {
 		return errors.New("incomplete enrollment service")
 	}
-	return nil
+	return service.Identity.Validate(service.now())
 }
 func (service Service) now() time.Time {
 	if service.Now != nil {
@@ -125,21 +128,30 @@ func credentialFor(nodeID string, certificate *x509.Certificate, epoch uint64) C
 	return Credential{NodeID: nodeID, Serial: certificate.SerialNumber.Text(16), Epoch: epoch, NotBefore: certificate.NotBefore, NotAfter: certificate.NotAfter}
 }
 
-// RenewalDue derives a fresh CSPRNG jitter for a certificate lifetime. No fixed
-// schedule is persisted, avoiding synchronized fleet renewal after restart.
+// RenewalTime deterministically derives one point in the documented 70-90%
+// window from immutable certificate bytes. It is stable across polling and
+// restart, while independently-issued certificates spread renewal work.
+func RenewalTime(certificate *x509.Certificate) (time.Time, error) {
+	if certificate == nil || len(certificate.Raw) == 0 || !certificate.NotAfter.After(certificate.NotBefore) {
+		return time.Time{}, errors.New("invalid certificate")
+	}
+	spread := sha256.Sum256(certificate.Raw)
+	percent := 70 + int(spread[0])%21
+	return certificate.NotBefore.Add(time.Duration(percent) * certificate.NotAfter.Sub(certificate.NotBefore) / 100), nil
+}
+
+// RenewalDue is retained for callers that previously supplied a CSPRNG. The
+// reader is intentionally unused: rerolling per poll would make renewal state
+// nondeterministic and can indefinitely postpone a due credential.
 func RenewalDue(certificate *x509.Certificate, now time.Time, reader io.Reader) (bool, error) {
-	if certificate == nil || !certificate.NotAfter.After(certificate.NotBefore) {
-		return false, errors.New("invalid certificate")
+	_ = reader
+	threshold, err := RenewalTime(certificate)
+	if err != nil {
+		return false, err
 	}
 	if !now.Before(certificate.NotAfter) {
 		return true, nil
 	}
-	roll, err := rand.Int(readerOrDefault(reader), big.NewInt(21))
-	if err != nil {
-		return false, err
-	}
-	percent := 70 + roll.Int64()
-	threshold := certificate.NotBefore.Add(time.Duration(percent) * certificate.NotAfter.Sub(certificate.NotBefore) / 100)
 	return !now.Before(threshold), nil
 }
 

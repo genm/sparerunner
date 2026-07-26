@@ -7,16 +7,18 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
+	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"math/big"
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -31,10 +33,14 @@ var credentialEpochOID = []int{1, 3, 6, 1, 4, 1, 57264, 1, 1}
 
 type ControllerIdentity struct {
 	CA          *x509.Certificate
-	CAKey       ed25519.PrivateKey
+	caKey       ed25519.PrivateKey
 	Certificate *x509.Certificate
-	Key         ed25519.PrivateKey
+	key         ed25519.PrivateKey
 }
+
+func (identity ControllerIdentity) String() string       { return "controller-identity[redacted]" }
+func (identity ControllerIdentity) GoString() string     { return identity.String() }
+func (identity ControllerIdentity) LogValue() slog.Value { return slog.StringValue(identity.String()) }
 
 func NewControllerIdentity(now time.Time, reader io.Reader) (ControllerIdentity, error) {
 	if reader == nil {
@@ -80,14 +86,14 @@ func NewControllerIdentity(now time.Time, reader io.Reader) (ControllerIdentity,
 	if err != nil {
 		return ControllerIdentity{}, err
 	}
-	return ControllerIdentity{CA: ca, CAKey: caPrivate, Certificate: leaf, Key: private}, nil
+	return ControllerIdentity{CA: ca, caKey: caPrivate, Certificate: leaf, key: private}, nil
 }
 
 func (identity ControllerIdentity) TLSCertificate() (tlsCertificate tls.Certificate, err error) {
-	if identity.Certificate == nil || identity.CA == nil || len(identity.Key) != ed25519.PrivateKeySize {
-		return tls.Certificate{}, errors.New("incomplete controller identity")
+	if err := identity.Validate(time.Now()); err != nil {
+		return tls.Certificate{}, err
 	}
-	return tls.Certificate{Certificate: [][]byte{identity.Certificate.Raw, identity.CA.Raw}, PrivateKey: identity.Key, Leaf: identity.Certificate}, nil
+	return tls.Certificate{Certificate: [][]byte{identity.Certificate.Raw, identity.CA.Raw}, PrivateKey: identity.key, Leaf: identity.Certificate}, nil
 }
 
 // CAFingerprint is the trust anchor transported by a join code, not a leaf that
@@ -124,8 +130,8 @@ func CanonicalNodeURI(nodeID string) (*url.URL, error) {
 // verified public key is read from the CSR; controller-owned identity is written
 // into the certificate.
 func (identity ControllerIdentity) IssueNodeCertificate(csrDER []byte, nodeID string, epoch uint64, now time.Time, reader io.Reader) (*x509.Certificate, []byte, error) {
-	if identity.CA == nil || len(identity.CAKey) != ed25519.PrivateKeySize {
-		return nil, nil, errors.New("incomplete controller identity")
+	if epoch == 0 || identity.CA == nil || len(identity.caKey) != ed25519.PrivateKeySize || !identity.CA.NotAfter.After(now) {
+		return nil, nil, errors.New("invalid certificate authority or credential epoch")
 	}
 	csr, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
@@ -138,7 +144,11 @@ func (identity ControllerIdentity) IssueNodeCertificate(csrDER []byte, nodeID st
 	if err != nil {
 		return nil, nil, err
 	}
-	template, err := certificateTemplate(now, LeafValidity, reader)
+	validity := LeafValidity
+	if remaining := identity.CA.NotAfter.Sub(now); remaining < validity {
+		validity = remaining
+	}
+	template, err := certificateTemplate(now, validity, reader)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -146,10 +156,12 @@ func (identity ControllerIdentity) IssueNodeCertificate(csrDER []byte, nodeID st
 	template.URIs = []*url.URL{uri}
 	template.KeyUsage = x509.KeyUsageDigitalSignature
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	var epochBytes [8]byte
-	binary.BigEndian.PutUint64(epochBytes[:], epoch)
-	template.ExtraExtensions = []pkix.Extension{{Id: credentialEpochOID, Value: epochBytes[:]}}
-	der, err := x509.CreateCertificate(readerOrDefault(reader), template, identity.CA, csr.PublicKey, identity.CAKey)
+	epochBytes, err := asn1.Marshal(new(big.Int).SetUint64(epoch))
+	if err != nil {
+		return nil, nil, err
+	}
+	template.ExtraExtensions = []pkix.Extension{{Id: credentialEpochOID, Value: epochBytes}}
+	der, err := x509.CreateCertificate(readerOrDefault(reader), template, identity.CA, csr.PublicKey, identity.caKey)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -169,8 +181,14 @@ func certificateTemplate(now time.Time, validity time.Duration, reader io.Reader
 }
 
 func positiveSerial(reader io.Reader) (*big.Int, error) {
-	upperBound := new(big.Int).Lsh(big.NewInt(1), 127)
-	return rand.Int(reader, upperBound)
+	// rand.Int's range starts at zero; shift it so every issued serial is
+	// strictly positive while retaining 127 bits of unpredictable entropy.
+	upperBound := new(big.Int).Sub(new(big.Int).Lsh(big.NewInt(1), 127), big.NewInt(1))
+	serial, err := rand.Int(reader, upperBound)
+	if err != nil {
+		return nil, err
+	}
+	return serial.Add(serial, big.NewInt(1)), nil
 }
 
 func readerOrDefault(reader io.Reader) io.Reader {
@@ -193,26 +211,56 @@ func NodeCredentialIdentity(certificate *x509.Certificate) (nodeID, serial strin
 	if canonicalErr != nil || canonical.String() != uri.String() {
 		return "", "", 0, errors.New("invalid node certificate")
 	}
+	var found bool
 	for _, extension := range certificate.Extensions {
 		if extension.Id.Equal(credentialEpochOID) {
-			if len(extension.Value) != 8 {
+			if found {
+				return "", "", 0, errors.New("duplicate node credential epoch")
+			}
+			found = true
+			var parsed *big.Int
+			rest, parseErr := asn1.Unmarshal(extension.Value, &parsed)
+			if parseErr != nil || len(rest) != 0 || parsed == nil || parsed.Sign() <= 0 || !parsed.IsUint64() {
 				return "", "", 0, errors.New("invalid node credential epoch")
 			}
-			return nodeID, certificate.SerialNumber.Text(16), binary.BigEndian.Uint64(extension.Value), nil
+			epoch = parsed.Uint64()
 		}
 	}
-	return "", "", 0, errors.New("missing node credential epoch")
+	if !found {
+		return "", "", 0, errors.New("missing node credential epoch")
+	}
+	return nodeID, certificate.SerialNumber.Text(16), epoch, nil
+}
+
+func (identity ControllerIdentity) Validate(now time.Time) error {
+	if identity.CA == nil || identity.Certificate == nil || len(identity.caKey) != ed25519.PrivateKeySize || len(identity.key) != ed25519.PrivateKeySize {
+		return errors.New("incomplete controller identity")
+	}
+	caPublic, ok := identity.CA.PublicKey.(ed25519.PublicKey)
+	if !ok || !caPublic.Equal(identity.caKey.Public()) || !identity.CA.IsCA || identity.CA.CheckSignatureFrom(identity.CA) != nil {
+		return errors.New("invalid controller certificate authority")
+	}
+	leafPublic, ok := identity.Certificate.PublicKey.(ed25519.PublicKey)
+	if !ok || !leafPublic.Equal(identity.key.Public()) || !identity.CA.NotAfter.After(now) || !identity.Certificate.NotAfter.After(now) {
+		return errors.New("invalid controller leaf identity")
+	}
+	roots := x509.NewCertPool()
+	roots.AddCert(identity.CA)
+	if _, err := identity.Certificate.Verify(x509.VerifyOptions{DNSName: ControllerDNSName, Roots: roots, KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, CurrentTime: now}); err != nil {
+		return fmt.Errorf("invalid controller leaf chain: %w", err)
+	}
+	return nil
 }
 
 func (identity ControllerIdentity) Save(path string) error {
-	if identity.CA == nil || identity.Certificate == nil || len(identity.CAKey) != ed25519.PrivateKeySize || len(identity.Key) != ed25519.PrivateKeySize {
-		return errors.New("incomplete controller identity")
+	if err := identity.Validate(time.Now()); err != nil {
+		return err
 	}
-	caKey, err := x509.MarshalPKCS8PrivateKey(identity.CAKey)
+	caKey, err := x509.MarshalPKCS8PrivateKey(identity.caKey)
 	if err != nil {
 		return err
 	}
-	key, err := x509.MarshalPKCS8PrivateKey(identity.Key)
+	key, err := x509.MarshalPKCS8PrivateKey(identity.key)
 	if err != nil {
 		return err
 	}
@@ -223,6 +271,9 @@ func (identity ControllerIdentity) Save(path string) error {
 }
 
 func LoadControllerIdentity(path string) (ControllerIdentity, error) {
+	if err := requirePrivateRegularFile(path); err != nil {
+		return ControllerIdentity{}, err
+	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return ControllerIdentity{}, err
@@ -256,10 +307,14 @@ func LoadControllerIdentity(path string) (ControllerIdentity, error) {
 			return ControllerIdentity{}, errors.New("invalid controller identity file")
 		}
 	}
-	if len(certificates) != 2 || len(keys) != 2 || !certificates[0].IsCA {
+	if len(certificates) != 2 || len(keys) != 2 {
 		return ControllerIdentity{}, errors.New("incomplete controller identity")
 	}
-	return ControllerIdentity{CA: certificates[0], CAKey: keys[0], Certificate: certificates[1], Key: keys[1]}, nil
+	identity := ControllerIdentity{CA: certificates[0], caKey: keys[0], Certificate: certificates[1], key: keys[1]}
+	if err := identity.Validate(time.Now()); err != nil {
+		return ControllerIdentity{}, err
+	}
+	return identity, nil
 }
 
 func GenerateAndPersistNodeKey(path string, reader io.Reader) (ed25519.PrivateKey, error) {
@@ -282,6 +337,9 @@ func SaveNodePrivateKey(path string, key ed25519.PrivateKey) error {
 }
 
 func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
+	if err := requirePrivateRegularFile(path); err != nil {
+		return nil, err
+	}
 	contents, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -302,10 +360,19 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 }
 
 func atomicPrivateFile(path string, contents []byte) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	parent := filepath.Dir(path)
+	if err := os.MkdirAll(parent, 0700); err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".tewake-private-*")
+	if err := requirePrivateDirectory(parent); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return errors.New("private material already exists")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	temporary, err := os.CreateTemp(parent, ".tewake-private-*")
 	if err != nil {
 		return err
 	}
@@ -326,8 +393,53 @@ func atomicPrivateFile(path string, contents []byte) error {
 	if err := temporary.Close(); err != nil {
 		return err
 	}
-	if err := os.Rename(temporaryPath, path); err != nil {
+	// Link creation is an atomic no-clobber publish operation. Unlike Rename, it
+	// can never replace an identity/key that a concurrent initializer created.
+	if err := os.Link(temporaryPath, path); err != nil {
 		return fmt.Errorf("atomically persist private material: %w", err)
 	}
+	if err := syncDirectory(parent); err != nil {
+		return err
+	}
 	return nil
+}
+
+func requirePrivateDirectory(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("private material parent is unsafe")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+		return errors.New("private material parent is not private")
+	}
+	return nil
+}
+
+func requirePrivateRegularFile(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return errors.New("private material path is unsafe")
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		return errors.New("private material is not private")
+	}
+	return nil
+}
+
+func syncDirectory(path string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	} // ACL/DPAPI protection is owned by twk009.
+	directory, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }

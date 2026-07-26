@@ -133,7 +133,7 @@ tasks:
       - cmd/tewake-agent
     ci_targets: [lint, test, build]
     pr_order: 5
-    status: todo
+    status: in_progress
     acceptance:
       - A valid join enrolls one node and consumes the token atomically.
       - Token races, replay, fake controller, revoked node, and protocol mismatch fail closed.

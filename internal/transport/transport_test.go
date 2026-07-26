@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/genm/tewake/internal/enroll"
 )
 
@@ -98,6 +97,33 @@ func TestEnrollmentClientDoesNotSendBodyToWrongFingerprint(t *testing.T) {
 	}
 }
 
+func TestEnrollmentHandlerAndPinnedClientCompleteInitialJoinWithoutClientCertificate(t *testing.T) {
+	service, registry := transportService(t)
+	serverConfig, err := ControllerServerTLSConfig(service.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(EnrollmentHandler(service))
+	server.TLS = serverConfig
+	server.StartTLS()
+	defer server.Close()
+	code, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := transportCSR(t)
+	response, err := (EnrollmentClient{}).Enroll(context.Background(), server.URL, code, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.NodeID == "" {
+		t.Fatal("missing node ID")
+	}
+	if err := registry.AuthorizeCredential(context.Background(), response.Credential, time.Now()); err != nil {
+		t.Fatalf("enrolled credential rejected: %v", err)
+	}
+}
+
 func TestAuthenticatedWSSAcceptsCurrentMTLSCredential(t *testing.T) {
 	service, registry := transportService(t)
 	code, err := service.CreateJoinCode(context.Background(), nil)
@@ -126,8 +152,8 @@ func TestAuthenticatedWSSAcceptsCurrentMTLSCredential(t *testing.T) {
 	}
 	received := make(chan Envelope, 1)
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		err := UpgradeAuthenticated(writer, request, registry, func(ctx context.Context, connection *websocket.Conn, credential enroll.Credential) error {
-			envelope, readErr := ReadEnvelope(ctx, connection)
+		err := UpgradeAuthenticated(writer, request, registry, func(ctx context.Context, session *AuthenticatedSession) error {
+			envelope, readErr := session.Read(ctx)
 			if readErr == nil {
 				received <- envelope
 			}

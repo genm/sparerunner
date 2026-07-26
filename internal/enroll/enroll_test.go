@@ -6,8 +6,11 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -15,7 +18,7 @@ import (
 
 func testService(t *testing.T) (Service, *MemoryRegistry, time.Time) {
 	t.Helper()
-	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Add(-time.Minute)
 	identity, err := NewControllerIdentity(now, rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -58,7 +61,7 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if decoded.TokenID != code.TokenID || decoded.Secret != code.Secret || decoded.CAFingerprint != fingerprint {
+	if decoded.TokenID() != code.TokenID() || decoded.secret != code.secret || decoded.CAFingerprint() != fingerprint {
 		t.Fatal("join code changed during canonical round-trip")
 	}
 	for _, malformed := range []string{encoded + "=", encoded + "A", "twk_"} {
@@ -70,16 +73,44 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	if _, err := rand.Read(key[:]); err != nil {
 		t.Fatal(err)
 	}
-	digest := SecretDigest(key, code.Secret)
-	if !VerifySecretDigest(digest, SecretDigest(key, code.Secret)) {
+	digest := SecretDigest(key, code.tokenID, code.secret)
+	if !VerifySecretDigest(digest, SecretDigest(key, code.tokenID, code.secret)) {
 		t.Fatal("valid digest rejected")
 	}
 	var different [32]byte
 	if _, err := rand.Read(different[:]); err != nil {
 		t.Fatal(err)
 	}
-	if VerifySecretDigest(digest, SecretDigest(key, different)) {
+	if VerifySecretDigest(digest, SecretDigest(key, code.tokenID, different)) {
 		t.Fatal("different secret accepted")
+	}
+}
+
+func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
+	service, _, _ := testService(t)
+	code, err := NewJoinCode(service.Identity.CAFingerprint(), nil, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := code.Encode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, rendered := range []string{fmt.Sprint(code), fmt.Sprintf("%#v", code), code.LogValue().String(), service.Identity.String(), fmt.Sprintf("%#v", service.Identity), service.Identity.LogValue().String()} {
+		if strings.Contains(rendered, encoded) || strings.Contains(rendered, string(code.secret[:])) {
+			t.Fatalf("secret leaked through representation %q", rendered)
+		}
+	}
+	serializedCode, err := json.Marshal(code)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serializedIdentity, err := json.Marshal(service.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serializedCode), encoded) || strings.Contains(string(serializedIdentity), string(service.Identity.key)) {
+		t.Fatal("secret leaked through JSON")
 	}
 }
 
@@ -112,7 +143,7 @@ func TestEnrollmentConsumesOnceAndFailsClosed(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := service.Cancel(context.Background(), decoded.TokenID); err != nil {
+	if err := service.Cancel(context.Background(), decoded.TokenID()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.Enroll(context.Background(), cancelCode, csr); !errors.Is(err, ErrTokenNotFound) {
@@ -227,7 +258,11 @@ func TestRenewalPreservesNodeAndSupersedesOldCredential(t *testing.T) {
 
 func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 	service, _, now := testService(t)
-	path := t.TempDir() + "/controller-identity.pem"
+	identityDirectory := t.TempDir()
+	if err := os.Chmod(identityDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := identityDirectory + "/controller-identity.pem"
 	if err := service.Identity.Save(path); err != nil {
 		t.Fatal(err)
 	}
@@ -238,7 +273,11 @@ func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 	if err != nil || loaded.CAFingerprint() != service.Identity.CAFingerprint() {
 		t.Fatalf("identity persistence = %v", err)
 	}
-	keyPath := t.TempDir() + "/node-key.pem"
+	keyDirectory := t.TempDir()
+	if err := os.Chmod(keyDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := keyDirectory + "/node-key.pem"
 	key, err := GenerateAndPersistNodeKey(keyPath, rand.Reader)
 	if err != nil {
 		t.Fatal(err)

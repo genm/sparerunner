@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
+	"sort"
 	"strconv"
 	"time"
 
@@ -33,7 +35,12 @@ func (discoverer MDNSDiscoverer) Discover(ctx context.Context) ([]EndpointCandid
 	query := mdns.QueryParam{Service: DiscoveryService, Domain: "local", Timeout: timeout, Entries: entries}
 	done := make(chan error, 1)
 	go func() { done <- mdns.Query(&query); close(entries) }()
-	var candidates []EndpointCandidate
+	candidateSet := map[string]struct{}{}
+	add := func(entry *mdns.ServiceEntry) {
+		if candidate, ok := candidateFor(entry); ok {
+			candidateSet[candidate.Address] = struct{}{}
+		}
+	}
 	for {
 		select {
 		case <-ctx.Done():
@@ -43,25 +50,49 @@ func (discoverer MDNSDiscoverer) Discover(ctx context.Context) ([]EndpointCandid
 				return nil, err
 			}
 			for entry := range entries {
-				candidates = append(candidates, candidateFor(entry))
+				add(entry)
 			}
-			return candidates, nil
+			return stableCandidates(candidateSet), nil
 		case entry, ok := <-entries:
 			if !ok {
 				err := <-done
-				return candidates, err
+				return stableCandidates(candidateSet), err
 			}
-			candidates = append(candidates, candidateFor(entry))
+			add(entry)
 		}
 	}
 }
 
-func candidateFor(entry *mdns.ServiceEntry) EndpointCandidate {
-	host := entry.AddrV4.String()
-	if entry.AddrV4 == nil && entry.AddrV6 != nil {
-		host = "[" + entry.AddrV6.String() + "]"
+func candidateFor(entry *mdns.ServiceEntry) (EndpointCandidate, bool) {
+	if entry == nil || entry.Port < 1 || entry.Port > 65535 {
+		return EndpointCandidate{}, false
 	}
-	return EndpointCandidate{Address: net.JoinHostPort(host, strconv.Itoa(entry.Port))}
+	var host net.IP
+	if entry.AddrV4 != nil {
+		host = entry.AddrV4
+	} else if entry.AddrV6 != nil {
+		host = entry.AddrV6
+	} else {
+		return EndpointCandidate{}, false
+	}
+	address, ok := netip.AddrFromSlice(host)
+	if !ok || address.IsUnspecified() {
+		return EndpointCandidate{}, false
+	}
+	return EndpointCandidate{Address: net.JoinHostPort(address.String(), strconv.Itoa(entry.Port))}, true
+}
+
+func stableCandidates(candidates map[string]struct{}) []EndpointCandidate {
+	addresses := make([]string, 0, len(candidates))
+	for address := range candidates {
+		addresses = append(addresses, address)
+	}
+	sort.Strings(addresses)
+	result := make([]EndpointCandidate, len(addresses))
+	for index, address := range addresses {
+		result[index] = EndpointCandidate{Address: address}
+	}
+	return result
 }
 
 type MDNSAdvertiser struct{ server *mdns.Server }

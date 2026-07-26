@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/coder/websocket"
 )
@@ -18,6 +19,11 @@ const ProtocolVersion = 1
 // contract. The agent envelope shares this bounded transport reader so a peer
 // cannot make controller memory exceed the only established upstream boundary.
 const GitHubAdapterResponseLimit int64 = 1 << 20
+
+// MaxEnvelopeBytes reserves one further upstream-sized payload for the JSON
+// envelope metadata and structured payload representation. This is a transport
+// memory boundary derived from the adapter cap, not a product message quota.
+const MaxEnvelopeBytes int64 = 2 * GitHubAdapterResponseLimit
 
 var (
 	ErrProtocolVersion = errors.New("unsupported transport protocol version")
@@ -49,7 +55,11 @@ func (envelope Envelope) Validate() error {
 	if envelope.ProtocolVersion != ProtocolVersion {
 		return ErrProtocolVersion
 	}
-	if envelope.MessageID == "" || len(envelope.Payload) == 0 || !json.Valid(envelope.Payload) {
+	if envelope.MessageID == "" || envelope.MessageID != strings.TrimSpace(envelope.MessageID) || len(envelope.Payload) == 0 || int64(len(envelope.Payload)) > MaxEnvelopeBytes || !json.Valid(envelope.Payload) || rejectDuplicateJSONKeys(envelope.Payload) != nil {
+		return ErrInvalidEnvelope
+	}
+	var object map[string]json.RawMessage
+	if json.Unmarshal(envelope.Payload, &object) != nil || object == nil {
 		return ErrInvalidEnvelope
 	}
 	switch envelope.Type {
@@ -68,7 +78,7 @@ func MarshalEnvelope(envelope Envelope) ([]byte, error) {
 }
 
 func DecodeEnvelope(payload []byte) (Envelope, error) {
-	if int64(len(payload)) > GitHubAdapterResponseLimit {
+	if int64(len(payload)) > MaxEnvelopeBytes {
 		return Envelope{}, ErrInvalidEnvelope
 	}
 	if err := rejectDuplicateJSONKeys(payload); err != nil {
@@ -106,8 +116,8 @@ func ReadEnvelope(ctx context.Context, connection *websocket.Conn) (Envelope, er
 	if messageType != websocket.MessageBinary {
 		return Envelope{}, ErrInvalidEnvelope
 	}
-	payload, err := io.ReadAll(io.LimitReader(reader, GitHubAdapterResponseLimit+1))
-	if err != nil || int64(len(payload)) > GitHubAdapterResponseLimit {
+	payload, err := io.ReadAll(io.LimitReader(reader, MaxEnvelopeBytes+1))
+	if err != nil || int64(len(payload)) > MaxEnvelopeBytes {
 		return Envelope{}, ErrInvalidEnvelope
 	}
 	return DecodeEnvelope(payload)

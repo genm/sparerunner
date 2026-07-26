@@ -722,10 +722,12 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"slot_reservations":      {"node_id", "slot_index", "target_id", "execution_id"},
 		"executions":             {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
 		"processed_messages":     {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
+		"enrollment_tokens":      {"token_id", "secret_digest", "controller_epoch"},
+		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
-		tables = append(tables, "slot_reservations", "executions", "processed_messages")
+		tables = append(tables, "slot_reservations", "executions", "processed_messages", "enrollment_tokens", "enrolled_nodes")
 	} else {
 		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones")
 	}
