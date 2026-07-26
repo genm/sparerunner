@@ -34,6 +34,31 @@ func TestAgentUnitPolicyRejectsRootOrCgroupPrivilege(t *testing.T) {
 	}
 }
 
+func TestSupervisorUnitKeepsDelegatedCgroupRootOwned(t *testing.T) {
+	supervisor := readPackagingFile(t, "systemd/tewake-supervisor.service")
+	for name, unsafe := range map[string]string{
+		"agent primary group": strings.Replace(supervisor, "Group=root", "Group=tewake-agent", 1),
+		"missing socket handoff": strings.Replace(
+			supervisor,
+			"ExecStartPre=/usr/bin/chown root:tewake-agent /run/tewake-supervisor\n",
+			"",
+			1,
+		),
+		"wrong handoff target": strings.Replace(
+			supervisor,
+			"/run/tewake-supervisor",
+			"/var/lib/tewake-supervisor",
+			1,
+		),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateSupervisorUnit(unsafe); err == nil {
+				t.Fatalf("unsafe Supervisor unit was accepted:\n%s", unsafe)
+			}
+		})
+	}
+}
+
 func TestSysusersAndTmpfilesSeparateAgentSupervisorAndSlotState(t *testing.T) {
 	sysusers := readPackagingFile(t, "sysusers.d/tewake.conf")
 	tmpfiles := readPackagingFile(t, "tmpfiles.d/tewake.conf")
@@ -92,7 +117,10 @@ func validateAgentUnit(unit string) error {
 func validateSupervisorUnit(unit string) error {
 	for _, required := range []string{
 		"User=root",
-		"Group=tewake-agent",
+		"Group=root",
+		"ExecStartPre=/usr/bin/chown root:tewake-agent /run/tewake-supervisor",
+		"RuntimeDirectory=tewake-supervisor",
+		"RuntimeDirectoryMode=0750",
 		"Delegate=yes",
 		"--runner-user=tewake-runner-0",
 		"--agent-user=tewake-agent",
@@ -105,10 +133,26 @@ func validateSupervisorUnit(unit string) error {
 			return errors.New("missing privileged Supervisor policy")
 		}
 	}
+	for _, directive := range []string{
+		"User=root",
+		"Group=root",
+		"ExecStartPre=/usr/bin/chown root:tewake-agent /run/tewake-supervisor",
+		"RuntimeDirectory=tewake-supervisor",
+		"RuntimeDirectoryMode=0750",
+	} {
+		if countDirective(unit, directive) != 1 {
+			return errors.New("Supervisor ownership directive is missing or ambiguous")
+		}
+	}
+	if strings.Index(unit, "ExecStartPre=/usr/bin/chown root:tewake-agent /run/tewake-supervisor") >
+		strings.Index(unit, "ExecStart=/usr/local/bin/tewake-agent supervisor") {
+		return errors.New("Supervisor socket-directory handoff runs after startup")
+	}
 	if strings.Contains(unit, "ReadWritePaths=/var/lib/tewake-supervisor /var/lib/tewake-runtime /var/lib/tewake-runner/0") {
 		return errors.New("Supervisor retained writable access to the persistent runner home")
 	}
 	for _, forbidden := range []string{
+		"Group=tewake-agent",
 		"PrivateNetwork=yes",
 		"RestrictAddressFamilies=AF_UNIX",
 		"Environment=",
@@ -119,6 +163,16 @@ func validateSupervisorUnit(unit string) error {
 		}
 	}
 	return nil
+}
+
+func countDirective(unit, want string) int {
+	count := 0
+	for _, line := range strings.Split(unit, "\n") {
+		if strings.TrimSpace(line) == want {
+			count++
+		}
+	}
+	return count
 }
 
 func readPackagingFile(t *testing.T, name string) string {

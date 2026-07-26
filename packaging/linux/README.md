@@ -19,6 +19,15 @@ The native Linux adapter requires:
 Unsupported or partially delegated cgroups fail closed: the node may stay
 connected for diagnostics, but it must not advertise or start a native runner.
 
+The Supervisor service deliberately runs with both its primary user and group
+set to `root`. systemd changes a delegated service cgroup's ownership to the
+configured service user and group; using the Agent group there would make the
+trusted cgroup boundary writable by that unprivileged group and would correctly
+fail Supervisor startup. After systemd creates the root-owned runtime directory,
+an exact `ExecStartPre` step changes only `/run/tewake-supervisor` to
+`root:tewake-agent` so the Agent can reach the peer-authenticated local socket.
+The delegated cgroup itself remains `root:root`.
+
 The network-facing Agent parses mTLS and GitHub-derived messages without root
 privileges. The Supervisor accepts a versioned fixed-operation protocol only on
 `/run/tewake-supervisor/supervisor.sock`, verifies the peer UID with

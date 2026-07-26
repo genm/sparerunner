@@ -6,7 +6,11 @@ ConditionPathIsDirectory=/sys/fs/cgroup
 [Service]
 Type=simple
 User=root
-Group=tewake-agent
+# Delegate= changes the service cgroup ownership to the service user and group.
+# Keep both root-owned so the Supervisor can reject a replaced cgroup boundary;
+# only the local socket directory is handed to the unprivileged Agent group.
+Group=root
+ExecStartPre=/usr/bin/chown root:tewake-agent /run/tewake-supervisor
 ExecStart=/usr/local/bin/tewake-agent supervisor \
     --socket=/run/tewake-supervisor/supervisor.sock \
     --runtime-root=/var/lib/tewake-runtime \
