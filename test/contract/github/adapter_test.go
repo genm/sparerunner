@@ -132,6 +132,19 @@ func TestPollerCommitsInitialSessionDemandBeforeEmptyPollAndUsesDynamicCapacity(
 	}
 }
 
+func TestPollerCommitsRefreshedSessionDemandBeforeMessageCommit(t *testing.T) {
+	message := githubadapter.Message{ScaleSetID: 9, ID: 101}
+	source := &fakeMessageSource{messages: []*githubadapter.Message{&message}, refreshOnPoll: true}
+	handler := &durableFakeHandler{source: source}
+	poller := newPoller(t, source, handler)
+	if _, err := poller.PollOnce(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"demand:9/session-1", "poll:0/1", "demand:9/session-2", "commit:9/101", "ack:101"}; !slices.Equal(source.events, want) {
+		t.Fatalf("events = %v, want %v", source.events, want)
+	}
+}
+
 func newPoller(t *testing.T, source *fakeMessageSource, handler *durableFakeHandler) *githubadapter.Poller {
 	t.Helper()
 	poller, err := githubadapter.NewPoller(source, handler, slog.New(slog.DiscardHandler))
@@ -142,15 +155,20 @@ func newPoller(t *testing.T, source *fakeMessageSource, handler *durableFakeHand
 }
 
 type fakeMessageSource struct {
-	messages []*githubadapter.Message
-	events   []string
-	acks     []int
-	failAcks int
-	snapshot githubadapter.SessionSnapshot
+	messages      []*githubadapter.Message
+	events        []string
+	acks          []int
+	failAcks      int
+	snapshot      githubadapter.SessionSnapshot
+	refreshOnPoll bool
 }
 
 func (s *fakeMessageSource) Poll(_ context.Context, cursor, capacity int) (*githubadapter.Message, error) {
 	s.events = append(s.events, "poll:"+strconv.Itoa(cursor)+"/"+strconv.Itoa(capacity))
+	if s.refreshOnPoll {
+		s.snapshot.ID = "session-2"
+		s.refreshOnPoll = false
+	}
 	if len(s.messages) == 0 {
 		return nil, nil
 	}
