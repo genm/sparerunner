@@ -30,7 +30,7 @@ func (strongCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (s
 func (*testSupervisor) StrongDescendantOwnership() bool { return true }
 func (s *testSupervisor) Start(context.Context, StartRequest) (Process, error) {
 	s.starts++
-	return Process{PID: s.starts}, nil
+	return Process{PID: s.starts, Containment: ContainmentRef{Backend: "test", Unit: "unit"}}, nil
 }
 func (s *testSupervisor) Stop(context.Context, Process) error { s.stops++; return s.stopErr }
 func (*testSupervisor) Alive(Process) (bool, error)           { return true, nil }

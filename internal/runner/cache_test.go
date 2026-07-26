@@ -69,7 +69,7 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 	pkg := Package{Version: "test", Platform: Platform{"test", "test"}, Asset: "runner.tar.gz", Checksum: hex.EncodeToString(sum[:]), Size: int64(len(archive)), Format: ArchiveTarGz}
 	fetcher := &bytesFetcher{data: archive}
 	cache := Cache{Root: t.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
-	const callers = 12
+	const callers = 32
 	paths := make(chan ArchiveRef, callers)
 	errs := make(chan error, callers)
 	var group sync.WaitGroup

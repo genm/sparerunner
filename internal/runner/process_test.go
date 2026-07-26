@@ -26,3 +26,11 @@ func TestRecreatedSupervisorRejectsUnownedPID(t *testing.T) {
 		t.Fatalf("owner process unexpectedly signalled: alive=%v err=%v", alive, err)
 	}
 }
+
+func TestUnixSupervisorRejectsSetsidEscapeAdmission(t *testing.T) {
+	// A child can call setsid and leave a process group; this utility must never
+	// advertise strong containment regardless of leader/child behavior.
+	if NewSupervisor().StrongDescendantOwnership() {
+		t.Fatal("bare Unix process group admitted as strong")
+	}
+}

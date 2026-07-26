@@ -218,7 +218,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		if record.JITDigest != jitDigest {
 			return Snapshot{}, ErrExecutionConflict
 		}
-		alive, err := m.supervisor.Alive(Process{PID: record.PID})
+		alive, err := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment})
 		if err != nil || !alive {
 			return snapshot(record), ErrReconciliationRequired
 		}
@@ -278,6 +278,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	}
 	record.State = StateRunning
 	record.PID = process.PID
+	record.Containment = process.Containment
 	if err := m.save(ctx, record); err != nil {
 		// A started process without a durable PID must not be replayed. Stop it
 		// now; if that cannot be proven, the caller remains fail-closed.
@@ -306,7 +307,7 @@ func (m *Manager) Inspect(ctx context.Context, executionID string) (Snapshot, er
 		return Snapshot{}, ErrReconciliationRequired
 	}
 	if record.State == StateRunning {
-		alive, observeErr := m.supervisor.Alive(Process{PID: record.PID})
+		alive, observeErr := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment})
 		if observeErr != nil || !alive {
 			return snapshot(record), ErrReconciliationRequired
 		}
@@ -349,7 +350,7 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		return m.quarantine(ctx, record)
 	}
 	if record.PID > 0 {
-		if err := m.supervisor.Stop(ctx, Process{PID: record.PID}); err != nil {
+		if err := m.supervisor.Stop(ctx, Process{PID: record.PID, Containment: record.Containment}); err != nil {
 			return m.quarantine(ctx, record)
 		}
 	}
@@ -541,7 +542,7 @@ func validRecord(record Record) bool {
 	case StateStarting:
 		return record.PID == 0 && record.JITDigest != "" && !record.Tombstone
 	case StateRunning:
-		return record.PID > 0 && record.JITDigest != "" && !record.Tombstone
+		return record.PID > 0 && record.JITDigest != "" && record.Containment.Backend != "" && record.Containment.Unit != "" && !record.Tombstone
 	case StateReleased:
 		return record.PID == 0 && !record.Tombstone
 	case StateCleanupFailed:
