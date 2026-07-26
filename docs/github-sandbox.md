@@ -76,6 +76,12 @@ logs and artifacts are not adapter responses. The Actions-host allowlist and
 1 MiB payload assumption are provisional and must be measured in the private
 GitHub sandbox before release evidence can close this task.
 
+Mixed DNS answers intentionally skip blocked special-use addresses and dial a
+remaining vetted public IP; an all-blocked answer fails closed. The JIT adapter
+handoff itself never persists or formats its opaque body, but it does not claim
+memory zeroization or a disposable official runner root: twk-006 must remove and
+verify every credential, setting, and RSA material written by the official runner.
+
 Record the following in an access-controlled release-evidence location:
 
 1. Create a dedicated GitHub App from the manifest flow and install it into two

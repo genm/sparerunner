@@ -120,3 +120,31 @@ func TestValidateJITResultRejectsMismatchedRunnerIdentity(t *testing.T) {
 		}
 	}
 }
+
+func TestAcquireIDValidation(t *testing.T) {
+	if err := validateAcquireIDs([]int64{1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ids := range [][]int64{{}, {0}, {1, 1}} {
+		if !errors.Is(validateAcquireIDs(ids), ErrInvalidPreviewResponse) {
+			t.Fatalf("accepted %v", ids)
+		}
+	}
+	if err := validateAcquireResponse([]int64{1, 2}, []int64{2}); err != nil {
+		t.Fatal(err)
+	}
+	for _, ids := range [][]int64{{0}, {3}, {1, 1}} {
+		if !errors.Is(validateAcquireResponse([]int64{1, 2}, ids), ErrInvalidPreviewResponse) {
+			t.Fatalf("accepted response %v", ids)
+		}
+	}
+}
+
+func TestMessageSessionRejectsMissingOrZeroSession(t *testing.T) {
+	if _, err := (&MessageSession{}).Snapshot(); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("nil session error=%v", err)
+	}
+	if _, err := (&MessageSession{client: &scaleset.MessageSessionClient{}, scaleSetID: 7}).Snapshot(); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("zero session error=%v", err)
+	}
+}

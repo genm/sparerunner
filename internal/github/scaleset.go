@@ -236,19 +236,25 @@ func (c *Client) OpenMessageSession(ctx context.Context, scaleSetID ScaleSetID, 
 	if err != nil {
 		return nil, fmt.Errorf("opening GitHub message session: %w", err)
 	}
+	if session == nil {
+		return nil, ErrInvalidSession
+	}
 	return &MessageSession{client: session, scaleSetID: scaleSetID}, nil
 }
 
 // Snapshot returns only the values needed for durable demand handling. Queue
 // endpoint and bearer token remain encapsulated in the official client.
 func (s *MessageSession) Snapshot() (SessionSnapshot, error) {
+	if s.client == nil {
+		return SessionSnapshot{}, ErrInvalidSession
+	}
 	session, err := contain(func() (scaleset.RunnerScaleSetSession, error) { return s.client.Session(), nil })
 	if err != nil {
 		return SessionSnapshot{}, err
 	}
 	statistics, err := fromStatistics(session.Statistics)
 	if err != nil || statistics == nil || session.SessionID.String() == "00000000-0000-0000-0000-000000000000" {
-		return SessionSnapshot{}, ErrInvalidPreviewResponse
+		return SessionSnapshot{}, ErrInvalidSession
 	}
 	return SessionSnapshot{ScaleSetID: s.scaleSetID, ID: session.SessionID.String(), Statistics: *statistics}, nil
 }
@@ -291,11 +297,54 @@ func (s *MessageSession) DeleteMessage(ctx context.Context, messageID int) error
 // intentionally not hidden inside Poller because acquisition has its own later
 // durable scheduling contract.
 func (s *MessageSession) AcquireJobs(ctx context.Context, requestIDs []int64) ([]int64, error) {
+	if err := validateAcquireIDs(requestIDs); err != nil {
+		return nil, err
+	}
 	ids, err := contain(func() ([]int64, error) { return s.client.AcquireJobs(ctx, requestIDs) })
 	if err != nil {
 		return nil, fmt.Errorf("acquiring GitHub scale-set jobs: %w", err)
 	}
+	if err := validateAcquireResponse(requestIDs, ids); err != nil {
+		return nil, err
+	}
 	return ids, nil
+}
+
+func validateAcquireIDs(ids []int64) error {
+	seen := map[int64]struct{}{}
+	if len(ids) == 0 {
+		return ErrInvalidPreviewResponse
+	}
+	for _, id := range ids {
+		if id <= 0 {
+			return ErrInvalidPreviewResponse
+		}
+		if _, ok := seen[id]; ok {
+			return ErrInvalidPreviewResponse
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+func validateAcquireResponse(requested, received []int64) error {
+	allowed := map[int64]struct{}{}
+	for _, id := range requested {
+		allowed[id] = struct{}{}
+	}
+	seen := map[int64]struct{}{}
+	for _, id := range received {
+		if id <= 0 {
+			return ErrInvalidPreviewResponse
+		}
+		if _, ok := allowed[id]; !ok {
+			return ErrInvalidPreviewResponse
+		}
+		if _, ok := seen[id]; ok {
+			return ErrInvalidPreviewResponse
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
 }
 
 // Close ends the GitHub message session.

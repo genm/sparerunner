@@ -112,7 +112,9 @@ type Poller struct {
 	source                    MessageSource
 	handler                   DurableMessageHandler
 	lastAcknowledgedMessageID int
-	lastSessionSnapshotID     string
+	boundScaleSetID           ScaleSetID
+	lastSessionSnapshot       SessionSnapshot
+	hasSessionSnapshot        bool
 	logger                    *slog.Logger
 }
 
@@ -163,22 +165,14 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 	if err := validateSessionSnapshot(snapshot); err != nil {
 		return nil, err
 	}
-	if snapshot.ID != p.lastSessionSnapshotID {
-		if err := p.handler.CommitSessionDemand(ctx, snapshot); err != nil {
-			p.logger.Warn("github_session_demand_commit_failed", slog.String("component", "github"), slog.Int("scale_set_id", int(snapshot.ScaleSetID)))
-			return nil, fmt.Errorf("durably committing GitHub session demand: %w", err)
-		}
-		p.lastSessionSnapshotID = snapshot.ID
+	if err := p.commitSessionDemand(ctx, snapshot); err != nil {
+		return nil, err
 	}
 
 	message, err := p.source.Poll(ctx, p.lastAcknowledgedMessageID, maxCapacity)
 	if err != nil {
 		p.logger.Warn("github_message_poll_failed", slog.String("component", "github"))
 		return nil, fmt.Errorf("polling GitHub scale-set message: %w", err)
-	}
-	if message == nil {
-		p.logger.Debug("github_message_empty", slog.String("component", "github"))
-		return nil, nil
 	}
 	// GetMessage may refresh the upstream session token before returning a
 	// message. Re-read its snapshot before the message can be committed or acked.
@@ -189,11 +183,15 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 	if err := validateSessionSnapshot(refreshed); err != nil {
 		return nil, err
 	}
-	if refreshed.ID != p.lastSessionSnapshotID {
-		if err := p.handler.CommitSessionDemand(ctx, refreshed); err != nil {
-			return nil, fmt.Errorf("durably committing refreshed GitHub session demand: %w", err)
-		}
-		p.lastSessionSnapshotID = refreshed.ID
+	if err := p.commitSessionDemand(ctx, refreshed); err != nil {
+		return nil, err
+	}
+	if message == nil {
+		p.logger.Debug("github_message_empty", slog.String("component", "github"))
+		return nil, nil
+	}
+	if message.ScaleSetID != p.boundScaleSetID {
+		return nil, ErrInvalidSession
 	}
 	if message.ScaleSetID <= 0 {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "scale_set_id"))
@@ -242,6 +240,24 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 	)
 
 	return message, nil
+}
+
+func (p *Poller) commitSessionDemand(ctx context.Context, snapshot SessionSnapshot) error {
+	if !p.hasSessionSnapshot {
+		p.boundScaleSetID = snapshot.ScaleSetID
+		p.hasSessionSnapshot = true
+	}
+	if snapshot.ScaleSetID != p.boundScaleSetID {
+		return ErrInvalidSession
+	}
+	if p.hasSessionSnapshot && snapshot == p.lastSessionSnapshot {
+		return nil
+	}
+	if err := p.handler.CommitSessionDemand(ctx, snapshot); err != nil {
+		return fmt.Errorf("durably committing GitHub session demand: %w", err)
+	}
+	p.lastSessionSnapshot = snapshot
+	return nil
 }
 
 func validateSessionSnapshot(snapshot SessionSnapshot) error {

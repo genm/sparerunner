@@ -132,6 +132,31 @@ func TestPollerCommitsInitialSessionDemandBeforeEmptyPollAndUsesDynamicCapacity(
 	}
 }
 
+func TestPollerCommitsSameSessionIDWhenStatisticsChangeAfterEmptyPoll(t *testing.T) {
+	source := &fakeMessageSource{snapshot: githubadapter.SessionSnapshot{ScaleSetID: 9, ID: "session-1"}, refreshStatsOnPoll: true}
+	handler := &durableFakeHandler{source: source}
+	poller := newPoller(t, source, handler)
+	if _, err := poller.PollOnce(context.Background(), 1); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"demand:9/session-1", "poll:0/1", "demand:9/session-1"}; !slices.Equal(source.events, want) {
+		t.Fatalf("events=%v", source.events)
+	}
+}
+
+func TestPollerRejectsScaleSetDriftWithoutCommitOrAck(t *testing.T) {
+	message := githubadapter.Message{ScaleSetID: 10, ID: 101}
+	source := &fakeMessageSource{messages: []*githubadapter.Message{&message}, refreshOnPoll: true, driftOnPoll: true}
+	handler := &durableFakeHandler{source: source}
+	poller := newPoller(t, source, handler)
+	if _, err := poller.PollOnce(context.Background(), 1); !errors.Is(err, githubadapter.ErrInvalidSession) {
+		t.Fatalf("error=%v", err)
+	}
+	if len(source.acks) != 0 || handler.createdExecutions != 0 {
+		t.Fatal("drift committed or acknowledged")
+	}
+}
+
 func TestPollerCommitsRefreshedSessionDemandBeforeMessageCommit(t *testing.T) {
 	message := githubadapter.Message{ScaleSetID: 9, ID: 101}
 	source := &fakeMessageSource{messages: []*githubadapter.Message{&message}, refreshOnPoll: true}
@@ -155,12 +180,14 @@ func newPoller(t *testing.T, source *fakeMessageSource, handler *durableFakeHand
 }
 
 type fakeMessageSource struct {
-	messages      []*githubadapter.Message
-	events        []string
-	acks          []int
-	failAcks      int
-	snapshot      githubadapter.SessionSnapshot
-	refreshOnPoll bool
+	messages           []*githubadapter.Message
+	events             []string
+	acks               []int
+	failAcks           int
+	snapshot           githubadapter.SessionSnapshot
+	refreshOnPoll      bool
+	refreshStatsOnPoll bool
+	driftOnPoll        bool
 }
 
 func (s *fakeMessageSource) Poll(_ context.Context, cursor, capacity int) (*githubadapter.Message, error) {
@@ -168,6 +195,14 @@ func (s *fakeMessageSource) Poll(_ context.Context, cursor, capacity int) (*gith
 	if s.refreshOnPoll {
 		s.snapshot.ID = "session-2"
 		s.refreshOnPoll = false
+	}
+	if s.refreshStatsOnPoll {
+		s.snapshot.Statistics.TotalAssignedJobs++
+		s.refreshStatsOnPoll = false
+	}
+	if s.driftOnPoll {
+		s.snapshot.ScaleSetID = 10
+		s.driftOnPoll = false
 	}
 	if len(s.messages) == 0 {
 		return nil, nil

@@ -99,3 +99,17 @@ func TestRedirectPolicyRejectsCrossOrigin(t *testing.T) {
 		t.Fatal("cross-origin redirect accepted")
 	}
 }
+
+func TestHostAndSpecialIPPolicy(t *testing.T) {
+	if allowedGitHubHost("API.GITHUB.COM") {
+		t.Fatal("case variant accepted")
+	}
+	for _, raw := range []string{"::ffff:127.0.0.1", "100.64.0.1", "192.0.2.1", "198.18.0.1", "240.0.0.1", "2001:db8::1", "fec0::1"} {
+		if !unsafeIP(netip.MustParseAddr(raw)) {
+			t.Fatalf("special IP %s accepted", raw)
+		}
+	}
+	if unsafeIP(netip.MustParseAddr("140.82.112.6")) {
+		t.Fatal("public IP rejected")
+	}
+}

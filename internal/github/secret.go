@@ -41,10 +41,10 @@ type RunnerReference struct {
 	ScaleSetID ScaleSetID
 }
 
-// JITConfig is an opaque, in-memory-only GitHub JIT configuration. Its value is
-// intentionally unavailable to formatting and serialization APIs. Delivery is
-// callback-based so the encoded configuration exists in a runner process only
-// for the duration of the call.
+// JITConfig is an opaque, non-persisted adapter handoff. Its value is
+// intentionally unavailable to formatting and serialization APIs. This type
+// does not guarantee string zeroization; the official runner may decode
+// --jitconfig and write credentials/settings/RSA material under its root.
 type JITConfig struct {
 	encoded string
 	runner  RunnerReference
@@ -66,9 +66,9 @@ func (c JITConfig) Digest() string {
 	return hex.EncodeToString(digest[:])
 }
 
-// Deliver passes the encoded JIT configuration directly to the runner boundary.
-// Consumers must not retain, log, or persist value; the type's API prevents
-// accidental access outside this deliberately narrow handoff.
+// Deliver passes the encoded JIT configuration to the runner boundary. Consumers
+// must not retain, log, or persist it; twk-006 owns deletion and verification of
+// all official runner material created after this handoff.
 func (c JITConfig) Deliver(deliver func(value string) error) error {
 	if deliver == nil {
 		return errors.New("JIT delivery callback is required")
