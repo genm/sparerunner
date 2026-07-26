@@ -15,8 +15,12 @@ organizations—without Kubernetes, cloud instances, or mandatory containers.
 ## Status
 
 Tewake is under active pre-alpha development. The repository currently contains
-the accepted specification and bootstrap scaffolding; unimplemented commands return
-an explicit error. Do not install it on a production runner fleet yet.
+the accepted specification, durable domain/store foundations, the isolated GitHub
+scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
+init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
+work for development, including pinned enrollment, mTLS WebSockets, and reconnect.
+Scheduling, OS service installation, GitHub job execution, cleanup, and the
+management API remain incomplete. Do not install it on a production runner fleet.
 
 The specification is the project source of truth:
 
@@ -79,9 +83,10 @@ just build-all   # cross-compile controller and agent
 just dev         # Vite Web UI only through Process Compose
 ```
 
-`tewake serve` is intentionally unavailable in this bootstrap snapshot. Until the
-controller exists, `just dev` starts only the Web UI and does not imply that its
-API, readiness endpoint, or controller-backed flows are available.
+`just test-enrollment-cli-linux` runs the actual controller and agent CLI binaries
+inside a restricted Linux container and verifies join, reconnect, and join-code
+non-persistence. `just dev` still starts only the Web UI; it does not imply that
+the management API or controller-backed UI flows are available.
 
 Tests write machine-readable results below `output/test-results/`, which is ignored
 by Git.

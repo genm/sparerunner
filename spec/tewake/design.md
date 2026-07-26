@@ -205,9 +205,15 @@ A join code encodes:
 - optional endpoint hints
 - a cryptographically random one-time secret
 
-Only a keyed digest of the secret is stored. A code expires on first successful
-atomic consumption, explicit cancellation, or controller restart. The design does
-not add an arbitrary wall-clock expiration unless clipboard/process exposure is
+Only a keyed digest of the secret is stored. An unused code expires on atomic
+consumption, explicit cancellation, or the next controller process epoch. To make
+a lost enrollment response recoverable, atomic consumption replaces the unused
+token with a pending replay row bound to the exact token digest and node public-key
+digest. That row survives controller restart and may return only the original
+certificate to the same token/key pair. It is deleted after the first successfully
+authenticated WSS upgrade. Explicit cancellation of a pending issued response
+revokes that node credential before deleting the replay row. The design does not
+add an arbitrary wall-clock expiration unless clipboard/process exposure is
 measured and an operator-configurable lifetime is specified.
 
 mDNS `_tewake._tcp.local` provides endpoint candidates only. Before sending the join
@@ -264,8 +270,15 @@ Iroh-specific types or binaries are absent.
 The agent uses a dedicated service account and OS process containment:
 
 - systemd cgroup on Linux
-- process group and launchd service ownership on macOS
+- an exclusive non-login user per concrete runner slot on macOS, with launchd
+  owning the root agent service
 - Job Object and Windows Service recovery on Windows
+
+A macOS process group is only a cleanup aid: a workflow can call `setsid()` and
+leave that group. Strong macOS admission therefore requires an exclusive slot UID
+whose complete process inventory can be terminated and proven empty after restart.
+Hosts where that account boundary cannot be established fail closed rather than
+claiming launchd process-group ownership is sufficient.
 
 Runtime directories are created below a node-owned root using directory handles and
 validated descendants; symlinks and traversal outside the root are rejected.

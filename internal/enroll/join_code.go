@@ -198,7 +198,7 @@ func normalizeHint(hint string) (string, error) {
 	}
 	if strings.HasPrefix(hint, "https://") {
 		parsed, err := url.Parse(hint)
-		if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		if err != nil || parsed.Scheme != "https" || parsed.User != nil || parsed.Host == "" || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 			return "", ErrInvalidJoinCode
 		}
 		host, err := normalizeHostPort(parsed.Host, true)
@@ -207,6 +207,7 @@ func normalizeHint(hint string) (string, error) {
 		}
 		parsed.Host = host
 		parsed.Scheme = "https"
+		parsed.Path = ""
 		return parsed.String(), nil
 	}
 	return normalizeHostPort(hint, false)

@@ -44,6 +44,13 @@ func requirePrivateAncestors(path string) error {
 		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 			return errors.New("private material ancestor is unsafe")
 		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok || (stat.Uid != 0 && stat.Uid != uint32(os.Geteuid())) {
+			return errors.New("private material ancestor has an untrusted owner")
+		}
+		if info.Mode().Perm()&0o022 != 0 && !(stat.Uid == 0 && info.Mode()&os.ModeSticky != 0) {
+			return errors.New("private material ancestor is writable by another user")
+		}
 		if current == "/" {
 			return nil
 		}

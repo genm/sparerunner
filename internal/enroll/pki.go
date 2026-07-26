@@ -358,6 +358,31 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 	return edKey, nil
 }
 
+// SavePrivateMaterial persists controller- or node-held secret bytes through the
+// platform credential boundary. The first implementation is a Linux
+// service-user-only file; macOS and Windows deliberately fail closed until their
+// Keychain and DPAPI adapters replace it.
+func SavePrivateMaterial(path string, contents []byte) error {
+	if len(contents) == 0 {
+		return errors.New("private material is empty")
+	}
+	return atomicPrivateFile(path, append([]byte(nil), contents...))
+}
+
+func LoadPrivateMaterial(path string) ([]byte, error) {
+	if err := requirePrivateRegularFile(path); err != nil {
+		return nil, err
+	}
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(contents) == 0 {
+		return nil, errors.New("private material is empty")
+	}
+	return contents, nil
+}
+
 func atomicPrivateFile(path string, contents []byte) error {
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0700); err != nil {

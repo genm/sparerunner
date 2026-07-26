@@ -122,6 +122,16 @@ func validateNodeMaterial(key crypto.PrivateKey, certificate, ca *x509.Certifica
 
 type SessionHandler func(context.Context, *AuthenticatedSession) error
 
+type upgradedSessionError struct{ err error }
+
+func (err upgradedSessionError) Error() string { return err.err.Error() }
+func (err upgradedSessionError) Unwrap() error { return err.err }
+
+func SessionWasUpgraded(err error) bool {
+	var upgraded upgradedSessionError
+	return errors.As(err, &upgraded)
+}
+
 type ActiveSessionRegistry struct {
 	mu       sync.Mutex
 	sessions map[string]map[*AuthenticatedSession]struct{}
@@ -163,8 +173,41 @@ func (registry *ActiveSessionRegistry) Revoke(credential enroll.Credential) {
 	delete(registry.sessions, key)
 	registry.mu.Unlock()
 	for session := range sessions {
-		session.connection.Close(websocket.StatusPolicyViolation, "credential revoked")
+		// Revocation follows the durable store commit and must not block that
+		// mutation on a peer that never completes a WebSocket close handshake.
+		session.connection.CloseNow()
 	}
+}
+
+func (registry *ActiveSessionRegistry) CloseAll() {
+	if registry == nil {
+		return
+	}
+	registry.mu.Lock()
+	all := make([]*AuthenticatedSession, 0)
+	for key, sessions := range registry.sessions {
+		for session := range sessions {
+			all = append(all, session)
+		}
+		delete(registry.sessions, key)
+	}
+	registry.mu.Unlock()
+	for _, session := range all {
+		session.connection.CloseNow()
+	}
+}
+
+func (registry *ActiveSessionRegistry) Count() int {
+	if registry == nil {
+		return 0
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	count := 0
+	for _, sessions := range registry.sessions {
+		count += len(sessions)
+	}
+	return count
 }
 
 // AuthenticatedSession rechecks current credential state before each inbound or
@@ -180,7 +223,7 @@ func (session *AuthenticatedSession) Credential() enroll.Credential { return ses
 
 func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error) {
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
-		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		session.connection.CloseNow()
 		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
 	}
 	envelope, err := ReadEnvelope(ctx, session.connection)
@@ -188,7 +231,7 @@ func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error)
 		return Envelope{}, err
 	}
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
-		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		session.connection.CloseNow()
 		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
 	}
 	return envelope, nil
@@ -196,7 +239,7 @@ func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error)
 
 func (session *AuthenticatedSession) Write(ctx context.Context, envelope Envelope) error {
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
-		session.connection.Close(websocket.StatusPolicyViolation, "credential rejected")
+		session.connection.CloseNow()
 		return fmt.Errorf("node credential rejected: %w", err)
 	}
 	return WriteEnvelope(ctx, session.connection, envelope)
@@ -234,20 +277,23 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 	connection.SetReadLimit(MaxEnvelopeBytes)
 	defer connection.CloseNow()
 	if connection.Subprotocol() != "tewake.v1" {
-		return errors.New("missing tewake.v1 subprotocol")
+		return upgradedSessionError{errors.New("missing tewake.v1 subprotocol")}
 	}
 	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
 	deregister := sessions.Register(session)
 	defer deregister()
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
-		return fmt.Errorf("node credential rejected after upgrade: %w", err)
+		return upgradedSessionError{fmt.Errorf("node credential rejected after upgrade: %w", err)}
 	}
 	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
 		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {
-			return fmt.Errorf("node enrollment finalization failed: %w", err)
+			return upgradedSessionError{fmt.Errorf("node enrollment finalization failed: %w", err)}
 		}
 	}
-	return handler(request.Context(), session)
+	if err := handler(request.Context(), session); err != nil {
+		return upgradedSessionError{err}
+	}
+	return nil
 }
 
 func DialNodeWSS(ctx context.Context, endpoint string, config *tls.Config) (*websocket.Conn, *http.Response, error) {

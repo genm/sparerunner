@@ -17,7 +17,7 @@ func TestEnrollmentRegistryConsumesTokenAtomicallyAcrossStoreHandles(t *testing.
 	first, second := openControllerPath(t, path), openControllerPath(t, path)
 	defer first.Close()
 	defer second.Close()
-	token := enrollmentToken(1, 3)
+	token := enrollmentToken(1, 1)
 	if err := first.CreateToken(ctx, token); err != nil {
 		t.Fatal(err)
 	}
@@ -58,7 +58,7 @@ func TestEnrollmentRegistryRenewRevokeAndRestart(t *testing.T) {
 	path := filepath.Join(privateTestDir(t), "enroll.db")
 	store := openControllerPath(t, path)
 	now := time.Now().UTC()
-	token := enrollmentToken(2, 5)
+	token := enrollmentToken(2, 1)
 	nodeID := enrollmentNodeID(9)
 	initial := enrollmentCredential(nodeID, "abc", now)
 	if err := store.CreateToken(ctx, token); err != nil {
@@ -90,6 +90,67 @@ func TestEnrollmentRegistryRenewRevokeAndRestart(t *testing.T) {
 	}
 	if err := store.RenewCredential(ctx, nodeID, renewed, enrollmentCredential(nodeID, "ghi", now), now); !errors.Is(err, enroll.ErrCredentialRejected) {
 		t.Fatalf("renew revoked = %v", err)
+	}
+}
+
+func TestEnrollmentReplaySurvivesRestartOnlyForSameTokenAndPublicKey(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "replay-restart.db")
+	store := openControllerPath(t, path)
+	now := time.Now().UTC()
+	token := enrollmentToken(8, 1)
+	nodeID := enrollmentNodeID(8)
+	node := enrollmentNodeRecord(nodeID, "abc", now)
+	if err := store.CreateToken(ctx, token); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ConsumeEnrollment(ctx, token, node); err != nil {
+		t.Fatal(err)
+	}
+	unused := enrollmentToken(9, 1)
+	if err := store.CreateToken(ctx, unused); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store = openControllerPath(t, path)
+	defer store.Close()
+	newEpochToken := token
+	newEpochToken.Epoch = 2
+	replayed, err := store.ReplayEnrollment(ctx, newEpochToken, node.PublicKeyDigest)
+	if err != nil || replayed.NodeID != nodeID || string(replayed.CertificateDER) != string(node.CertificateDER) {
+		t.Fatalf("restart replay = %+v, %v", replayed, err)
+	}
+	var other [32]byte
+	other[0] = 2
+	if _, err := store.ReplayEnrollment(ctx, newEpochToken, other); !errors.Is(err, enroll.ErrTokenNotFound) {
+		t.Fatalf("different SPKI replay = %v", err)
+	}
+	unused.Epoch = 2
+	if err := store.ConsumeEnrollment(ctx, unused, enrollmentNodeRecord(enrollmentNodeID(7), "def", now)); !errors.Is(err, enroll.ErrTokenEpochMismatch) {
+		t.Fatalf("unused old token epoch = %v", err)
+	}
+}
+
+func TestEnrollmentTokenCreationRejectsAStaleControllerEpoch(t *testing.T) {
+	ctx := context.Background()
+	store := openControllerPath(t, filepath.Join(privateTestDir(t), "token-epoch.db"))
+	defer store.Close()
+	if err := store.CreateToken(ctx, enrollmentToken(1, 1)); err != nil {
+		t.Fatal(err)
+	}
+	if epoch, err := store.AdvanceEpoch(ctx); err != nil || epoch != 1 {
+		t.Fatalf("first epoch = %d, %v", epoch, err)
+	}
+	if epoch, err := store.AdvanceEpoch(ctx); err != nil || epoch != 2 {
+		t.Fatalf("second epoch = %d, %v", epoch, err)
+	}
+	if err := store.CreateToken(ctx, enrollmentToken(2, 1)); !errors.Is(err, enroll.ErrTokenEpochMismatch) {
+		t.Fatalf("stale token creation = %v", err)
+	}
+	if err := store.CreateToken(ctx, enrollmentToken(3, 2)); err != nil {
+		t.Fatalf("current token creation = %v", err)
 	}
 }
 

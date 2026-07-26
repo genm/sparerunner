@@ -129,11 +129,16 @@ tasks:
     paths:
       - internal/enroll
       - internal/transport
+      - internal/app
       - cmd/tewake
       - cmd/tewake-agent
+      - scripts/test-enrollment-cli-linux.sh
     ci_targets: [lint, test, build]
     pr_order: 5
     status: in_progress
+    notes:
+      - "2026-07-26: Linux controller init/serve, pinned one-time enrollment, durable same-key response replay, authenticated WSS confirmation, agent reconnect, revocation interruption, strict protocol envelopes, and loopback-only management listener pass race tests."
+      - "2026-07-26: The actual Linux CLI binaries pass a restricted-container init/serve/join/agent vertical test; join-code canaries are absent from agent state and ordinary logs. Native runner commands and OS service installation remain later tasks."
     acceptance:
       - A valid join enrolls one node and consumes the token atomically.
       - Token races, replay, fake controller, revoked node, and protocol mismatch fail closed.
@@ -154,7 +159,9 @@ tasks:
       - test/integration/runner
     ci_targets: [lint, test, build]
     pr_order: 6
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-26: Package digest/cache, execution-root ownership, redacted JIT handoff, idempotent journal lifecycle, WorkspaceRef and ContainmentRef persistence, and fail-closed weak-platform admission are implemented on the task branch. Real platform containment and live process-tree evidence remain twk-007/twk-008/twk-009 gates."
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
       - Process-tree residue, symlink escape, and traversal are rejected or quarantined.

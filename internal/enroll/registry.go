@@ -115,7 +115,10 @@ func (registry *MemoryRegistry) ReplayEnrollment(_ context.Context, supplied Tok
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	consumed, exists := registry.consumed[supplied.ID]
-	if !exists || consumed.Epoch != supplied.Epoch || subtle.ConstantTimeCompare(consumed.SecretDigest[:], supplied.SecretDigest[:]) != 1 {
+	// Issued-but-unconfirmed responses remain replayable across controller
+	// process epochs. Unused tokens still fail their epoch check in
+	// ConsumeEnrollment.
+	if !exists || subtle.ConstantTimeCompare(consumed.SecretDigest[:], supplied.SecretDigest[:]) != 1 {
 		return NodeRecord{}, ErrTokenNotFound
 	}
 	node, found := registry.nodes[registry.consumedNode[supplied.ID]]
@@ -144,10 +147,23 @@ func (registry *MemoryRegistry) FinalizeEnrollment(_ context.Context, credential
 func (registry *MemoryRegistry) CancelToken(_ context.Context, tokenID [16]byte) error {
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
-	if _, exists := registry.tokens[tokenID]; !exists {
+	if _, exists := registry.tokens[tokenID]; exists {
+		delete(registry.tokens, tokenID)
+		return nil
+	}
+	nodeID, exists := registry.consumedNode[tokenID]
+	if !exists {
 		return ErrTokenNotFound
 	}
-	delete(registry.tokens, tokenID)
+	node := registry.nodes[nodeID]
+	if node.Credential.Epoch == math.MaxUint64 {
+		return ErrCredentialRejected
+	}
+	node.Revoked = true
+	node.Credential.Epoch++
+	registry.nodes[nodeID] = node
+	delete(registry.consumedNode, tokenID)
+	delete(registry.consumed, tokenID)
 	return nil
 }
 

@@ -90,6 +90,12 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	if VerifySecretDigest(digest, SecretDigest(key, code.tokenID, different)) {
 		t.Fatal("different secret accepted")
 	}
+	if hints, err := CanonicalHints([]string{"https://controller.example.test/"}); err != nil || len(hints) != 1 || hints[0] != "https://controller.example.test" {
+		t.Fatalf("root endpoint hint = %#v, %v", hints, err)
+	}
+	if _, err := CanonicalHints([]string{"https://controller.example.test/untrusted-path"}); !errors.Is(err, ErrInvalidJoinCode) {
+		t.Fatalf("path-bearing endpoint hint = %v", err)
+	}
 }
 
 func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
@@ -142,6 +148,12 @@ func TestEnrollmentConsumesOnceAndFailsClosed(t *testing.T) {
 	if err != nil || replayed.NodeID != result.NodeID || replayed.Credential != result.Credential {
 		t.Fatalf("idempotent replay = %+v, %v", replayed, err)
 	}
+	restarted := service
+	restarted.Epoch++
+	replayed, err = restarted.Enroll(context.Background(), code, csr)
+	if err != nil || replayed.NodeID != result.NodeID || replayed.Credential != result.Credential {
+		t.Fatalf("restart replay = %+v, %v", replayed, err)
+	}
 	if err := registry.AuthorizeCredential(context.Background(), result.Credential, service.Now()); err != nil {
 		t.Fatalf("fresh credential rejected: %v", err)
 	}
@@ -159,6 +171,28 @@ func TestEnrollmentConsumesOnceAndFailsClosed(t *testing.T) {
 	}
 	if _, err := service.Enroll(context.Background(), cancelCode, csr); !errors.Is(err, ErrTokenNotFound) {
 		t.Fatalf("cancelled token = %v", err)
+	}
+
+	pendingCode, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := service.Enroll(context.Background(), pendingCode, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedPending, err := DecodeJoinCode(pendingCode)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Cancel(context.Background(), decodedPending.TokenID()); err != nil {
+		t.Fatal(err)
+	}
+	if err := registry.AuthorizeCredential(context.Background(), pending.Credential, service.Now()); !errors.Is(err, ErrCredentialRejected) {
+		t.Fatalf("cancelled issued credential = %v", err)
+	}
+	if _, err := service.Enroll(context.Background(), pendingCode, csr); !errors.Is(err, ErrTokenNotFound) {
+		t.Fatalf("cancelled issued replay = %v", err)
 	}
 
 	other := service
@@ -341,6 +375,20 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	}
 	if err := service.Identity.Save(path); err == nil {
 		t.Fatal("symlink destination accepted")
+	}
+	unsafeAncestor := t.TempDir() + "/shared"
+	if err := os.Mkdir(unsafeAncestor, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(unsafeAncestor, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	privateChild := unsafeAncestor + "/private"
+	if err := os.Mkdir(privateChild, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Identity.Save(privateChild + "/identity.pem"); err == nil {
+		t.Fatal("writable non-sticky ancestor accepted")
 	}
 }
 

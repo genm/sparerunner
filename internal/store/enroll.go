@@ -22,8 +22,25 @@ func (store *ControllerStore) CreateToken(ctx context.Context, token enroll.Toke
 	if token.Epoch == 0 || token.Epoch > maxSQLiteInteger || allZero(token.ID[:]) || allZero(token.SecretDigest[:]) {
 		return enroll.ErrTokenEpochMismatch
 	}
-	_, err := store.db.ExecContext(ctx, `INSERT INTO enrollment_tokens(token_id, secret_digest, controller_epoch) VALUES (?, ?, ?)`, token.ID[:], token.SecretDigest[:], token.Epoch)
-	return err
+	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	current, err := readUintMetadata(ctx, tx, "controller_epoch")
+	if err != nil {
+		return err
+	}
+	if current == 0 {
+		current = 1
+	}
+	if token.Epoch != current {
+		return enroll.ErrTokenEpochMismatch
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO enrollment_tokens(token_id, secret_digest, controller_epoch) VALUES (?, ?, ?)`, token.ID[:], token.SecretDigest[:], token.Epoch); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied enroll.TokenRecord, node enroll.NodeRecord) error {
@@ -91,7 +108,7 @@ func (store *ControllerStore) ReplayEnrollment(ctx context.Context, supplied enr
 	if err != nil {
 		return enroll.NodeRecord{}, err
 	}
-	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || revoked != 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
+	if len(storedSecret) != 32 || len(storedDigest) != 32 || storedEpoch == 0 || storedEpoch > maxSQLiteInteger || supplied.Epoch == 0 || revoked != 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
 		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
 	}
 	return enroll.NodeRecord{NodeID: nodeID, Credential: enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: time.Unix(0, before), NotAfter: time.Unix(0, after)}, Revoked: revoked != 0, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: caDER}, nil
@@ -101,7 +118,7 @@ func (store *ControllerStore) FinalizeEnrollment(ctx context.Context, credential
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if err := store.AuthorizeCredential(ctx, credential, time.Now()); err != nil {
+	if err := store.AuthorizeCredential(ctx, credential, store.now()); err != nil {
 		return err
 	}
 	_, err := store.db.ExecContext(ctx, `DELETE FROM enrollment_replays WHERE node_id = ?`, credential.NodeID)

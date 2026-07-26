@@ -191,6 +191,14 @@ func (s *ControllerStore) AdvanceEpoch(ctx context.Context) (domain.ControllerEp
 	if uint64(next) > maxSQLiteInteger {
 		return 0, errors.New("controller epoch exceeds SQLite's signed INTEGER range")
 	}
+	// The epoch starts at zero after init. Initial join codes are minted for
+	// epoch one so the first serve can retain them. Every later process epoch
+	// invalidates still-unused codes while preserving issued replay rows.
+	if raw > 0 {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM enrollment_tokens"); err != nil {
+			return 0, err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, "UPDATE store_metadata SET value = ? WHERE key = 'controller_epoch'", next); err != nil {
 		return 0, err
 	}
@@ -198,6 +206,26 @@ func (s *ControllerStore) AdvanceEpoch(ctx context.Context) (domain.ControllerEp
 		return 0, err
 	}
 	return next, nil
+}
+
+// EnrollmentEpoch returns the epoch used to mint join codes. Before the first
+// controller serve, epoch one is reserved while durable controller_epoch remains
+// zero; AdvanceEpoch activates that same epoch.
+func (s *ControllerStore) EnrollmentEpoch(ctx context.Context) (domain.ControllerEpoch, error) {
+	if err := s.requireReady(); err != nil {
+		return 0, err
+	}
+	raw, err := readUintMetadata(ctx, s.db, "controller_epoch")
+	if err != nil {
+		return 0, err
+	}
+	if raw == 0 {
+		return 1, nil
+	}
+	if raw > maxSQLiteInteger {
+		return 0, errors.New("controller epoch exceeds SQLite's signed INTEGER range")
+	}
+	return domain.ControllerEpoch(raw), nil
 }
 
 // Snapshot returns the complete non-secret desired-state and replay view needed

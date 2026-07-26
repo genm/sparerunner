@@ -8,8 +8,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -17,6 +20,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/store"
+	"github.com/hashicorp/mdns"
 )
 
 func transportService(t *testing.T) (enroll.Service, *enroll.MemoryRegistry) {
@@ -102,6 +107,57 @@ func TestEnrollmentClientDoesNotSendBodyToWrongFingerprint(t *testing.T) {
 	}
 	if got := received.Load(); got != 0 {
 		t.Fatalf("fake controller received %d HTTP request(s); want no request body", got)
+	}
+}
+
+func TestEnrollmentClientRequiresDeadlineBeforeNetworkAccess(t *testing.T) {
+	service, _ := transportService(t)
+	code, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := transportCSR(t)
+	_, err = (EnrollmentClient{}).Enroll(context.Background(), "https://127.0.0.1:1", code, csr)
+	if err == nil || !strings.Contains(err.Error(), "explicit deadline") {
+		t.Fatalf("missing deadline error = %v", err)
+	}
+}
+
+func TestEnrollmentClientDeadlineCancelsAStalledTrustedController(t *testing.T) {
+	service, _ := transportService(t)
+	certificate, err := service.Identity.TLSCertificate()
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlerExited := make(chan struct{})
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		defer close(handlerExited)
+		if _, err := io.Copy(io.Discard, request.Body); err != nil {
+			return
+		}
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusCreated)
+		response.(http.Flusher).Flush()
+		<-request.Context().Done()
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS13}
+	server.StartTLS()
+	t.Cleanup(server.CloseClientConnections)
+	defer server.Close()
+	code, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := transportCSR(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	if _, err := (EnrollmentClient{}).Enroll(ctx, server.URL, code, csr); err == nil {
+		t.Fatal("stalled controller request succeeded")
+	}
+	select {
+	case <-handlerExited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("client cancellation did not reach trusted controller")
 	}
 }
 
@@ -233,6 +289,143 @@ func TestAuthenticatedWSSRejectsMissingClientCertificate(t *testing.T) {
 	}
 }
 
+func TestAuthenticatedWSSRejectsPeerLeafThatDiffersFromVerifiedChain(t *testing.T) {
+	service, registry := transportService(t)
+	firstCode, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCSR, _ := transportCSR(t)
+	first, err := service.Enroll(context.Background(), firstCode, firstCSR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCode, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondCSR, _ := transportCSR(t)
+	second, err := service.Enroll(context.Background(), secondCode, secondCSR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peerLeaf, err := x509.ParseCertificate(first.CertificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedLeaf, err := x509.ParseCertificate(second.CertificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://tewake-controller/", nil)
+	request.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{peerLeaf, service.Identity.CA},
+		VerifiedChains:   [][]*x509.Certificate{{verifiedLeaf, service.Identity.CA}},
+	}
+	err = UpgradeAuthenticated(httptest.NewRecorder(), request, registry, func(context.Context, *AuthenticatedSession) error {
+		t.Fatal("mismatched peer entered session handler")
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "does not match peer leaf") {
+		t.Fatalf("mismatched verified leaf error = %v", err)
+	}
+}
+
+func TestControllerStoreRevocationInterruptsBlockedReadWithoutDeliveringFrame(t *testing.T) {
+	ctx := context.Background()
+	privateDir := t.TempDir()
+	if err := os.Chmod(privateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	registry, err := store.OpenController(ctx, filepath.Join(privateDir, "controller.db"), store.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer registry.Close()
+	now := time.Now().UTC().Add(-time.Minute)
+	identity, err := enroll.NewControllerIdentity(now, rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var digestKey [32]byte
+	if _, err := rand.Read(digestKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	service, err := enroll.NewService(registry, identity, digestKey, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, err := service.CreateJoinCode(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, key := transportCSR(t)
+	result, err := service.Enroll(ctx, code, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessions := NewActiveSessionRegistry()
+	registry.SetCredentialRevocationHook(sessions.Revoke)
+	serverConfig, err := ControllerServerTLSConfig(identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readStarted := make(chan struct{})
+	readResult := make(chan error, 1)
+	delivered := make(chan Envelope, 1)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		readResult <- UpgradeAuthenticatedWithSessions(writer, request, registry, func(readContext context.Context, session *AuthenticatedSession) error {
+			close(readStarted)
+			envelope, readErr := session.Read(readContext)
+			if readErr == nil {
+				delivered <- envelope
+			}
+			return readErr
+		}, sessions)
+	}))
+	server.TLS = serverConfig
+	server.StartTLS()
+	defer server.Close()
+	certificate, err := NodeTLSCertificate(key, result.CertificateDER, result.CACertificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := x509.ParseCertificate(result.CACertificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientConfig, err := NodeClientTLSConfig(certificate, ca)
+	if err != nil {
+		t.Fatal(err)
+	}
+	connection, _, err := DialNodeWSS(ctx, "wss"+strings.TrimPrefix(server.URL, "https"), clientConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.CloseNow()
+	select {
+	case <-readStarted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("controller did not begin authenticated read")
+	}
+	if _, err := registry.RevokeNode(ctx, result.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-readResult:
+		if err == nil {
+			t.Fatal("revoked blocked read returned success")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("revocation did not interrupt blocked read")
+	}
+	select {
+	case envelope := <-delivered:
+		t.Fatalf("revoked session delivered frame: %#v", envelope)
+	default:
+	}
+}
+
 func TestMDNSCandidateIsOnlyData(t *testing.T) {
 	fake := fakeDiscoverer{candidates: []EndpointCandidate{{Address: "203.0.113.9:443"}}}
 	candidates, err := fake.Discover(context.Background())
@@ -243,6 +436,17 @@ func TestMDNSCandidateIsOnlyData(t *testing.T) {
 	// the connection to the join-code fingerprint through PinnedControllerTLSConfig.
 	if PinnedControllerTLSConfig([32]byte{}).InsecureSkipVerify != true {
 		t.Fatal("pinned verification configuration changed")
+	}
+}
+
+func TestMDNSCandidatePreservesIPv6ZoneAndRejectsZonelessLinkLocal(t *testing.T) {
+	entry := &mdns.ServiceEntry{Port: 443, AddrV4: net.IP{1, 2}, AddrV6IPAddr: &net.IPAddr{IP: net.ParseIP("fe80::1"), Zone: "en0"}}
+	candidate, ok := candidateFor(entry)
+	if !ok || candidate.Address != "[fe80::1%en0]:443" {
+		t.Fatalf("zoned IPv6 candidate = %#v, %t", candidate, ok)
+	}
+	if _, ok := candidateFor(&mdns.ServiceEntry{Port: 443, AddrV6IPAddr: &net.IPAddr{IP: net.ParseIP("fe80::1")}}); ok {
+		t.Fatal("zoneless link-local IPv6 accepted")
 	}
 }
 

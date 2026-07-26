@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,14 +22,26 @@ func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	}
 }
 
-func TestRunServeFailsClosedUntilImplemented(t *testing.T) {
+func TestJoinRejectsInvalidCodeBeforeCreatingState(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	stateDirectory := filepath.Join(t.TempDir(), "agent")
+	err := run([]string{"join", "not-a-join-code", "--state-dir", stateDirectory}, &stdout, &stderr)
+	if err == nil || !strings.Contains(err.Error(), "invalid join code") {
+		t.Fatalf("invalid join error = %v", err)
+	}
+	if _, err := os.Lstat(stateDirectory); !os.IsNotExist(err) {
+		t.Fatalf("invalid join created state: %v", err)
+	}
+}
+
+func TestRunServeFailsClosedWhenControllerIsNotInitialized(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
-	err := run([]string{"serve"}, &stdout, &stderr)
+	err := run([]string{"serve", "--state-dir", t.TempDir(), "--mdns=false"}, &stdout, &stderr)
 	if err == nil {
-		t.Fatal("run(serve) returned nil error, want explicit unimplemented error")
+		t.Fatal("run(serve) returned nil error for uninitialized state")
 	}
-	if !strings.Contains(err.Error(), "serve is not implemented") {
-		t.Fatalf("run(serve) error = %q, want explicit serve implementation status", err)
+	if !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("run(serve) error = %q, want initialization failure", err)
 	}
 }
