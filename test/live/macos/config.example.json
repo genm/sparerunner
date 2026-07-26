@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "evidenceDirectory": "/var/db/tewake-macos-live/evidence-normal",
+  "harnessPath": "/usr/local/libexec/tewake-macos-live",
+  "executionId": "replace-with-the-exact-controller-execution-id",
+  "expectedArchitecture": "arm64",
+  "expectedCommitSha": "0000000000000000000000000000000000000000",
+  "expectedHarnessSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expectedInstalledAgentSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expectedLaunchDaemonSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expectedRunnerPackageSha256": "8e8839c49b7060b6b2154f4931f815df330c27f167d53ef2239ee3dfce28b079",
+  "maximumRunSeconds": 7200
+}
