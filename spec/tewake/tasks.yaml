@@ -103,11 +103,12 @@ tasks:
       - internal/store/migrations
     ci_targets: [lint, test, build]
     pr_order: 4
-    status: in_progress
+    status: done
     notes: >
-      Hardening in progress after cross-platform CI exposed Windows URI handling
-      and Linux writer-contention failures. Hosted three-OS CI and restart recovery
-      evidence must pass before this task returns to done.
+      Accepted by hosted Linux, macOS, and Windows CI run 30190977946 plus local
+      race, repeated contention, strict task-schema, and six-target cross-build
+      checks. Transaction rollback and close/reopen tests prove replay recovery;
+      live process-kill and power-loss evidence remain gates for twk-007/twk-011.
     acceptance:
       - Message, reservation, and desired execution commit atomically.
       - Crash-boundary integration tests recover without duplicate active executions.
