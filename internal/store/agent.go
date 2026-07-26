@@ -114,7 +114,11 @@ func (s *AgentStore) RecordObservation(ctx context.Context, observation Observat
 	if err := observation.State.Validate("observation.state"); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO execution_observations(execution_id, state, observed_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET state=excluded.state, observed_at_unix_nano=excluded.observed_at_unix_nano`, observation.ExecutionID, observation.State, s.now().UnixNano())
+	observedAt, err := storeUnixNano(s.now())
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO execution_observations(execution_id, state, observed_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET state=excluded.state, observed_at_unix_nano=excluded.observed_at_unix_nano`, observation.ExecutionID, observation.State, observedAt)
 	return err
 }
 
@@ -128,7 +132,11 @@ func (s *AgentStore) RecordCleanupTombstone(ctx context.Context, tombstone Clean
 	if err := tombstone.FailureCode.Validate(); err != nil {
 		return err
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO cleanup_tombstones(execution_id, failure_code, recorded_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET failure_code=excluded.failure_code, recorded_at_unix_nano=excluded.recorded_at_unix_nano`, tombstone.ExecutionID, tombstone.FailureCode, s.now().UnixNano())
+	recordedAt, err := storeUnixNano(s.now())
+	if err != nil {
+		return err
+	}
+	_, err = s.db.ExecContext(ctx, `INSERT INTO cleanup_tombstones(execution_id, failure_code, recorded_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET failure_code=excluded.failure_code, recorded_at_unix_nano=excluded.recorded_at_unix_nano`, tombstone.ExecutionID, tombstone.FailureCode, recordedAt)
 	return err
 }
 
@@ -180,9 +188,9 @@ func (s *AgentStore) Snapshot(ctx context.Context) (AgentSnapshot, error) {
 			rows.Close()
 			return AgentSnapshot{}, err
 		}
-		if observation.ExecutionID == "" {
+		if observation.ExecutionID == "" || observation.ObservedAtUnixNano <= 0 {
 			rows.Close()
-			return AgentSnapshot{}, errors.New("stored observation requires execution ID")
+			return AgentSnapshot{}, errors.New("stored observation failed validation")
 		}
 		if err := observation.State.Validate("observation.state"); err != nil {
 			rows.Close()
@@ -204,9 +212,9 @@ func (s *AgentStore) Snapshot(ctx context.Context) (AgentSnapshot, error) {
 			rows.Close()
 			return AgentSnapshot{}, err
 		}
-		if tombstone.ExecutionID == "" {
+		if tombstone.ExecutionID == "" || tombstone.RecordedAtUnixNano <= 0 {
 			rows.Close()
-			return AgentSnapshot{}, errors.New("stored cleanup tombstone requires execution ID")
+			return AgentSnapshot{}, errors.New("stored cleanup tombstone failed validation")
 		}
 		if err := tombstone.FailureCode.Validate(); err != nil {
 			rows.Close()

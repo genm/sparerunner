@@ -103,7 +103,10 @@ func (s *ControllerStore) Assign(ctx context.Context, assignment Assignment) (do
 }
 
 func (s *ControllerStore) assignOnce(ctx context.Context, assignment Assignment) (domain.ExecutionSnapshot, bool, error) {
-	createdAt := s.now().UnixNano()
+	createdAt, err := storeUnixNano(s.now())
+	if err != nil {
+		return domain.ExecutionSnapshot{}, false, err
+	}
 	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return domain.ExecutionSnapshot{}, false, err
@@ -230,19 +233,29 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 			Slot:  domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slotIndex},
 			Owner: domain.SlotOwner{TargetID: domain.TargetID(targetID), ExecutionID: domain.ExecutionID(executionID)},
 		})
+		reservation := result.Reservations[len(result.Reservations)-1]
+		if reservation.Slot.NodeID == "" || reservation.Slot.Index < 0 || reservation.Owner.ExecutionID == "" {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored slot reservation failed validation")
+		}
+		if err := reservation.Owner.Validate(); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
 	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
 	}
 
-	rows, err = tx.QueryContext(ctx, `SELECT id, target_id, node_id, slot_index, state FROM executions ORDER BY id`)
+	rows, err = tx.QueryContext(ctx, `SELECT id, target_id, node_id, slot_index, state, created_at_unix_nano FROM executions ORDER BY id`)
 	if err != nil {
 		return ControllerSnapshot{}, err
 	}
 	for rows.Next() {
 		var id, targetID, nodeID, state string
 		var slotIndex int
-		if err := rows.Scan(&id, &targetID, &nodeID, &slotIndex, &state); err != nil {
+		var createdAt int64
+		if err := rows.Scan(&id, &targetID, &nodeID, &slotIndex, &state, &createdAt); err != nil {
 			rows.Close()
 			return ControllerSnapshot{}, err
 		}
@@ -255,6 +268,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 		if err := execution.Validate(); err != nil {
 			rows.Close()
 			return ControllerSnapshot{}, err
+		}
+		if createdAt <= 0 {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored execution timestamp failed validation")
 		}
 		result.Executions = append(result.Executions, execution)
 	}
@@ -272,7 +289,7 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 			rows.Close()
 			return ControllerSnapshot{}, err
 		}
-		if message.ScaleSetID == 0 || message.MessageID == 0 || !isLowerSHA256(message.MessageDigest) || message.ExecutionID == "" {
+		if message.ScaleSetID == 0 || message.MessageID == 0 || !isLowerSHA256(message.MessageDigest) || message.ExecutionID == "" || message.CreatedAtUnixNano <= 0 {
 			rows.Close()
 			return ControllerSnapshot{}, errors.New("stored processed message failed validation")
 		}

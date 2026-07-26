@@ -430,6 +430,13 @@ func TestAgentEpochFenceAndSnapshotSurviveRestart(t *testing.T) {
 	if replayed, err := reopened.RecordCommand(ctx, higher); err != nil || replayed {
 		t.Fatalf("higher epoch command = (%t, %v)", replayed, err)
 	}
+	outOfRange := command
+	outOfRange.ID = "out-of-range-epoch"
+	outOfRange.ControllerEpoch = domain.ControllerEpoch(maxSQLiteInteger + 1)
+	outOfRange.PayloadDigest = domain.PayloadDigest([]byte("out-of-range-epoch"))
+	if _, err := reopened.RecordCommand(ctx, outOfRange); err == nil {
+		t.Fatal("out-of-range controller epoch accepted")
+	}
 	final, err := reopened.Snapshot(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -568,6 +575,10 @@ func TestSchemaObjectsAndForeignKeysFailClosedOnOpen(t *testing.T) {
 			statement: `ALTER TABLE executions ADD COLUMN leaked_material TEXT`,
 		},
 		{
+			name:      "epoch outside signed range",
+			statement: `UPDATE store_metadata SET value = '9223372036854775808' WHERE key = 'controller_epoch'`,
+		},
+		{
 			name: "foreign key violation",
 			statement: `
 				PRAGMA foreign_keys=OFF;
@@ -595,6 +606,123 @@ func TestSchemaObjectsAndForeignKeysFailClosedOnOpen(t *testing.T) {
 			_ = degraded.Close()
 		})
 	}
+}
+
+func TestPageCorruptionEntersRecoveryBeforeMigration(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller.db")
+	store := openControllerPath(t, path)
+	if _, _, err := store.Assign(ctx, testAssignment(81, "corrupt-page-execution", "corrupt-page-node", 0)); err != nil {
+		t.Fatal(err)
+	}
+	var pageSize, rootPage int64
+	if err := store.db.QueryRow("PRAGMA page_size").Scan(&pageSize); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.db.QueryRow(`SELECT rootpage FROM sqlite_schema WHERE type='table' AND name='processed_messages'`).Scan(&rootPage); err != nil {
+		t.Fatal(err)
+	}
+	if pageSize <= 0 || rootPage <= 1 {
+		t.Fatalf("invalid corruption target page_size=%d rootpage=%d", pageSize, rootPage)
+	}
+	if _, err := store.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatal(err)
+	}
+	file, err := os.OpenFile(path, os.O_RDWR, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0xff}, (rootPage-1)*pageSize); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	degraded, err := OpenController(ctx, path, Options{})
+	if degraded == nil || !errors.Is(err, ErrRecoveryMode) || !errors.Is(err, ErrCorruptBackup) {
+		t.Fatalf("page-corrupt database open = (%v, %v)", degraded, err)
+	}
+	if readyErr := degraded.Ready(); !errors.Is(readyErr, ErrRecoveryMode) {
+		t.Fatalf("page-corrupt readiness = %v", readyErr)
+	}
+	_ = degraded.Close()
+}
+
+func TestSnapshotsAndWritesRejectInvalidPersistedRanges(t *testing.T) {
+	ctx := context.Background()
+	t.Run("controller reservation", func(t *testing.T) {
+		store := openController(t, "reservation.db")
+		defer store.Close()
+		if _, err := store.db.Exec("PRAGMA ignore_check_constraints=ON"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('', 0, 'target-1', 'execution-invalid')`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Snapshot(ctx); err == nil {
+			t.Fatal("invalid reservation appeared in typed snapshot")
+		}
+	})
+	t.Run("controller timestamp", func(t *testing.T) {
+		store := openController(t, "controller-time.db")
+		defer store.Close()
+		assignment := testAssignment(82, "invalid-time-execution", "invalid-time-node", 0)
+		if _, _, err := store.Assign(ctx, assignment); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec("PRAGMA ignore_check_constraints=ON"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`UPDATE executions SET created_at_unix_nano=0 WHERE id=?`, assignment.Execution.ID); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Snapshot(ctx); err == nil {
+			t.Fatal("invalid execution timestamp appeared in typed snapshot")
+		}
+	})
+	t.Run("agent timestamp", func(t *testing.T) {
+		store, err := OpenAgent(ctx, filepath.Join(privateTestDir(t), "agent-time.db"), Options{Now: func() time.Time { return time.Unix(100, 0) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if err := store.RecordObservation(ctx, Observation{ExecutionID: "execution-1", State: domain.ExecutionRunning}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec("PRAGMA ignore_check_constraints=ON"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`UPDATE execution_observations SET observed_at_unix_nano=0 WHERE execution_id='execution-1'`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.Snapshot(ctx); err == nil {
+			t.Fatal("invalid observation timestamp appeared in typed snapshot")
+		}
+	})
+	t.Run("write clock", func(t *testing.T) {
+		path := filepath.Join(privateTestDir(t), "invalid-clock.db")
+		initial := openControllerPath(t, path)
+		if err := initial.Close(); err != nil {
+			t.Fatal(err)
+		}
+		store, err := OpenController(ctx, path, Options{Now: func() time.Time { return time.Unix(-1, 0) }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer store.Close()
+		if _, _, err := store.Assign(ctx, testAssignment(83, "invalid-clock-execution", "invalid-clock-node", 0)); err == nil {
+			t.Fatal("out-of-range store clock accepted")
+		}
+		assertCount(t, store.db, "SELECT count(*) FROM executions", 0)
+	})
 }
 
 func TestSecretCanaryBackupIsRejectedWithoutCreatingDestination(t *testing.T) {

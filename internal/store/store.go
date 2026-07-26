@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -126,6 +127,13 @@ func open(ctx context.Context, path, role string, migrations fs.FS, options Opti
 		_ = db.Close()
 		return nil, fmt.Errorf("configure %s database: %w", role, err)
 	}
+	// Check the current pages before migrations can write to a damaged database.
+	// quick_check is the normal startup gate; backups receive the exhaustive
+	// integrity_check below.
+	if err := validateDatabaseCheck(ctx, db, "quick_check"); err != nil {
+		base.recovery = err
+		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
+	}
 	if err := applyMigrations(ctx, db, role, migrations, base.now, options.MigrationHook); err != nil {
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
@@ -233,7 +241,11 @@ func applyMigrations(ctx context.Context, db *sql.DB, role string, migrationFS f
 				return fmt.Errorf("migration %d injected failure: %w", migration.version, err)
 			}
 		}
-		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at_unix_nano) VALUES (?, ?)", migration.version, now().UnixNano()); err != nil {
+		appliedAt, err := storeUnixNano(now())
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, "INSERT INTO schema_migrations(version, applied_at_unix_nano) VALUES (?, ?)", migration.version, appliedAt); err != nil {
 			return err
 		}
 	}
@@ -505,12 +517,31 @@ func validateDatabase(ctx context.Context, path, role string) error {
 }
 
 func validateIntegrity(ctx context.Context, db *sql.DB) error {
-	var integrity string
-	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrCorruptBackup, err)
+	return validateDatabaseCheck(ctx, db, "integrity_check")
+}
+
+func validateDatabaseCheck(ctx context.Context, db *sql.DB, check string) error {
+	if check != "quick_check" && check != "integrity_check" {
+		return fmt.Errorf("unsupported SQLite check %q", check)
+	}
+	rows, err := db.QueryContext(ctx, "PRAGMA "+check)
+	if err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrCorruptBackup, check, err)
+	}
+	defer rows.Close()
+	results := []string{}
+	for rows.Next() {
+		var result string
+		if err := rows.Scan(&result); err != nil {
+			return fmt.Errorf("%w: %s: %v", ErrCorruptBackup, check, err)
 		}
-		return fmt.Errorf("%w: integrity check returned %q", ErrCorruptBackup, integrity)
+		results = append(results, result)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: %s: %v", ErrCorruptBackup, check, err)
+	}
+	if len(results) != 1 || results[0] != "ok" {
+		return fmt.Errorf("%w: %s failed", ErrCorruptBackup, check)
 	}
 	return nil
 }
@@ -849,4 +880,13 @@ func readUintMetadata(ctx context.Context, q interface {
 		return 0, fmt.Errorf("invalid metadata %q: %w", key, err)
 	}
 	return value, nil
+}
+
+func storeUnixNano(moment time.Time) (int64, error) {
+	minimum := time.Unix(0, 1)
+	maximum := time.Unix(0, math.MaxInt64)
+	if moment.Before(minimum) || moment.After(maximum) {
+		return 0, errors.New("store timestamp is outside SQLite's positive signed INTEGER range")
+	}
+	return moment.UnixNano(), nil
 }
