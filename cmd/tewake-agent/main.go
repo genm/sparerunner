@@ -94,6 +94,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	serve.Flags().StringVar(&native.CacheRoot, "cache-root", native.CacheRoot, "verified runner package cache")
 	serve.Flags().StringVar(&native.RuntimeRoot, "runtime-root", native.RuntimeRoot, "native runner execution root")
 	serve.Flags().StringVar(&native.SupervisorSocket, "supervisor-socket", native.SupervisorSocket, "local privileged supervisor socket")
+	serve.Flags().StringVar(&native.RunnerIdentityService, "runner-identity-service", native.RunnerIdentityService, "Windows runner identity service")
 	serve.Flags().BoolVar(&native.Required, "require-native-runner", false, "fail startup unless the native runner boundary is available")
 	root.AddCommand(serve)
 	root.AddCommand(platformCommands()...)
@@ -101,10 +102,11 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 }
 
 type nativeRunnerOptions struct {
-	CacheRoot        string
-	RuntimeRoot      string
-	SupervisorSocket string
-	Required         bool
+	CacheRoot             string
+	RuntimeRoot           string
+	SupervisorSocket      string
+	RunnerIdentityService string
+	Required              bool
 }
 
 func resolveAgentStateDirectory(explicit string) (string, error) {

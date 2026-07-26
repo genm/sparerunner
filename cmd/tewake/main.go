@@ -194,7 +194,7 @@ func newServeCommand() *cobra.Command {
 }
 
 func newJoinCommand() *cobra.Command {
-	return newJoinCommandForPlatform(runtime.GOOS, app.JoinAgent)
+	return newJoinCommandForPlatform(runtime.GOOS, platformJoinAgent)
 }
 
 type joinAgentFunc func(context.Context, app.JoinOptions) (string, error)
