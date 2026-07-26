@@ -4,35 +4,36 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/genm/tewake/internal/domain"
 )
 
-func TestControllerOpenEpochAndAtomicAssignmentReplay(t *testing.T) {
+func TestControllerWALAtomicReplayAndEpoch(t *testing.T) {
 	ctx := context.Background()
 	store := openController(t, "controller.db")
 	defer store.Close()
-	if first, err := store.AdvanceEpoch(ctx); err != nil || first != 1 {
-		t.Fatalf("first epoch = %d, %v", first, err)
+	if epoch, err := store.AdvanceEpoch(ctx); err != nil || epoch != 1 {
+		t.Fatalf("epoch = %d, %v", epoch, err)
 	}
-	if second, err := store.AdvanceEpoch(ctx); err != nil || second != 2 {
-		t.Fatalf("second epoch = %d, %v", second, err)
-	}
-	var journalMode string
-	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&journalMode); err != nil || journalMode != "wal" {
-		t.Fatalf("journal mode = %q, %v; want WAL", journalMode, err)
+	var journal string
+	if err := store.db.QueryRow("PRAGMA journal_mode").Scan(&journal); err != nil || journal != "wal" {
+		t.Fatalf("journal mode = %q, %v", journal, err)
 	}
 	var foreignKeys int
 	if err := store.db.QueryRow("PRAGMA foreign_keys").Scan(&foreignKeys); err != nil || foreignKeys != 1 {
-		t.Fatalf("foreign keys = %d, %v; want enabled", foreignKeys, err)
+		t.Fatalf("foreign keys = %d, %v", foreignKeys, err)
 	}
-	assignment := testAssignment("message-1", "digest-1", "execution-1", "node-1", 0)
+	assignment := testAssignment(101, "execution-1", "node-1", 0)
 	got, replay, err := store.Assign(ctx, assignment)
 	if err != nil || replay || got != assignment.Execution {
 		t.Fatalf("first assignment = (%+v, %t, %v)", got, replay, err)
@@ -41,55 +42,75 @@ func TestControllerOpenEpochAndAtomicAssignmentReplay(t *testing.T) {
 	if err != nil || !replay || got != assignment.Execution {
 		t.Fatalf("exact replay = (%+v, %t, %v)", got, replay, err)
 	}
-	assignment.MessageDigest = "different-digest"
-	_, _, err = store.Assign(ctx, assignment)
-	if !errors.Is(err, ErrReplayMismatch) {
-		t.Fatalf("different message digest error = %v, want ErrReplayMismatch", err)
+	assignment.MessageDigest = domain.PayloadDigest([]byte("different"))
+	if _, _, err := store.Assign(ctx, assignment); !errors.Is(err, ErrReplayMismatch) {
+		t.Fatalf("digest mismatch = %v", err)
 	}
 	assertCount(t, store.db, "SELECT count(*) FROM processed_messages", 1)
 	assertCount(t, store.db, "SELECT count(*) FROM slot_reservations", 1)
 	assertCount(t, store.db, "SELECT count(*) FROM executions", 1)
 }
 
-func TestAssignmentFailureRollsBackReservation(t *testing.T) {
+func TestAssignmentCanonicalIdentityAndDatabaseInvariants(t *testing.T) {
 	ctx := context.Background()
 	store := openController(t, "controller.db")
 	defer store.Close()
-	if _, _, err := store.Assign(ctx, testAssignment("message-1", "digest-1", "execution-1", "node-1", 0)); err != nil {
+	invalid := testAssignment(1, "execution-1", "node-1", 0)
+	invalid.ScaleSetID = 0
+	if _, _, err := store.Assign(ctx, invalid); err == nil {
+		t.Fatal("zero scale set ID accepted")
+	}
+	invalid = testAssignment(1, "execution-1", "node-1", 0)
+	invalid.MessageDigest = strings.ToUpper(invalid.MessageDigest)
+	if _, _, err := store.Assign(ctx, invalid); err == nil {
+		t.Fatal("uppercase digest accepted")
+	}
+	invalid = testAssignment(1, "execution-1", "node-1", 0)
+	invalid.Execution.State = domain.ExecutionPending
+	if _, _, err := store.Assign(ctx, invalid); err == nil {
+		t.Fatal("non-reserved desired execution accepted")
+	}
+	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('node-direct', 0, 'target-direct', 'execution-direct')`); err != nil {
 		t.Fatal(err)
 	}
-	// The repeated execution ID causes the execution insert to fail after the
-	// reservation insert; the second physical slot must remain unclaimed.
-	_, _, err := store.Assign(ctx, testAssignment("message-2", "digest-2", "execution-1", "node-1", 1))
-	if !errors.Is(err, ErrActiveExecution) {
-		t.Fatalf("failed assignment = %v, want ErrActiveExecution", err)
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'running', 1)`); err == nil {
+		t.Fatal("direct invalid execution state bypassed CHECK")
 	}
-	assertCount(t, store.db, "SELECT count(*) FROM slot_reservations", 1)
-	var secondSlot int
-	if err := store.db.QueryRow("SELECT count(*) FROM slot_reservations WHERE node_id='node-1' AND slot_index=1").Scan(&secondSlot); err != nil {
-		t.Fatal(err)
+	if _, err := store.db.Exec(`INSERT INTO processed_messages(scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano) VALUES (0, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'execution-direct', 1)`); err == nil {
+		t.Fatal("zero numeric message identity bypassed CHECK")
 	}
-	if secondSlot != 0 {
-		t.Fatalf("rolled-back slot reservation count = %d, want 0", secondSlot)
+	columns := tableColumns(t, store.db, "processed_messages")
+	if strings.Join(columns, ",") != "scale_set_id,message_id,message_digest,execution_id,created_at_unix_nano" {
+		t.Fatalf("processed_messages has redundant drift columns: %v", columns)
 	}
 }
 
-func TestConcurrentSameSlotAllowsExactlyOneAssignment(t *testing.T) {
+func TestAssignmentRollbackAndConcurrentSlotConstraint(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "controller.db")
-	first := openControllerPath(t, path)
-	second := openControllerPath(t, path)
+	store := openController(t, "controller.db")
+	defer store.Close()
+	if _, _, err := store.Assign(ctx, testAssignment(1, "execution-1", "node-1", 0)); err != nil {
+		t.Fatal(err)
+	}
+	// A duplicate execution ID fails after attempting a second reservation; the
+	// transaction must leave that concrete slot untouched.
+	if _, _, err := store.Assign(ctx, testAssignment(2, "execution-1", "node-1", 1)); !errors.Is(err, ErrActiveExecution) {
+		t.Fatalf("rollback error = %v", err)
+	}
+	assertCount(t, store.db, "SELECT count(*) FROM slot_reservations WHERE node_id='node-1' AND slot_index=1", 0)
+
+	path := filepath.Join(privateTestDir(t), "concurrent.db")
+	first, second := openControllerPath(t, path), openControllerPath(t, path)
 	defer first.Close()
 	defer second.Close()
-	stores := []*ControllerStore{first, second}
 	var successes int
-	var wg sync.WaitGroup
+	var group sync.WaitGroup
 	var lock sync.Mutex
-	for index, candidate := range stores {
-		wg.Add(1)
+	for index, candidate := range []*ControllerStore{first, second} {
+		group.Add(1)
 		go func(index int, candidate *ControllerStore) {
-			defer wg.Done()
-			_, _, err := candidate.Assign(ctx, testAssignment("message-"+string(rune('a'+index)), "digest", "execution-"+string(rune('a'+index)), "node-1", 0))
+			defer group.Done()
+			_, _, err := candidate.Assign(ctx, testAssignment(MessageID(index+1), "concurrent-"+string(rune('a'+index)), "node-1", 0))
 			if err == nil {
 				lock.Lock()
 				successes++
@@ -97,120 +118,210 @@ func TestConcurrentSameSlotAllowsExactlyOneAssignment(t *testing.T) {
 				return
 			}
 			if !errors.Is(err, ErrSlotAlreadyReserved) && !errors.Is(err, ErrActiveExecution) {
-				t.Errorf("assignment %d error = %v", index, err)
+				t.Errorf("concurrent assignment %d: %v", index, err)
 			}
 		}(index, candidate)
 	}
-	wg.Wait()
+	group.Wait()
 	if successes != 1 {
-		t.Fatalf("successful concurrent assignments = %d, want 1", successes)
+		t.Fatalf("concurrent successes = %d", successes)
 	}
-	assertCount(t, first.db, "SELECT count(*) FROM slot_reservations", 1)
 }
 
-func TestMigrationFailureRollsBackAndBlocksMutations(t *testing.T) {
+func TestMigrationRecoveryPreservesOriginalAndRejectsUnknownVersions(t *testing.T) {
 	ctx := context.Background()
-	path := filepath.Join(t.TempDir(), "controller.db")
-	failed, err := OpenController(ctx, path, Options{MigrationHook: func(role string, version int) error {
-		return errors.New("injected migration interruption")
-	}})
-	if err == nil || failed == nil {
-		t.Fatalf("migration failure = (%v, %v), want nonnil store and error", failed, err)
-	}
-	defer failed.Close()
-	if err := failed.Ready(); !errors.Is(err, ErrRecoveryMode) {
-		t.Fatalf("ready after migration failure = %v", err)
+	path := filepath.Join(privateTestDir(t), "controller.db")
+	failed, err := OpenController(ctx, path, Options{MigrationHook: func(string, int) error { return errors.New("injected") }})
+	if failed == nil || !errors.Is(err, ErrRecoveryMode) {
+		t.Fatalf("migration failure = (%v, %v)", failed, err)
 	}
 	if _, err := failed.AdvanceEpoch(ctx); !errors.Is(err, ErrRecoveryMode) {
-		t.Fatalf("mutation in recovery = %v", err)
+		t.Fatalf("migration recovery mutation = %v", err)
 	}
-	assertCount(t, failed.db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='store_metadata'", 0)
-	if err := failed.Close(); err != nil {
+	assertCount(t, failed.db, "SELECT count(*) FROM sqlite_master WHERE type='table'", 0)
+	_ = failed.Close()
+	recovered := openControllerPath(t, path)
+	_ = recovered.Close()
+
+	mutateVersions(t, path, "DELETE FROM schema_migrations; INSERT INTO schema_migrations(version, applied_at_unix_nano) VALUES (2, 1)")
+	degraded, err := OpenController(ctx, path, Options{})
+	if degraded == nil || !errors.Is(err, ErrRecoveryMode) {
+		t.Fatalf("future version open = (%v, %v)", degraded, err)
+	}
+	if _, err := degraded.AdvanceEpoch(ctx); !errors.Is(err, ErrRecoveryMode) {
+		t.Fatalf("future version write = %v", err)
+	}
+	_ = degraded.Close()
+}
+
+func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
+	ctx := context.Background()
+	db := openRawTestDatabase(t)
+	defer db.Close()
+	for _, statement := range []string{
+		"CREATE TABLE schema_migrations(version INTEGER PRIMARY KEY, applied_at_unix_nano INTEGER NOT NULL)",
+		"INSERT INTO schema_migrations(version, applied_at_unix_nano) VALUES (1, 1)",
+		"CREATE TABLE preserved(value TEXT NOT NULL)",
+		"INSERT INTO preserved(value) VALUES ('unchanged')",
+	} {
+		if _, err := db.Exec(statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	migrations := fstestMapFS(map[string]string{
+		"migrations/controller/001_base.sql":    "SELECT 1;",
+		"migrations/controller/002_pending.sql": "CREATE TABLE must_rollback(value TEXT NOT NULL);",
+	})
+	err := applyMigrations(ctx, db, "controller", migrations, time.Now, func(string, int) error { return errors.New("injected") })
+	if err == nil {
+		t.Fatal("pending migration unexpectedly succeeded")
+	}
+	var value string
+	if err := db.QueryRow("SELECT value FROM preserved").Scan(&value); err != nil || value != "unchanged" {
+		t.Fatalf("preserved content = %q, %v", value, err)
+	}
+	assertCount(t, db, "SELECT count(*) FROM schema_migrations WHERE version=1", 1)
+	assertCount(t, db, "SELECT count(*) FROM schema_migrations WHERE version=2", 0)
+	assertCount(t, db, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='must_rollback'", 0)
+}
+
+func TestWrongRoleOpenIsRecoveryAndFatalOpenIsNil(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "agent.db")
+	agent, err := OpenAgent(ctx, path, Options{})
+	if err != nil {
 		t.Fatal(err)
 	}
-	recovered := openControllerPath(t, path)
-	defer recovered.Close()
-	if _, err := recovered.AdvanceEpoch(ctx); err != nil {
-		t.Fatalf("open after rolled back migration: %v", err)
+	_ = agent.Close()
+	controller, err := OpenController(ctx, path, Options{})
+	if controller == nil || !errors.Is(err, ErrRecoveryMode) || !errors.Is(err, ErrWrongRole) {
+		t.Fatalf("wrong role open = (%v, %v)", controller, err)
+	}
+	if _, err := controller.AdvanceEpoch(ctx); !errors.Is(err, ErrRecoveryMode) {
+		t.Fatalf("wrong-role mutation = %v", err)
+	}
+	_ = controller.Close()
+	if store, err := OpenController(ctx, "", Options{}); store != nil || err == nil {
+		t.Fatalf("fatal insecure parent open = (%v, %v)", store, err)
 	}
 }
 
-func TestAgentJournalRejectsChangedCommandAndPersistsObservations(t *testing.T) {
+func TestAgentJournalAllowlistedTombstoneAndSecretCanaryRejection(t *testing.T) {
 	ctx := context.Background()
-	store, err := OpenAgent(ctx, filepath.Join(t.TempDir(), "agent.db"), Options{})
+	store, err := OpenAgent(ctx, filepath.Join(privateTestDir(t), "agent.db"), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	command := domain.Command{ID: "command-1", ControllerEpoch: 1, ExecutionID: "execution-1", ExpectedState: domain.ExecutionReserved, PayloadDigest: domain.PayloadDigest([]byte("only-digest-is-stored"))}
+	command := domain.Command{ID: "command-1", ControllerEpoch: 1, ExecutionID: "execution-1", ExpectedState: domain.ExecutionReserved, PayloadDigest: domain.PayloadDigest([]byte("only-digest"))}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || replay {
 		t.Fatalf("initial command = (%t, %v)", replay, err)
 	}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || !replay {
-		t.Fatalf("exact command replay = (%t, %v)", replay, err)
+		t.Fatalf("exact replay = (%t, %v)", replay, err)
 	}
 	command.PayloadDigest = domain.PayloadDigest([]byte("changed"))
 	if _, err := store.RecordCommand(ctx, command); !errors.Is(err, ErrReplayMismatch) {
-		t.Fatalf("changed command payload = %v", err)
+		t.Fatalf("changed command = %v", err)
 	}
 	if err := store.RecordObservation(ctx, Observation{ExecutionID: "execution-1", State: domain.ExecutionRunning}); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{ExecutionID: "execution-1", Reason: "cleanup_failed"}); err != nil {
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{ExecutionID: "execution-1", FailureCode: CleanupProcessResidue}); err != nil {
 		t.Fatal(err)
 	}
-	assertCount(t, store.db, "SELECT count(*) FROM execution_observations", 1)
-	assertCount(t, store.db, "SELECT count(*) FROM cleanup_tombstones", 1)
+	canary := CleanupFailureCode("jit-plaintext-join-secret-node-private-key.example.test")
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{ExecutionID: "execution-2", FailureCode: canary}); err == nil {
+		t.Fatal("secret-like raw tombstone code accepted")
+	}
+	if _, err := store.db.Exec(`INSERT INTO execution_observations(execution_id, state, observed_at_unix_nano) VALUES ('bad', 'unknown', 1)`); err == nil {
+		t.Fatal("invalid observation bypassed CHECK")
+	}
+	contents, err := os.ReadFile(store.path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(contents), string(canary)) {
+		t.Fatal("rejected secret canary reached journal")
+	}
 }
 
-func TestBackupRestoreAndSecretCanaryExclusion(t *testing.T) {
+func TestPrivatePathsURIBackupAndRestoreGuards(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
-	controller := openControllerPath(t, filepath.Join(dir, "controller.db"))
-	defer controller.Close()
-	if _, _, err := controller.Assign(ctx, testAssignment("message-1", "digest-1", "execution-1", "node-1", 0)); err != nil {
+	dir := privateTestDir(t)
+	specialDir := filepath.Join(dir, "space ?# directory")
+	if err := os.Mkdir(specialDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	backup := filepath.Join(dir, "controller.backup.db")
-	if err := controller.Backup(ctx, backup); err != nil {
+	path := filepath.Join(specialDir, "controller ?#.db")
+	store := openControllerPath(t, path)
+	defer store.Close()
+	if _, _, err := store.Assign(ctx, testAssignment(1, "execution-1", "node-1", 0)); err != nil {
 		t.Fatal(err)
 	}
-	canary := "jit-plaintext-join-secret-node-private-key.example.test"
-	for _, path := range []string{filepath.Join(dir, "controller.db"), backup} {
-		contents, err := os.ReadFile(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if strings.Contains(string(contents), canary) {
-			t.Fatalf("secret canary found in %s", path)
-		}
+	dsn, err := sqliteDSN(path, true)
+	if err != nil {
+		t.Fatal(err)
 	}
-	restored := filepath.Join(dir, "restored.db")
+	uri, err := url.Parse(dsn)
+	if err != nil || uri.RawQuery != "mode=ro" || strings.Contains(uri.EscapedPath(), "%3F") == false || strings.Contains(uri.EscapedPath(), "%23") == false {
+		t.Fatalf("unsafe SQLite URI %q: %v", dsn, err)
+	}
+	windowsDSN, err := sqliteDSN(`C:\\tewake\\data ?#.db`, false)
+	if err != nil || strings.Contains(windowsDSN, "?") || strings.Contains(windowsDSN, "#") {
+		t.Fatalf("Windows-style path escaped unsafely: %q, %v", windowsDSN, err)
+	}
+	backup := filepath.Join(specialDir, "backup.db")
+	if err := store.Backup(ctx, backup); err != nil {
+		t.Fatal(err)
+	}
+	if got := tableColumns(t, store.db, "processed_messages"); strings.Join(got, ",") != "scale_set_id,message_id,message_digest,execution_id,created_at_unix_nano" {
+		t.Fatalf("backup source schema is not secret allowlisted: %v", got)
+	}
+	if err := store.Backup(ctx, backup); !errors.Is(err, ErrDestinationExists) {
+		t.Fatalf("backup overwrite = %v", err)
+	}
+	restored := filepath.Join(specialDir, "restored.db")
 	if err := RestoreController(ctx, restored, backup); err != nil {
 		t.Fatal(err)
 	}
-	opened := openControllerPath(t, restored)
-	defer opened.Close()
-	assertCount(t, opened.db, "SELECT count(*) FROM executions", 1)
+	if err := RestoreController(ctx, restored, backup); !errors.Is(err, ErrDestinationExists) {
+		t.Fatalf("restore overwrite = %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		symlink := filepath.Join(specialDir, "backup-link.db")
+		if err := os.Symlink(backup, symlink); err != nil {
+			t.Fatal(err)
+		}
+		if err := RestoreController(ctx, filepath.Join(specialDir, "from-link.db"), symlink); !errors.Is(err, ErrInsecurePath) {
+			t.Fatalf("symlink backup accepted: %v", err)
+		}
+	}
+	if runtime.GOOS != "windows" {
+		if err := os.Chmod(specialDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if opened, err := OpenController(ctx, filepath.Join(specialDir, "unsafe.db"), Options{}); opened != nil || !errors.Is(err, ErrInsecurePath) {
+			t.Fatalf("shared directory accepted: (%v, %v)", opened, err)
+		}
+	}
 }
 
-func TestBadOrWrongRoleRestorePreservesDestination(t *testing.T) {
+func TestRestoreBadAndWrongRolePreservesDestination(t *testing.T) {
 	ctx := context.Background()
-	dir := t.TempDir()
+	dir := privateTestDir(t)
 	destination := filepath.Join(dir, "destination.db")
-	dest := openControllerPath(t, destination)
-	if _, err := dest.AdvanceEpoch(ctx); err != nil {
+	destinationStore := openControllerPath(t, destination)
+	if _, err := destinationStore.AdvanceEpoch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := dest.Close(); err != nil {
-		t.Fatal(err)
-	}
+	_ = destinationStore.Close()
 	bad := filepath.Join(dir, "bad.backup")
-	if err := os.WriteFile(bad, []byte("not a sqlite backup"), 0o600); err != nil {
+	if err := os.WriteFile(bad, []byte("not sqlite"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := RestoreController(ctx, destination, bad); err == nil {
-		t.Fatal("corrupt restore unexpectedly succeeded")
+		t.Fatal("bad restore succeeded")
 	}
 	assertEpoch(t, destination, 2)
 	agent, err := OpenAgent(ctx, filepath.Join(dir, "agent.db"), Options{})
@@ -221,18 +332,16 @@ func TestBadOrWrongRoleRestorePreservesDestination(t *testing.T) {
 	if err := agent.Backup(ctx, agentBackup); err != nil {
 		t.Fatal(err)
 	}
-	if err := agent.Close(); err != nil {
-		t.Fatal(err)
-	}
+	_ = agent.Close()
 	if err := RestoreController(ctx, destination, agentBackup); !errors.Is(err, ErrWrongRole) {
-		t.Fatalf("wrong-role restore error = %v", err)
+		t.Fatalf("wrong role restore = %v", err)
 	}
 	assertEpoch(t, destination, 3)
 }
 
 func openController(t *testing.T, name string) *ControllerStore {
 	t.Helper()
-	return openControllerPath(t, filepath.Join(t.TempDir(), name))
+	return openControllerPath(t, filepath.Join(privateTestDir(t), name))
 }
 
 func openControllerPath(t *testing.T, path string) *ControllerStore {
@@ -244,8 +353,78 @@ func openControllerPath(t *testing.T, path string) *ControllerStore {
 	return store
 }
 
-func testAssignment(messageID, digest, executionID, nodeID string, slot int) Assignment {
-	return Assignment{ScaleSetID: "scale-set-1", MessageID: messageID, MessageDigest: digest, Execution: domain.ExecutionSnapshot{ID: domain.ExecutionID(executionID), TargetID: "target-1", Slot: domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slot}, State: domain.ExecutionPending}}
+func privateTestDir(t *testing.T) string {
+	t.Helper()
+	directory := filepath.Join(t.TempDir(), "private")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func testAssignment(messageID MessageID, executionID, nodeID string, slot int) Assignment {
+	return Assignment{ScaleSetID: 11, MessageID: messageID, MessageDigest: domain.PayloadDigest([]byte("message-" + string(rune(messageID)))), Execution: domain.ExecutionSnapshot{ID: domain.ExecutionID(executionID), TargetID: "target-1", Slot: domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slot}, State: domain.ExecutionReserved}}
+}
+
+func mutateVersions(t *testing.T, path, statement string) {
+	t.Helper()
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func openRawTestDatabase(t *testing.T) *sql.DB {
+	t.Helper()
+	path := filepath.Join(privateTestDir(t), "raw.db")
+	if _, err := prepareDatabasePath(path); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return db
+}
+
+func fstestMapFS(files map[string]string) fs.FS {
+	result := make(fstest.MapFS, len(files))
+	for name, body := range files {
+		result[name] = &fstest.MapFile{Data: []byte(body)}
+	}
+	return result
+}
+
+func tableColumns(t *testing.T, db *sql.DB, table string) []string {
+	t.Helper()
+	rows, err := db.Query("PRAGMA table_info(" + table + ")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	columns := []string{}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, dataType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &dataType, &notNull, &defaultValue, &primaryKey); err != nil {
+			t.Fatal(err)
+		}
+		columns = append(columns, name)
+	}
+	return columns
 }
 
 func assertCount(t *testing.T, db *sql.DB, query string, want int) {
@@ -255,7 +434,7 @@ func assertCount(t *testing.T, db *sql.DB, query string, want int) {
 		t.Fatal(err)
 	}
 	if got != want {
-		t.Fatalf("count query %q = %d, want %d", query, got, want)
+		t.Fatalf("count %q = %d, want %d", query, got, want)
 	}
 }
 
@@ -265,6 +444,6 @@ func assertEpoch(t *testing.T, path string, want domain.ControllerEpoch) {
 	defer store.Close()
 	got, err := store.AdvanceEpoch(context.Background())
 	if err != nil || got != want {
-		t.Fatalf("epoch after failed restore = %d, %v; want %d", got, err, want)
+		t.Fatalf("epoch = %d, %v; want %d", got, err, want)
 	}
 }

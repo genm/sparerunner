@@ -7,7 +7,7 @@ INSERT INTO store_metadata (key, value) VALUES ('role', 'controller');
 INSERT INTO store_metadata (key, value) VALUES ('controller_epoch', '0');
 
 CREATE TABLE schema_migrations (
-    version INTEGER PRIMARY KEY,
+    version INTEGER PRIMARY KEY CHECK (version > 0),
     applied_at_unix_nano INTEGER NOT NULL
 );
 
@@ -24,24 +24,19 @@ CREATE TABLE executions (
     target_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
     slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
-    state TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state = 'reserved'),
     created_at_unix_nano INTEGER NOT NULL,
     FOREIGN KEY (node_id, slot_index) REFERENCES slot_reservations(node_id, slot_index)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
--- This partial index is the final race-safe guard: an active execution owns one slot.
-CREATE UNIQUE INDEX active_execution_per_slot ON executions (node_id, slot_index)
-WHERE state IN ('pending', 'reserved', 'preparing', 'running', 'cleaning', 'cleanup_failed');
-
 CREATE TABLE processed_messages (
-    scale_set_id TEXT NOT NULL,
-    message_id TEXT NOT NULL,
-    message_digest TEXT NOT NULL,
-    target_id TEXT NOT NULL,
+    scale_set_id INTEGER NOT NULL CHECK (scale_set_id > 0),
+    message_id INTEGER NOT NULL CHECK (message_id > 0),
+    message_digest TEXT NOT NULL CHECK (
+        length(message_digest) = 64 AND message_digest NOT GLOB '*[^0-9a-f]*'
+    ),
     execution_id TEXT NOT NULL UNIQUE,
-    node_id TEXT NOT NULL,
-    slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
     created_at_unix_nano INTEGER NOT NULL,
     PRIMARY KEY (scale_set_id, message_id),
     FOREIGN KEY (execution_id) REFERENCES executions(id) ON DELETE RESTRICT ON UPDATE RESTRICT

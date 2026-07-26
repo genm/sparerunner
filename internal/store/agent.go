@@ -16,7 +16,26 @@ type Observation struct {
 
 type CleanupTombstone struct {
 	ExecutionID domain.ExecutionID
-	Reason      string
+	FailureCode CleanupFailureCode
+}
+
+// CleanupFailureCode is intentionally closed: raw cleanup errors can contain JIT
+// material, tokens, paths, or runner output and must never enter the journal.
+type CleanupFailureCode string
+
+const (
+	CleanupVerificationFailed CleanupFailureCode = "cleanup_verification_failed"
+	CleanupProcessResidue     CleanupFailureCode = "process_residue"
+	CleanupWorkspaceRemoval   CleanupFailureCode = "workspace_removal_failed"
+)
+
+func (c CleanupFailureCode) Validate() error {
+	switch c {
+	case CleanupVerificationFailed, CleanupProcessResidue, CleanupWorkspaceRemoval:
+		return nil
+	default:
+		return errors.New("cleanup tombstone failure code is not allowlisted")
+	}
 }
 
 func (s *AgentStore) RecordCommand(ctx context.Context, command domain.Command) (bool, error) {
@@ -67,10 +86,13 @@ func (s *AgentStore) RecordCleanupTombstone(ctx context.Context, tombstone Clean
 	if err := s.requireReady(); err != nil {
 		return err
 	}
-	if tombstone.ExecutionID == "" || tombstone.Reason == "" {
-		return errors.New("cleanup tombstone requires execution ID and reason")
+	if tombstone.ExecutionID == "" {
+		return errors.New("cleanup tombstone requires execution ID")
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT INTO cleanup_tombstones(execution_id, reason, recorded_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET reason=excluded.reason, recorded_at_unix_nano=excluded.recorded_at_unix_nano`, tombstone.ExecutionID, tombstone.Reason, s.now().UnixNano())
+	if err := tombstone.FailureCode.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO cleanup_tombstones(execution_id, failure_code, recorded_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET failure_code=excluded.failure_code, recorded_at_unix_nano=excluded.recorded_at_unix_nano`, tombstone.ExecutionID, tombstone.FailureCode, s.now().UnixNano())
 	return err
 }
 
