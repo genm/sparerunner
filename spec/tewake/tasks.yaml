@@ -160,13 +160,15 @@ tasks:
     ci_targets: [lint, test, build]
     pr_order: 6
     status: in_progress
-    notes:
-      - "2026-07-26: Package digest/cache, execution-root ownership, redacted JIT handoff, idempotent journal lifecycle, WorkspaceRef and ContainmentRef persistence, and fail-closed weak-platform admission are implemented on the task branch. Real platform containment and live process-tree evidence remain twk-007/twk-008/twk-009 gates."
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
       - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
       - Tewake never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
       - Cleanup verification failure prevents slot release.
+    notes: >
+      Native core is under review. SQLite-backed runner journal, dedicated runner
+      OS identity, live official-archive exercise, and service/process-restart
+      recovery remain twk-007/twk-011 platform gates.
 
   - id: twk-007
     title: Complete the Linux vertical slice

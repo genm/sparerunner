@@ -39,6 +39,9 @@ func (s *unixSupervisor) Start(_ context.Context, request StartRequest) (Process
 	s.mu.Unlock()
 	go func() {
 		_ = command.Wait()
+		// A listener exit does not release its process-group ownership: jobs can
+		// leave descendants. Terminate and verify the group before forgetting it.
+		_ = terminateGroup(context.Background(), Process{PID: pid})
 		s.mu.Lock()
 		delete(s.processes, pid)
 		s.mu.Unlock()
@@ -59,6 +62,10 @@ func (s *unixSupervisor) Stop(ctx context.Context, process Process) error {
 	if !owned {
 		return ErrReconciliationRequired
 	}
+	return terminateGroup(ctx, process)
+}
+
+func terminateGroup(ctx context.Context, process Process) error {
 	// The listener is its own PGID. Negative PID targets descendants created by
 	// the runner and avoids leaving a job child after the listener exits.
 	err := syscall.Kill(-process.PID, syscall.SIGTERM)

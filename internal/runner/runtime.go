@@ -111,6 +111,9 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	}
 	digest := preparationDigest(request)
 	if found {
+		if !validRecord(record) {
+			return Snapshot{}, ErrReconciliationRequired
+		}
 		if record.SpecDigest != digest {
 			return Snapshot{}, ErrExecutionConflict
 		}
@@ -145,7 +148,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 }
 
 func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, error) {
-	if err := validatePreparation(request.Preparation); err != nil || request.JIT == nil || len(request.JIT.Digest()) != sha256.Size*2 {
+	if err := validatePreparation(request.Preparation); err != nil || request.JIT == nil || !canonicalDigest(request.JIT.Digest()) {
 		return Snapshot{}, ErrInvalidRequest
 	}
 	if !m.supervisor.StrongDescendantOwnership() {
@@ -160,6 +163,9 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	record, _, err := m.load(ctx, request.ExecutionID)
 	if err != nil {
 		return Snapshot{}, err
+	}
+	if !validRecord(record) {
+		return Snapshot{}, ErrReconciliationRequired
 	}
 	jitDigest := request.JIT.Digest()
 	switch record.State {
@@ -177,7 +183,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	case StatePrepared:
 		// continue below
 	default:
-		return snapshot(record), stateError(record)
+		return snapshot(record), ErrExecutionConflict
 	}
 	record.State = StateStarting
 	record.JITDigest = jitDigest
@@ -187,6 +193,10 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	var process Process
 	started := false
 	if err := request.JIT.Deliver(func(value string) error {
+		actual := sha256.Sum256([]byte(value))
+		if hex.EncodeToString(actual[:]) != jitDigest {
+			return ErrInvalidRequest
+		}
 		if started {
 			return ErrReconciliationRequired
 		}
@@ -215,7 +225,9 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	if !started || process.PID <= 0 {
 		record.State = StatePrepared
 		record.JITDigest = ""
-		_ = m.save(ctx, record)
+		if saveErr := m.save(ctx, record); saveErr != nil {
+			return m.quarantine(ctx, record)
+		}
 		return Snapshot{}, ErrInvalidRequest
 	}
 	record.State = StateRunning
@@ -244,6 +256,9 @@ func (m *Manager) Inspect(ctx context.Context, executionID string) (Snapshot, er
 	if !found {
 		return Snapshot{}, ErrExecutionNotFound
 	}
+	if !validRecord(record) {
+		return Snapshot{}, ErrReconciliationRequired
+	}
 	if record.State == StateRunning {
 		alive, observeErr := m.supervisor.Alive(Process{PID: record.PID})
 		if observeErr != nil || !alive {
@@ -266,8 +281,11 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if !found {
 		return Snapshot{}, ErrExecutionNotFound
 	}
+	if !validRecord(record) {
+		return Snapshot{}, ErrReconciliationRequired
+	}
 	if record.State == StateReleased {
-		return snapshot(record), nil
+		return snapshot(record), ErrExecutionConflict
 	}
 	if record.State == StateCleanupFailed {
 		return snapshot(record), ErrQuarantined
@@ -425,7 +443,44 @@ func stateError(record Record) error {
 		return ErrQuarantined
 	case StateStarting:
 		return ErrReconciliationRequired
+	case StateReleased:
+		return ErrExecutionConflict
 	default:
 		return nil
+	}
+}
+
+func canonicalDigest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, c := range value {
+		if !(c >= '0' && c <= '9') && !(c >= 'a' && c <= 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validRecord(record Record) bool {
+	if record.ExecutionID == "" || record.RootName != executionRootName(record.ExecutionID) || !canonicalDigest(record.SpecDigest) {
+		return false
+	}
+	if record.JITDigest != "" && !canonicalDigest(record.JITDigest) {
+		return false
+	}
+	switch record.State {
+	case StatePrepared:
+		return record.PID == 0 && record.JITDigest == "" && !record.Tombstone
+	case StateStarting:
+		return record.PID == 0 && record.JITDigest != "" && !record.Tombstone
+	case StateRunning:
+		return record.PID > 0 && record.JITDigest != "" && !record.Tombstone
+	case StateReleased:
+		return record.PID == 0 && !record.Tombstone
+	case StateCleanupFailed:
+		return record.Tombstone
+	default:
+		return false
 	}
 }

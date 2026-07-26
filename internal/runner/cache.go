@@ -55,6 +55,9 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (string, error) {
 	}
 	entry := path.Join("packages", pkg.key())
 	if validCacheEntry(root, entry, pkg) {
+		if err := rebuildCachedContent(root, entry, pkg); err != nil {
+			return "", err
+		}
 		return filepath.Join(c.Root, entry, "content"), nil
 	}
 
@@ -92,6 +95,42 @@ func (c Cache) Ensure(ctx context.Context, pkg Package) (string, error) {
 		}
 	}
 	return filepath.Join(c.Root, entry, "content"), nil
+}
+
+// rebuildCachedContent treats the pinned archive, not the mutable extracted
+// tree or manifest, as the trust anchor before any runner receives its files.
+func rebuildCachedContent(root *os.Root, entry string, pkg Package) error {
+	if err := thawCacheEntry(root, entry); err != nil {
+		return ErrPackageIntegrity
+	}
+	entryRoot, err := root.OpenRoot(entry)
+	if err != nil {
+		return ErrPackageIntegrity
+	}
+	defer entryRoot.Close()
+	if err := entryRoot.RemoveAll("content"); err != nil {
+		return ErrPackageIntegrity
+	}
+	if err := entryRoot.Mkdir("content", 0o700); err != nil {
+		return ErrPackageIntegrity
+	}
+	content, err := entryRoot.OpenRoot("content")
+	if err != nil {
+		return ErrPackageIntegrity
+	}
+	defer content.Close()
+	archive, err := entryRoot.Open("archive")
+	if err != nil {
+		return ErrPackageIntegrity
+	}
+	defer archive.Close()
+	if err := extractArchive(content, archive, pkg.Format); err != nil {
+		return err
+	}
+	if err := freezeCacheEntry(entryRoot); err != nil {
+		return ErrPackageIntegrity
+	}
+	return nil
 }
 
 func freezeCacheEntry(root *os.Root) error {

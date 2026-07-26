@@ -81,8 +81,8 @@ func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
 	if _, err := os.Stat(executionRoot); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("execution root still exists: %v", err)
 	}
-	if _, err := manager.Destroy(context.Background(), request.ExecutionID); err != nil {
-		t.Fatalf("destroy replay: %v", err)
+	if _, err := manager.Destroy(context.Background(), request.ExecutionID); !errors.Is(err, runner.ErrExecutionConflict) {
+		t.Fatalf("destroy replay error: %v", err)
 	}
 }
 

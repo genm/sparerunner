@@ -195,6 +195,34 @@ func TestCacheHitRejectsTamperedArtifact(t *testing.T) {
 	}
 }
 
+func TestCacheHitRebuildsTamperedContentFromArchive(t *testing.T) {
+	archive := tarArchive(t, []tar.Header{{Name: "run.sh", Mode: 0o755, Size: 7, Typeflag: tar.TypeReg}}, [][]byte{[]byte("#!/bin\n")})
+	sum := sha256.Sum256(archive)
+	pkg := Package{Version: "test", Platform: Platform{"test", "test"}, Asset: "runner.tar.gz", Checksum: hex.EncodeToString(sum[:]), Size: int64(len(archive)), Format: ArchiveTarGz}
+	cache := Cache{Root: t.TempDir(), Fetcher: &bytesFetcher{data: archive}, verifyPackage: func(value Package) bool { return value == pkg }}
+	path, err := cache.Ensure(context.Background(), pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(path, "run.sh"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(path, "run.sh"), []byte("tampered"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path, err = cache.Ensure(context.Background(), pkg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(path, "run.sh"))
+	if err != nil || string(data) != "#!/bin\n" {
+		t.Fatalf("content = %q, %v", data, err)
+	}
+	root, _ := os.OpenRoot(cache.Root)
+	defer root.Close()
+	_ = thawCacheEntry(root, "packages/"+pkg.key())
+}
+
 func TestExtractRejectsTraversalAndLinkEscape(t *testing.T) {
 	for _, header := range []tar.Header{
 		{Name: "../escape", Mode: 0o600, Size: 1, Typeflag: tar.TypeReg},
