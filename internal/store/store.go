@@ -14,13 +14,17 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
-
-	_ "modernc.org/sqlite"
 )
 
 const sqliteDriver = "sqlite"
+
+const (
+	sqliteBusyTimeoutMilliseconds = 5000
+	maxSQLiteInteger              = uint64(^uint64(0) >> 1)
+)
 
 //go:embed migrations/controller/*.sql
 var controllerMigrations embed.FS
@@ -31,14 +35,16 @@ var agentMigrations embed.FS
 var (
 	// ErrRecoveryMode means schema validation or migration did not complete. Every
 	// mutation stops until an operator restores or repairs the database.
-	ErrRecoveryMode        = errors.New("store is in recovery mode")
-	ErrReplayMismatch      = errors.New("store replay identity mismatch")
-	ErrSlotAlreadyReserved = errors.New("store slot is already reserved")
-	ErrActiveExecution     = errors.New("store active execution already exists")
-	ErrWrongRole           = errors.New("store database role does not match")
-	ErrCorruptBackup       = errors.New("store backup failed integrity validation")
-	ErrInsecurePath        = errors.New("store path is not private")
-	ErrDestinationExists   = errors.New("store destination already exists")
+	ErrRecoveryMode         = errors.New("store is in recovery mode")
+	ErrReplayMismatch       = errors.New("store replay identity mismatch")
+	ErrSlotAlreadyReserved  = errors.New("store slot is already reserved")
+	ErrActiveExecution      = errors.New("store active execution already exists")
+	ErrWrongRole            = errors.New("store database role does not match")
+	ErrCorruptBackup        = errors.New("store backup failed integrity validation")
+	ErrInsecurePath         = errors.New("store path is not private")
+	ErrDestinationExists    = errors.New("store destination already exists")
+	ErrStaleControllerEpoch = errors.New("store command is from a stale controller epoch")
+	ErrStoreBusy            = errors.New("store contention deadline exceeded")
 )
 
 // MigrationHook is test fault injection at the boundary before version recording.
@@ -124,7 +130,7 @@ func open(ctx context.Context, path, role string, migrations fs.FS, options Opti
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
 	}
-	if err := verifyRole(ctx, db, role); err != nil {
+	if err := validateOpenDatabase(ctx, db, role); err != nil {
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
 	}
@@ -132,10 +138,32 @@ func open(ctx context.Context, path, role string, migrations fs.FS, options Opti
 }
 
 func configure(ctx context.Context, db *sql.DB) error {
-	for _, pragma := range []string{"PRAGMA journal_mode=WAL", "PRAGMA foreign_keys=ON", "PRAGMA busy_timeout=5000"} {
-		if _, err := db.ExecContext(ctx, pragma); err != nil {
-			return err
-		}
+	var journalMode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journalMode); err != nil {
+		return fmt.Errorf("enable WAL: %w", err)
+	}
+	if strings.ToLower(journalMode) != "wal" {
+		return fmt.Errorf("enable WAL: got journal mode %q", journalMode)
+	}
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		return fmt.Errorf("enable foreign keys: %w", err)
+	}
+	var foreignKeys int
+	if err := db.QueryRowContext(ctx, "PRAGMA foreign_keys").Scan(&foreignKeys); err != nil {
+		return fmt.Errorf("verify foreign keys: %w", err)
+	}
+	if foreignKeys != 1 {
+		return errors.New("verify foreign keys: pragma remained disabled")
+	}
+	if _, err := db.ExecContext(ctx, fmt.Sprintf("PRAGMA busy_timeout=%d", sqliteBusyTimeoutMilliseconds)); err != nil {
+		return fmt.Errorf("set busy timeout: %w", err)
+	}
+	var busyTimeout int
+	if err := db.QueryRowContext(ctx, "PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		return fmt.Errorf("verify busy timeout: %w", err)
+	}
+	if busyTimeout != sqliteBusyTimeoutMilliseconds {
+		return fmt.Errorf("verify busy timeout: got %d", busyTimeout)
 	}
 	return nil
 }
@@ -264,13 +292,29 @@ func sqliteDSN(path string, readOnly bool) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	uri := &url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
+	uriPath := sqliteURIPath(abs)
+	// A Windows drive path must be encoded as file:///C:/..., not file://C:/....
+	// The latter treats the drive letter as a URI authority and SQLite rejects it.
+	uri := &url.URL{Scheme: "file", Path: uriPath}
+	query := url.Values{}
 	if readOnly {
-		query := url.Values{}
 		query.Set("mode", "ro")
-		uri.RawQuery = query.Encode()
+	} else {
+		// BEGIN IMMEDIATE acquires the writer reservation before replay reads.
+		// Together with busy_timeout this serializes competing Store handles at
+		// SQLite's ownership boundary instead of leaking a read-to-write race.
+		query.Set("_txlock", "immediate")
 	}
+	uri.RawQuery = query.Encode()
 	return uri.String(), nil
+}
+
+func sqliteURIPath(abs string) string {
+	uriPath := filepath.ToSlash(abs)
+	if filepath.VolumeName(abs) != "" && !strings.HasPrefix(uriPath, "/") {
+		return "/" + uriPath
+	}
+	return uriPath
 }
 
 func prepareDatabasePath(path string) (string, error) {
@@ -394,7 +438,10 @@ func (s *baseStore) backup(ctx context.Context, destination string) (resultErr e
 	if err := validateDatabase(ctx, temporary, s.role); err != nil {
 		return err
 	}
-	return os.Rename(temporary, destination)
+	if err := syncFile(temporary); err != nil {
+		return fmt.Errorf("sync backup file: %w", err)
+	}
+	return publishNoReplace(temporary, destination)
 }
 
 func prepareDestination(destination string) (string, error) {
@@ -451,6 +498,13 @@ func validateDatabase(ctx context.Context, path, role string) error {
 		return err
 	}
 	defer db.Close()
+	if err := validateIntegrity(ctx, db); err != nil {
+		return err
+	}
+	return validateOpenDatabase(ctx, db, role)
+}
+
+func validateIntegrity(ctx context.Context, db *sql.DB) error {
 	var integrity string
 	if err := db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&integrity); err != nil || integrity != "ok" {
 		if err != nil {
@@ -458,13 +512,59 @@ func validateDatabase(ctx context.Context, path, role string) error {
 		}
 		return fmt.Errorf("%w: integrity check returned %q", ErrCorruptBackup, integrity)
 	}
+	return nil
+}
+
+func validateOpenDatabase(ctx context.Context, db *sql.DB, role string) error {
 	if err := verifyRole(ctx, db, role); err != nil {
 		return err
 	}
 	if err := validateMigrationSchema(ctx, db, role); err != nil {
 		return err
 	}
+	if err := validateMetadata(ctx, db, role); err != nil {
+		return err
+	}
+	if err := validateSchemaObjects(ctx, db, role); err != nil {
+		return err
+	}
+	if err := validateForeignKeys(ctx, db); err != nil {
+		return err
+	}
 	return validateColumnAllowlist(ctx, db, role)
+}
+
+func validateMetadata(ctx context.Context, db *sql.DB, role string) error {
+	expectedKeys := []string{"controller_epoch", "role"}
+	epochKey := "controller_epoch"
+	if role == "agent" {
+		expectedKeys = []string{"max_controller_epoch", "role"}
+		epochKey = "max_controller_epoch"
+	}
+	rows, err := db.QueryContext(ctx, "SELECT key FROM store_metadata ORDER BY key")
+	if err != nil {
+		return fmt.Errorf("%w: inspect metadata keys: %v", ErrCorruptBackup, err)
+	}
+	keys := []string{}
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			rows.Close()
+			return err
+		}
+		keys = append(keys, key)
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !sameStrings(keys, expectedKeys) {
+		return fmt.Errorf("%w: unexpected metadata key set", ErrCorruptBackup)
+	}
+	epoch, err := readUintMetadata(ctx, db, epochKey)
+	if err != nil || epoch > maxSQLiteInteger {
+		return fmt.Errorf("%w: invalid %s metadata", ErrCorruptBackup, epochKey)
+	}
+	return nil
 }
 
 func verifyExistingPrivateDatabaseFile(path string) error {
@@ -500,10 +600,14 @@ func validateMigrationSchema(ctx context.Context, db *sql.DB, role string) error
 }
 
 func migrationFS(role string) fs.FS {
-	if role == "controller" {
+	switch role {
+	case "controller":
 		return controllerMigrations
+	case "agent":
+		return agentMigrations
+	default:
+		return nil
 	}
-	return agentMigrations
 }
 
 func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error {
@@ -543,6 +647,95 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		if err := rows.Close(); err != nil || !sameStrings(columns, expected[table]) {
 			return fmt.Errorf("%w: unexpected columns in %s", ErrCorruptBackup, table)
 		}
+	}
+	return nil
+}
+
+type schemaObject struct {
+	ObjectType string
+	Name       string
+	TableName  string
+	SQL        string
+}
+
+func validateSchemaObjects(ctx context.Context, db *sql.DB, role string) error {
+	actual, err := readSchemaObjects(ctx, db)
+	if err != nil {
+		return fmt.Errorf("%w: inspect schema objects: %v", ErrCorruptBackup, err)
+	}
+	expected, err := expectedSchemaObjects(ctx, role)
+	if err != nil {
+		return fmt.Errorf("build expected %s schema: %w", role, err)
+	}
+	if len(actual) != len(expected) {
+		return fmt.Errorf("%w: unexpected schema object set", ErrCorruptBackup)
+	}
+	for index := range actual {
+		if actual[index] != expected[index] {
+			return fmt.Errorf("%w: unexpected schema object definition", ErrCorruptBackup)
+		}
+	}
+	return nil
+}
+
+func expectedSchemaObjects(ctx context.Context, role string) ([]schemaObject, error) {
+	migrations := migrationFS(role)
+	if migrations == nil {
+		return nil, fmt.Errorf("unknown database role %q", role)
+	}
+	loaded, err := loadMigrations(role, migrations)
+	if err != nil {
+		return nil, err
+	}
+	db, err := sql.Open(sqliteDriver, ":memory:")
+	if err != nil {
+		return nil, err
+	}
+	defer db.Close()
+	db.SetMaxOpenConns(1)
+	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
+		return nil, err
+	}
+	for _, migration := range loaded {
+		if _, err := db.ExecContext(ctx, string(migration.body)); err != nil {
+			return nil, fmt.Errorf("apply %s: %w", migration.name, err)
+		}
+	}
+	return readSchemaObjects(ctx, db)
+}
+
+func readSchemaObjects(ctx context.Context, db *sql.DB) ([]schemaObject, error) {
+	rows, err := db.QueryContext(ctx, `
+		SELECT type, name, tbl_name, COALESCE(sql, '')
+		FROM sqlite_schema
+		WHERE name IS NOT NULL
+		ORDER BY type, name, tbl_name`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	objects := []schemaObject{}
+	for rows.Next() {
+		var object schemaObject
+		if err := rows.Scan(&object.ObjectType, &object.Name, &object.TableName, &object.SQL); err != nil {
+			return nil, err
+		}
+		objects = append(objects, object)
+	}
+	return objects, rows.Err()
+}
+
+func validateForeignKeys(ctx context.Context, db *sql.DB) error {
+	rows, err := db.QueryContext(ctx, "PRAGMA foreign_key_check")
+	if err != nil {
+		return fmt.Errorf("%w: foreign key check: %v", ErrCorruptBackup, err)
+	}
+	defer rows.Close()
+	if rows.Next() {
+		return fmt.Errorf("%w: foreign key violation", ErrCorruptBackup)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("%w: foreign key check: %v", ErrCorruptBackup, err)
 	}
 	return nil
 }
@@ -588,7 +781,7 @@ func restore(ctx context.Context, destination, backup, role string) (resultErr e
 	if err := validateDatabase(ctx, temporary, role); err != nil {
 		return err
 	}
-	return os.Rename(temporary, destination)
+	return publishNoReplace(temporary, destination)
 }
 
 func copyAndSync(destination *os.File, source string) error {
@@ -607,4 +800,52 @@ func copyAndSync(destination *os.File, source string) error {
 		return err
 	}
 	return destination.Close()
+}
+
+func syncFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	return file.Sync()
+}
+
+// publishNoReplace atomically links a fully synced temporary file into its final
+// name. Link creation fails if another writer won the destination; unlike Rename,
+// it never overwrites that winner on Unix.
+func publishNoReplace(temporary, destination string) error {
+	if err := os.Link(temporary, destination); err != nil {
+		_ = os.Remove(temporary)
+		if errors.Is(err, fs.ErrExist) {
+			return fmt.Errorf("%w: %q", ErrDestinationExists, destination)
+		}
+		return fmt.Errorf("publish store file: %w", err)
+	}
+	directory := filepath.Dir(destination)
+	if err := syncDirectory(directory); err != nil {
+		_ = os.Remove(temporary)
+		return fmt.Errorf("sync published store directory: %w", err)
+	}
+	if err := os.Remove(temporary); err != nil {
+		return fmt.Errorf("remove published temporary store: %w", err)
+	}
+	if err := syncDirectory(directory); err != nil {
+		return fmt.Errorf("sync temporary removal: %w", err)
+	}
+	return nil
+}
+
+func readUintMetadata(ctx context.Context, q interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, key string) (uint64, error) {
+	var raw string
+	if err := q.QueryRowContext(ctx, "SELECT value FROM store_metadata WHERE key = ?", key).Scan(&raw); err != nil {
+		return 0, err
+	}
+	value, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid metadata %q: %w", key, err)
+	}
+	return value, nil
 }

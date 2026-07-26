@@ -103,13 +103,11 @@ tasks:
       - internal/store/migrations
     ci_targets: [lint, test, build]
     pr_order: 4
-    status: done
+    status: in_progress
     notes: >
-      Accepted locally: transactional WAL migrations and recovery fail-closed mode;
-      controller message, slot and desired-execution replay invariants; agent journal;
-      backup/restore role, schema and integrity validation; race, rollback, corruption,
-      wrong-role and secret-canary tests. `go test -race ./internal/store/...`,
-      `go vet ./...`, `just check`, and `./scripts/cross-build.sh` passed.
+      Hardening in progress after cross-platform CI exposed Windows URI handling
+      and Linux writer-contention failures. Hosted three-OS CI and restart recovery
+      evidence must pass before this task returns to done.
     acceptance:
       - Message, reservation, and desired execution commit atomically.
       - Crash-boundary integration tests recover without duplicate active executions.

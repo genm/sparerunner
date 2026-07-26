@@ -4,6 +4,7 @@ CREATE TABLE store_metadata (
 );
 
 INSERT INTO store_metadata (key, value) VALUES ('role', 'agent');
+INSERT INTO store_metadata (key, value) VALUES ('max_controller_epoch', '0');
 
 CREATE TABLE schema_migrations (
     version INTEGER PRIMARY KEY CHECK (version > 0),

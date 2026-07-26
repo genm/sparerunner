@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/genm/tewake/internal/domain"
+	sqlite "modernc.org/sqlite"
 )
 
 type Assignment struct {
@@ -23,9 +24,29 @@ type Assignment struct {
 type ScaleSetID uint64
 type MessageID uint64
 
+type SlotReservation struct {
+	Slot  domain.SlotKey
+	Owner domain.SlotOwner
+}
+
+type ProcessedMessage struct {
+	ScaleSetID        ScaleSetID
+	MessageID         MessageID
+	MessageDigest     string
+	ExecutionID       domain.ExecutionID
+	CreatedAtUnixNano int64
+}
+
+type ControllerSnapshot struct {
+	ControllerEpoch   domain.ControllerEpoch
+	Reservations      []SlotReservation
+	Executions        []domain.ExecutionSnapshot
+	ProcessedMessages []ProcessedMessage
+}
+
 func (a Assignment) Validate() error {
-	if a.ScaleSetID == 0 || a.MessageID == 0 {
-		return errors.New("assignment requires positive scale set and message IDs")
+	if a.ScaleSetID == 0 || a.MessageID == 0 || uint64(a.ScaleSetID) > maxSQLiteInteger || uint64(a.MessageID) > maxSQLiteInteger {
+		return errors.New("assignment requires positive scale set and message IDs within SQLite's signed INTEGER range")
 	}
 	if !isLowerSHA256(a.MessageDigest) {
 		return errors.New("assignment requires a lowercase SHA-256 message digest")
@@ -60,21 +81,25 @@ func (s *ControllerStore) Assign(ctx context.Context, assignment Assignment) (do
 	if err := assignment.Validate(); err != nil {
 		return domain.ExecutionSnapshot{}, false, err
 	}
-	// A reader becoming a writer can still receive SQLITE_BUSY under concurrent
-	// WAL transactions. Retrying the whole idempotent transaction preserves the
-	// database constraint as the final authority instead of leaking a lock race.
-	for attempt := 0; attempt < 4; attempt++ {
-		snapshot, replay, err := s.assignOnce(ctx, assignment)
-		if err == nil || !isBusy(err) || attempt == 3 {
+	// BEGIN IMMEDIATE serializes competing writer handles before replay reads.
+	// The outer budget covers one busy_timeout plus a retry, remains cancellable,
+	// and turns abnormal prolonged contention into a stable store error.
+	retryCtx, cancel := context.WithTimeout(ctx, 2*time.Duration(sqliteBusyTimeoutMilliseconds)*time.Millisecond)
+	defer cancel()
+	for attempt := 0; ; attempt++ {
+		snapshot, replay, err := s.assignOnce(retryCtx, assignment)
+		if err == nil || !isBusy(err) {
 			return snapshot, replay, err
 		}
 		select {
-		case <-ctx.Done():
-			return domain.ExecutionSnapshot{}, false, ctx.Err()
-		case <-time.After(time.Duration(attempt+1) * 10 * time.Millisecond):
+		case <-retryCtx.Done():
+			if ctx.Err() != nil {
+				return domain.ExecutionSnapshot{}, false, ctx.Err()
+			}
+			return domain.ExecutionSnapshot{}, false, fmt.Errorf("%w: %v", ErrStoreBusy, err)
+		case <-time.After(min(time.Duration(attempt+1)*25*time.Millisecond, 250*time.Millisecond)):
 		}
 	}
-	return domain.ExecutionSnapshot{}, false, errors.New("unreachable assignment retry")
 }
 
 func (s *ControllerStore) assignOnce(ctx context.Context, assignment Assignment) (domain.ExecutionSnapshot, bool, error) {
@@ -106,6 +131,11 @@ func (s *ControllerStore) assignOnce(ctx context.Context, assignment Assignment)
 }
 
 func isBusy(err error) bool {
+	var sqliteError *sqlite.Error
+	if errors.As(err, &sqliteError) {
+		// SQLite extended result codes preserve the primary code in the low byte.
+		return sqliteError.Code()&0xff == 5
+	}
 	return strings.Contains(strings.ToLower(err.Error()), "database is locked") || strings.Contains(strings.ToLower(err.Error()), "sqlite_busy")
 }
 
@@ -147,13 +177,16 @@ func (s *ControllerStore) AdvanceEpoch(ctx context.Context) (domain.ControllerEp
 		return 0, err
 	}
 	defer tx.Rollback()
-	var raw uint64
-	if err := tx.QueryRowContext(ctx, "SELECT value FROM store_metadata WHERE key = 'controller_epoch'").Scan(&raw); err != nil {
+	raw, err := readUintMetadata(ctx, tx, "controller_epoch")
+	if err != nil {
 		return 0, err
 	}
 	next, err := domain.NextControllerEpoch(domain.ControllerEpoch(raw))
 	if err != nil {
 		return 0, err
+	}
+	if uint64(next) > maxSQLiteInteger {
+		return 0, errors.New("controller epoch exceeds SQLite's signed INTEGER range")
 	}
 	if _, err := tx.ExecContext(ctx, "UPDATE store_metadata SET value = ? WHERE key = 'controller_epoch'", next); err != nil {
 		return 0, err
@@ -162,6 +195,96 @@ func (s *ControllerStore) AdvanceEpoch(ctx context.Context) (domain.ControllerEp
 		return 0, err
 	}
 	return next, nil
+}
+
+// Snapshot returns the complete non-secret desired-state and replay view needed
+// to reconcile a restarted controller. All rows are read in one transaction and
+// returned in stable identity order.
+func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, error) {
+	if err := s.requireReady(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	defer tx.Rollback()
+	rawEpoch, err := readUintMetadata(ctx, tx, "controller_epoch")
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	result := ControllerSnapshot{ControllerEpoch: domain.ControllerEpoch(rawEpoch)}
+
+	rows, err := tx.QueryContext(ctx, `SELECT node_id, slot_index, target_id, execution_id FROM slot_reservations ORDER BY node_id, slot_index`)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	for rows.Next() {
+		var nodeID, targetID, executionID string
+		var slotIndex int
+		if err := rows.Scan(&nodeID, &slotIndex, &targetID, &executionID); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		result.Reservations = append(result.Reservations, SlotReservation{
+			Slot:  domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slotIndex},
+			Owner: domain.SlotOwner{TargetID: domain.TargetID(targetID), ExecutionID: domain.ExecutionID(executionID)},
+		})
+	}
+	if err := rows.Close(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT id, target_id, node_id, slot_index, state FROM executions ORDER BY id`)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	for rows.Next() {
+		var id, targetID, nodeID, state string
+		var slotIndex int
+		if err := rows.Scan(&id, &targetID, &nodeID, &slotIndex, &state); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		execution := domain.ExecutionSnapshot{
+			ID:       domain.ExecutionID(id),
+			TargetID: domain.TargetID(targetID),
+			Slot:     domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slotIndex},
+			State:    domain.ExecutionState(state),
+		}
+		if err := execution.Validate(); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		result.Executions = append(result.Executions, execution)
+	}
+	if err := rows.Close(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano FROM processed_messages ORDER BY scale_set_id, message_id`)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	for rows.Next() {
+		var message ProcessedMessage
+		if err := rows.Scan(&message.ScaleSetID, &message.MessageID, &message.MessageDigest, &message.ExecutionID, &message.CreatedAtUnixNano); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		if message.ScaleSetID == 0 || message.MessageID == 0 || !isLowerSHA256(message.MessageDigest) || message.ExecutionID == "" {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored processed message failed validation")
+		}
+		result.ProcessedMessages = append(result.ProcessedMessages, message)
+	}
+	if err := rows.Close(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+	return result, nil
 }
 
 func (s *ControllerStore) Backup(ctx context.Context, destination string) error {

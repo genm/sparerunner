@@ -16,7 +16,8 @@ CREATE TABLE slot_reservations (
     slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
     target_id TEXT NOT NULL,
     execution_id TEXT NOT NULL UNIQUE,
-    PRIMARY KEY (node_id, slot_index)
+    PRIMARY KEY (node_id, slot_index),
+    UNIQUE (node_id, slot_index, target_id, execution_id)
 );
 
 CREATE TABLE executions (
@@ -26,7 +27,8 @@ CREATE TABLE executions (
     slot_index INTEGER NOT NULL CHECK (slot_index >= 0),
     state TEXT NOT NULL CHECK (state = 'reserved'),
     created_at_unix_nano INTEGER NOT NULL,
-    FOREIGN KEY (node_id, slot_index) REFERENCES slot_reservations(node_id, slot_index)
+    FOREIGN KEY (node_id, slot_index, target_id, id)
+        REFERENCES slot_reservations(node_id, slot_index, target_id, execution_id)
         ON DELETE RESTRICT ON UPDATE RESTRICT
 );
 
