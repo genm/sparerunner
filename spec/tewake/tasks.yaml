@@ -182,11 +182,13 @@ tasks:
       A unique Starting fence linearizes Start and Stop, with regression coverage for
       both stop-first and start-first races. Once JIT reaches Start, every failure
       stops containment and fully removes the credential-bearing root instead of
-      returning it to Prepared. Only the Cleaning CAS winner performs destructive
-      teardown, and terminal write-before/write-after failures are reconciled after
-      absence verification. Teardown persists a Cleaning intent before any destructive
-      side effect, so even a failed quarantine write cannot return the execution to
-      admission.
+      returning it to Prepared. External platform packages receive JIT only through
+      a synchronous one-shot delivery method and never a raw accessor. Only the
+      Cleaning CAS winner performs destructive teardown; it stops the exact fenced
+      containment before trusting workspace identity, then resolves terminal
+      write-before/write-after failures after absence verification. Teardown persists
+      a Cleaning intent before any destructive side effect, so even a failed
+      quarantine write cannot return the execution to admission.
       Restricted Linux-container evidence demonstrates a real setsid child escaping
       a bare process group, so the default Unix/Windows supervisors fail closed;
       cleanup failure writes a durable quarantine tombstone and successful prepared

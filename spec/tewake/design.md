@@ -319,11 +319,15 @@ the same workspace. Once absence is verified, a transient or ambiguous terminal
 journal write is resolved before the slot can become `Released` or `Failed`.
 
 The runtime is prepared before JIT generation. The Agent passes the opaque value to
-the official runner through its required `--jitconfig` argument; the official runner
-then writes the decoded settings, credentials, and RSA material into its root. After
-one job, the agent stops the entire process tree, removes all runner configuration
-material, runner diagnostics subject to explicit retention policy, workspace, and
-the execution directory, then verifies absence. Tewake does not claim that a Go
+the platform Supervisor through a synchronous one-shot callback with no raw
+accessor. The Supervisor consumes it only after the workspace and start fence are
+validated, then supplies it to the official runner through the required
+`--jitconfig` argument; the official runner writes the decoded settings,
+credentials, and RSA material into its root. After one job, the agent first fences
+and stops the entire process tree, even when the workspace identity is missing or
+mismatched. It only removes the runner configuration, diagnostics subject to
+explicit retention policy, workspace, and execution directory after the expected
+identity is re-observed, then verifies absence. Tewake does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
 

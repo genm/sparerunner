@@ -23,7 +23,9 @@ type testSupervisor struct {
 	startErr                    error
 	stopErr                     error
 	materializeOnStart          bool
+	deliverTwice                bool
 	workspaceBackend            string
+	jitDeliveries               int
 	prepared                    ContainmentRef
 	startRequest                StartRequest
 	observed                    []Process
@@ -64,15 +66,29 @@ func (s *testSupervisor) Start(ctx context.Context, request StartRequest) (Proce
 	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
 		return Process{Containment: request.Containment}, err
 	}
-	s.starts++
-	if s.materializeOnStart {
-		if err := os.MkdirAll(filepath.Join(request.Directory, "_work"), 0o700); err != nil {
-			return Process{Containment: request.Containment}, err
+	if err := request.DeliverJIT(func(value string) error {
+		if value == "" {
+			return errors.New("empty test JIT")
 		}
-		if err := os.WriteFile(filepath.Join(request.Directory, ".credentials"), []byte("credential-canary"), 0o600); err != nil {
+		s.jitDeliveries++
+		if s.materializeOnStart {
+			if err := os.MkdirAll(filepath.Join(request.Directory, "_work"), 0o700); err != nil {
+				return err
+			}
+			if err := os.WriteFile(filepath.Join(request.Directory, ".credentials"), []byte("credential-canary"), 0o600); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return Process{Containment: request.Containment}, err
+	}
+	if s.deliverTwice {
+		if err := request.DeliverJIT(func(string) error { return nil }); err != nil {
 			return Process{Containment: request.Containment}, err
 		}
 	}
+	s.starts++
 	if s.startErr != nil {
 		return Process{Containment: request.Containment}, s.startErr
 	}
@@ -220,6 +236,9 @@ func (supervisor *barrierSupervisor) Start(ctx context.Context, request StartReq
 	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
 		return Process{Containment: request.Containment}, err
 	}
+	if err := request.DeliverJIT(requireTestJIT); err != nil {
+		return Process{Containment: request.Containment}, err
+	}
 	supervisor.starts++
 	return Process{PID: supervisor.starts, Containment: request.Containment}, nil
 }
@@ -278,6 +297,9 @@ func (supervisor *fencedSupervisor) Start(ctx context.Context, request StartRequ
 		return Process{Containment: request.Containment}, ErrStartFenced
 	}
 	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
+		return Process{Containment: request.Containment}, err
+	}
+	if err := request.DeliverJIT(requireTestJIT); err != nil {
 		return Process{Containment: request.Containment}, err
 	}
 	supervisor.starts++
@@ -340,6 +362,10 @@ func (supervisor *startFirstSupervisor) Start(ctx context.Context, request Start
 		supervisor.mu.Unlock()
 		return Process{Containment: request.Containment}, err
 	}
+	if err := request.DeliverJIT(requireTestJIT); err != nil {
+		supervisor.mu.Unlock()
+		return Process{Containment: request.Containment}, err
+	}
 	supervisor.starts++
 	pid := supervisor.starts
 	supervisor.running[request.Containment.FenceToken] = true
@@ -378,6 +404,13 @@ func (cleaner *controlledCleaner) RemoveAndVerify(ctx context.Context, root *os.
 		return cleaner.removeErr
 	}
 	return cleaner.strongCleaner.RemoveAndVerify(ctx, root, name)
+}
+
+func requireTestJIT(value string) error {
+	if value == "" {
+		return errors.New("empty test JIT")
+	}
+	return nil
 }
 
 func TestJITCallbackReplayStopsSingleProcess(t *testing.T) {
@@ -434,6 +467,46 @@ func TestConcurrentJITCallbacksStillStartAtMostOneProcess(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("failed concurrent callback root remained: %v", statErr)
+	}
+}
+
+func TestSupervisorCannotConsumeOneJobJITTwice(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &testSupervisor{materializeOnStart: true, deliverTwice: true}
+	journal := NewMemoryJournal()
+	runtimeRoot := t.TempDir()
+	manager, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "jit-consumed-twice", Package: pkg}
+	state, err := manager.EnsureRunning(context.Background(), Start{
+		Preparation: request,
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	})
+	if !errors.Is(err, ErrStartFailed) || state.State != StateFailed {
+		t.Fatalf("EnsureRunning = %#v, %v", state, err)
+	}
+	if supervisor.jitDeliveries != 1 || supervisor.starts != 0 || supervisor.stops != 1 {
+		t.Fatalf(
+			"deliveries=%d starts=%d stops=%d",
+			supervisor.jitDeliveries,
+			supervisor.starts,
+			supervisor.stops,
+		)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("failed JIT root remained: %v", statErr)
 	}
 }
 
@@ -632,6 +705,58 @@ func TestSupervisorRechecksTypedWorkspaceIdentityAtExecBoundary(t *testing.T) {
 	}
 }
 
+func TestDestroyStopsRunningContainmentBeforeWorkspaceMismatchQuarantine(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	originalRef := WorkspaceRef{Backend: "test-v1", OwnerID: "test:original-workspace"}
+	cleaner := &sequencedWorkspaceCleaner{
+		prepareRef: originalRef,
+		observed: []WorkspaceRef{
+			originalRef,
+			originalRef,
+			originalRef,
+			{Backend: "test-v1", OwnerID: "test:replacement-workspace"},
+		},
+	}
+	supervisor := &testSupervisor{}
+	journal := NewMemoryJournal()
+	runtimeRoot := t.TempDir()
+	manager, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "destroy-running-workspace-mismatch", Package: pkg}
+	if running, err := manager.EnsureRunning(context.Background(), Start{
+		Preparation: request,
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	}); err != nil || !running.Running {
+		t.Fatalf("EnsureRunning = %#v, %v", running, err)
+	}
+	state, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if !errors.Is(err, ErrQuarantined) || !state.Quarantined {
+		t.Fatalf("Destroy = %#v, %v", state, err)
+	}
+	if supervisor.stops != 1 || len(supervisor.stopped) != 1 || supervisor.stopped[0].Containment.FenceToken == "" {
+		t.Fatalf("stopped = %#v", supervisor.stopped)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != StateCleanupFailed || !record.Tombstone {
+		t.Fatalf("quarantine record = %#v, found=%v, err=%v", record, found, loadErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); statErr != nil {
+		t.Fatalf("mismatched workspace was removed: %v", statErr)
+	}
+}
+
 func TestTwoManagersUseJournalCASToStartExactlyOneRunner(t *testing.T) {
 	content := t.TempDir()
 	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
@@ -772,6 +897,81 @@ func TestDestroyFencesInFlightStartBeforeReleasingWorkspace(t *testing.T) {
 	}
 	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("released workspace remained: %v", statErr)
+	}
+}
+
+func TestDestroyFencesInFlightStartBeforeWorkspaceMismatchQuarantine(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	originalRef := WorkspaceRef{Backend: "test-v1", OwnerID: "test:original-workspace"}
+	cleaner := &sequencedWorkspaceCleaner{
+		prepareRef: originalRef,
+		observed: []WorkspaceRef{
+			originalRef,
+			originalRef,
+			originalRef,
+			{Backend: "test-v1", OwnerID: "test:replacement-workspace"},
+		},
+	}
+	runtimeRoot := t.TempDir()
+	journal := NewMemoryJournal()
+	supervisor := newFencedSupervisor()
+	managerA, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	managerB, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "destroy-fences-mismatched-start", Package: pkg}
+	if _, err := managerA.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+
+	startResult := make(chan error, 1)
+	go func() {
+		_, startErr := managerA.EnsureRunning(context.Background(), Start{
+			Preparation: request,
+			JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+		})
+		startResult <- startErr
+	}()
+	<-supervisor.startEntered
+
+	state, err := managerB.Destroy(context.Background(), request.ExecutionID)
+	if !errors.Is(err, ErrQuarantined) || !state.Quarantined {
+		t.Fatalf("Destroy = %#v, %v", state, err)
+	}
+	close(supervisor.releaseStart)
+	if startErr := <-startResult; !errors.Is(startErr, ErrReconciliationRequired) {
+		t.Fatalf("in-flight EnsureRunning error = %v", startErr)
+	}
+	attempts, starts, stops := supervisor.counts()
+	if attempts != 1 || starts != 0 || stops != 2 {
+		t.Fatalf("start attempts=%d starts=%d stops=%d", attempts, starts, stops)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != StateCleanupFailed || !record.Tombstone {
+		t.Fatalf("quarantine record = %#v, found=%v, err=%v", record, found, loadErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); statErr != nil {
+		t.Fatalf("mismatched workspace was removed: %v", statErr)
 	}
 }
 

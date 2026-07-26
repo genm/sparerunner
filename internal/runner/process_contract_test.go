@@ -3,6 +3,7 @@ package runner
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -21,7 +22,7 @@ func TestStartRequestRedactsJITAcrossFormattingJSONAndStructuredLogs(t *testing.
 		Arguments:    []string{"--ephemeral"},
 		WorkspaceRef: WorkspaceRef{Backend: "test-v1", OwnerID: identityCanary},
 		Containment:  ContainmentRef{Backend: "test", OwnerID: "owner"},
-		jit:          jitArgument{value: jitCanary},
+		jit:          newJITArgument(jitCanary),
 	}
 	encoded, err := json.Marshal(request)
 	if err != nil {
@@ -34,5 +35,28 @@ func TestStartRequestRedactsJITAcrossFormattingJSONAndStructuredLogs(t *testing.
 		if strings.Contains(rendered, canary) {
 			t.Fatalf("StartRequest leaked runtime material %q: %s", canary, rendered)
 		}
+	}
+}
+
+func TestJITDeliveryIsOneShotEvenWhenConsumerFails(t *testing.T) {
+	request := StartRequest{jit: newJITArgument("one-job-jit.example.test")}
+	calls := 0
+	if err := request.DeliverJIT(func(value string) error {
+		calls++
+		if value != "one-job-jit.example.test" {
+			t.Fatalf("delivered JIT = %q", value)
+		}
+		return errors.New("injected consumer failure")
+	}); !errors.Is(err, ErrStartFailed) {
+		t.Fatalf("first DeliverJIT error = %v", err)
+	}
+	if err := request.DeliverJIT(func(string) error {
+		calls++
+		return nil
+	}); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("second DeliverJIT error = %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("delivery calls = %d", calls)
 	}
 }

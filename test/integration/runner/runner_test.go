@@ -79,6 +79,104 @@ func (strongTestCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name 
 	return nil
 }
 
+type packageBoundarySupervisor struct {
+	mu         sync.Mutex
+	fenced     map[string]bool
+	running    map[string]bool
+	starts     int
+	stops      int
+	deliveries int
+	jitDigest  string
+}
+
+func newPackageBoundarySupervisor() *packageBoundarySupervisor {
+	return &packageBoundarySupervisor{
+		fenced:  make(map[string]bool),
+		running: make(map[string]bool),
+	}
+}
+
+func (*packageBoundarySupervisor) StrongDescendantOwnership() bool { return true }
+func (*packageBoundarySupervisor) WorkspaceBackend() string        { return "test-v1" }
+func (*packageBoundarySupervisor) PrepareContainment(_ context.Context, executionID string) (runner.ContainmentRef, error) {
+	return runner.ContainmentRef{Backend: "external-test", OwnerID: "owner-" + executionID}, nil
+}
+func (supervisor *packageBoundarySupervisor) Start(ctx context.Context, request runner.StartRequest) (runner.Process, error) {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	token := request.Containment.FenceToken
+	if supervisor.fenced[token] {
+		return runner.Process{Containment: request.Containment}, runner.ErrStartFenced
+	}
+	if err := request.VerifyWorkspaceAtExec(ctx); err != nil {
+		return runner.Process{Containment: request.Containment}, err
+	}
+	if err := request.DeliverJIT(func(value string) error {
+		sum := sha256.Sum256([]byte(value))
+		supervisor.jitDigest = hex.EncodeToString(sum[:])
+		supervisor.deliveries++
+		return nil
+	}); err != nil {
+		return runner.Process{Containment: request.Containment}, err
+	}
+	supervisor.starts++
+	supervisor.running[token] = true
+	return runner.Process{PID: supervisor.starts, Containment: request.Containment}, nil
+}
+func (supervisor *packageBoundarySupervisor) Stop(_ context.Context, process runner.Process) error {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	token := process.Containment.FenceToken
+	supervisor.stops++
+	supervisor.fenced[token] = true
+	delete(supervisor.running, token)
+	return nil
+}
+func (supervisor *packageBoundarySupervisor) Alive(process runner.Process) (bool, error) {
+	supervisor.mu.Lock()
+	defer supervisor.mu.Unlock()
+	return supervisor.running[process.Containment.FenceToken], nil
+}
+
+func TestExternalPlatformSupervisorConsumesJITOnceWithoutRawAccessor(t *testing.T) {
+	content := fakeRunner(t)
+	runtimeRoot := t.TempDir()
+	journal := runner.NewMemoryJournal()
+	supervisor := newPackageBoundarySupervisor()
+	manager, err := runner.NewManager(runner.Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       fakeCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongTestCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := runner.Preparation{ExecutionID: "external-platform-jit", Package: currentPackage(t)}
+	const jitCanary = "external-platform-jit.example.test"
+	running, err := manager.EnsureRunning(context.Background(), runner.Start{
+		Preparation: request,
+		JIT:         fakeJIT{jitCanary},
+	})
+	if err != nil || !running.Running {
+		t.Fatalf("EnsureRunning = %#v, %v", running, err)
+	}
+	expected := fakeJIT{jitCanary}.Digest()
+	if supervisor.starts != 1 || supervisor.deliveries != 1 || supervisor.jitDigest != expected {
+		t.Fatalf(
+			"starts=%d deliveries=%d digest=%q",
+			supervisor.starts,
+			supervisor.deliveries,
+			supervisor.jitDigest,
+		)
+	}
+	released, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != runner.StateReleased || supervisor.stops != 1 {
+		t.Fatalf("Destroy = %#v, %v stops=%d", released, err, supervisor.stops)
+	}
+}
+
 func TestLifecycleIsIdempotentAndKillsDescendants(t *testing.T) {
 	if !runner.NewSupervisor().StrongDescendantOwnership() {
 		t.Skip("platform containment adapter is a later gate")

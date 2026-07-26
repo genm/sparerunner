@@ -336,6 +336,9 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		// so a buggy concurrent implementation still cannot start two listeners.
 		deliveryMu.Lock()
 		defer deliveryMu.Unlock()
+		if value == "" {
+			return ErrInvalidRequest
+		}
 		actual := sha256.Sum256([]byte(value))
 		if hex.EncodeToString(actual[:]) != jitDigest {
 			return ErrInvalidRequest
@@ -357,7 +360,7 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 			Arguments:    runnerArguments(request.DisableUpdate),
 			WorkspaceRef: record.WorkspaceRef,
 			Containment:  containment,
-			jit:          jitArgument{value: value},
+			jit:          newJITArgument(value),
 			verify: func(verifyCtx context.Context) error {
 				if !m.workspaceMatches(verifyCtx, record.Record) {
 					return ErrWorkspaceChanged
@@ -511,6 +514,17 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		return snapshot(record.Record), ErrReconciliationRequired
 	}
 	m.forget(record.ExecutionID)
+	// Fence and stop the process boundary before consulting a workspace that may
+	// have been replaced or made unreadable. Quarantine blocks future admission,
+	// but it is not a substitute for stopping an existing or in-flight runner.
+	if record.PID > 0 || validContainment(record.Containment) {
+		if !m.supervisor.StrongDescendantOwnership() || !validFencedContainment(record.Containment) {
+			return m.quarantine(ctx, record)
+		}
+		if err := m.supervisor.Stop(ctx, Process{PID: record.PID, Containment: record.Containment}); err != nil {
+			return m.quarantine(ctx, record)
+		}
+	}
 	if !m.cleaner.StrongWorkspaceOwnership() {
 		return m.quarantine(ctx, record)
 	}
@@ -522,14 +536,6 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	}
 	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
 		return m.quarantine(ctx, record)
-	}
-	if record.PID > 0 || validContainment(record.Containment) {
-		if !m.supervisor.StrongDescendantOwnership() || !validContainment(record.Containment) {
-			return m.quarantine(ctx, record)
-		}
-		if err := m.supervisor.Stop(ctx, Process{PID: record.PID, Containment: record.Containment}); err != nil {
-			return m.quarantine(ctx, record)
-		}
 	}
 	if err := m.removeRoot(ctx, record.RootName); err != nil {
 		return m.quarantine(ctx, record)
