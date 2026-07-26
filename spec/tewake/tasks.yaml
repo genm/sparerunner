@@ -135,7 +135,7 @@ tasks:
       - scripts/test-enrollment-cli-linux.sh
     ci_targets: [lint, test, build]
     pr_order: 5
-    status: in_progress
+    status: done
     notes:
       - "2026-07-26: Linux controller init/serve, pinned one-time enrollment, durable same-key response replay, authenticated WSS confirmation, agent reconnect, revocation interruption, strict protocol envelopes, and loopback-only management listener pass race tests."
       - "2026-07-26: The actual Linux CLI binaries pass a restricted-container init/serve/join/agent vertical test; join-code canaries are absent from agent state and ordinary logs. Native runner commands and OS service installation remain later tasks."
