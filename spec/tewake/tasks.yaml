@@ -157,16 +157,51 @@ tasks:
     paths:
       - internal/runner
       - test/integration/runner
+      - scripts/test-runner-linux.sh
     ci_targets: [lint, test, build]
     pr_order: 6
-    status: in_progress
-    notes:
-      - "2026-07-26: Package digest/cache, execution-root ownership, redacted JIT handoff, idempotent journal lifecycle, WorkspaceRef and ContainmentRef persistence, and fail-closed weak-platform admission are implemented on the task branch. Real platform containment and live process-tree evidence remain twk-007/twk-008/twk-009 gates."
+    status: done
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
       - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
       - Tewake never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
       - Cleanup verification failure prevents slot release.
+    notes: >
+      The core pins all six official runner archives, verifies exact size and
+      SHA-256, rejects unsafe archive members, publishes a single verified cache
+      winner under 32-way contention, and materializes each execution from the
+      exact still-open archive object that passed validation. Production cache
+      roots must already be absolute, private, service-owned directories with no
+      symlink component; unsafe or missing roots fail before download. The core
+      redacts JIT handoff values, persists workspace and platform-neutral containment
+      references before process start, and makes prepare/start/destroy replays
+      idempotent. A revisioned journal claims Preparing before root creation and
+      compare-and-swaps every transition; a two-Manager race proves exactly one
+      Starting winner, one JIT delivery, and one runner start. Per-revision mutation
+      tokens distinguish an acknowledged or write-then-error own commit from an
+      identical foreign mutation. Workspace identity is typed and re-observed on
+      replay, before JIT delivery, and through a runtime-only verifier called by the
+      platform start contract at exec; backend mismatch fails before preparation.
+      A unique Starting fence linearizes Start and Stop, with regression coverage for
+      both stop-first and start-first races. Once JIT reaches Start, every failure
+      stops containment and fully removes the credential-bearing root instead of
+      returning it to Prepared. External platform packages receive JIT only through
+      a synchronous one-shot delivery method and never a raw accessor. The core
+      enforces workspace verification before delivery, requires completed delivery
+      when Start returns, and revokes retained request copies; missing, reordered,
+      repeated, or asynchronous delivery fails closed. Only the Cleaning CAS winner
+      performs destructive teardown; it stops the exact fenced
+      containment before trusting workspace identity, then resolves terminal
+      write-before/write-after failures after absence verification. Teardown persists
+      a Cleaning intent before any destructive side effect, so even a failed
+      quarantine write cannot return the execution to admission.
+      Restricted Linux-container evidence demonstrates a real setsid child escaping
+      a bare process group, so the default Unix/Windows supervisors fail closed;
+      cleanup failure writes a durable quarantine tombstone and successful prepared
+      cleanup removes runner credential/workspace canaries.
+      SQLite-backed runner journal, dedicated OS identity, actual systemd/launchd/
+      Job Object ownership, live official-runner execution, and service/process
+      restart recovery remain twk-007/twk-008/twk-009/twk-011 platform gates.
 
   - id: twk-007
     title: Complete the Linux vertical slice

@@ -30,6 +30,9 @@ test:
 test-enrollment-cli-linux:
   ./scripts/test-enrollment-cli-linux.sh
 
+test-runner-linux:
+  ./scripts/test-runner-linux.sh
+
 build:
   mkdir -p bin
   go build -trimpath -o bin/tewake ./cmd/tewake
