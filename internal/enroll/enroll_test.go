@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -294,6 +295,39 @@ func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 	}
 	if due, err := RenewalDue(certificate, now, bytesReader{0}); err != nil || due {
 		t.Fatalf("renewal before jitter window = %v, %v", due, err)
+	}
+}
+
+func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows persistence is intentionally fail-closed pending twk009")
+	}
+	service, _, _ := testService(t)
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := directory + "/identity.pem"
+	if err := service.Identity.Save(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Identity.Save(path); err == nil {
+		t.Fatal("identity save clobbered existing file")
+	}
+	if err := os.Chmod(path, 0640); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadControllerIdentity(path); err == nil {
+		t.Fatal("shared identity mode accepted")
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("/tmp/not-tewake", path); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.Identity.Save(path); err == nil {
+		t.Fatal("symlink destination accepted")
 	}
 }
 

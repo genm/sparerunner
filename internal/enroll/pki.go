@@ -360,6 +360,9 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 }
 
 func atomicPrivateFile(path string, contents []byte) error {
+	if runtime.GOOS == "windows" {
+		return errors.New("Windows private material persistence requires the twk009 credential store")
+	}
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0700); err != nil {
 		return err
