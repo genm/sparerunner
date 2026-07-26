@@ -74,7 +74,11 @@ tasks:
       - internal/domain
     ci_targets: [lint, test, build]
     pr_order: 3
-    status: todo
+    status: done
+    notes: >
+      Accepted locally: randomized and concurrent slot-ledger properties, execution
+      transition immutability and terminal-state tests, and command replay mismatch
+      tests pass under `go test -race ./internal/domain`; `just check` passes.
     acceptance:
       - Property tests reject slot double ownership and capacity overflow.
       - Invalid execution transitions are rejected without mutating state.
