@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/genm/tewake/internal/enroll"
@@ -83,6 +84,7 @@ func (s *baseStore) requireReady() error { return s.Ready() }
 // It deliberately has no secret-bearing API.
 type ControllerStore struct {
 	*baseStore
+	revocationMu   sync.RWMutex
 	revocationHook func(enroll.Credential)
 }
 

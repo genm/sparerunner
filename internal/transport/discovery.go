@@ -67,19 +67,25 @@ func candidateFor(entry *mdns.ServiceEntry) (EndpointCandidate, bool) {
 	if entry == nil || entry.Port < 1 || entry.Port > 65535 {
 		return EndpointCandidate{}, false
 	}
-	var host net.IP
-	if entry.AddrV4 != nil {
-		host = entry.AddrV4
-	} else if entry.AddrV6 != nil {
-		host = entry.AddrV6
+	if address, ok := netip.AddrFromSlice(entry.AddrV4); ok && !address.IsUnspecified() {
+		return EndpointCandidate{Address: net.JoinHostPort(address.String(), strconv.Itoa(entry.Port))}, true
+	}
+	var ip net.IP
+	zone := ""
+	if entry.AddrV6IPAddr != nil {
+		ip, zone = entry.AddrV6IPAddr.IP, entry.AddrV6IPAddr.Zone
 	} else {
+		ip = entry.AddrV6
+	}
+	address, ok := netip.AddrFromSlice(ip)
+	if !ok || address.IsUnspecified() || (address.IsLinkLocalUnicast() && zone == "") {
 		return EndpointCandidate{}, false
 	}
-	address, ok := netip.AddrFromSlice(host)
-	if !ok || address.IsUnspecified() {
-		return EndpointCandidate{}, false
+	host := address.String()
+	if zone != "" {
+		host += "%" + zone
 	}
-	return EndpointCandidate{Address: net.JoinHostPort(address.String(), strconv.Itoa(entry.Port))}, true
+	return EndpointCandidate{Address: net.JoinHostPort(host, strconv.Itoa(entry.Port))}, true
 }
 
 func stableCandidates(candidates map[string]struct{}) []EndpointCandidate {

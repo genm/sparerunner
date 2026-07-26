@@ -91,7 +91,7 @@ func (store *ControllerStore) ReplayEnrollment(ctx context.Context, supplied enr
 	if err != nil {
 		return enroll.NodeRecord{}, err
 	}
-	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || storedEpoch != supplied.Epoch || revoked != 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
+	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || revoked != 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
 		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
 	}
 	return enroll.NodeRecord{NodeID: nodeID, Credential: enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: time.Unix(0, before), NotAfter: time.Unix(0, after)}, Revoked: revoked != 0, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: caDER}, nil
@@ -236,14 +236,22 @@ func (store *ControllerStore) RevokeNode(ctx context.Context, nodeID string) (en
 	if err := tx.Commit(); err != nil {
 		return enroll.Credential{}, err
 	}
-	if store.revocationHook != nil {
-		store.revocationHook(previous)
-	}
+	store.notifyRevocation(previous)
 	return credential, nil
 }
 
 func (store *ControllerStore) SetCredentialRevocationHook(hook func(enroll.Credential)) {
+	store.revocationMu.Lock()
+	defer store.revocationMu.Unlock()
 	store.revocationHook = hook
+}
+func (store *ControllerStore) notifyRevocation(credential enroll.Credential) {
+	store.revocationMu.RLock()
+	hook := store.revocationHook
+	store.revocationMu.RUnlock()
+	if hook != nil {
+		hook(credential)
+	}
 }
 
 func (store *ControllerStore) AuthorizeCredential(ctx context.Context, credential enroll.Credential, now time.Time) error {

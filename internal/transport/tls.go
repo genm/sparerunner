@@ -1,6 +1,7 @@
 package transport
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/sha256"
@@ -211,14 +212,18 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 	if handler == nil || authorizer == nil {
 		return errors.New("missing authenticated session dependency")
 	}
-	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 || len(request.TLS.VerifiedChains) == 0 {
+	if request.TLS == nil || len(request.TLS.PeerCertificates) == 0 || len(request.TLS.VerifiedChains) == 0 || len(request.TLS.VerifiedChains[0]) == 0 {
 		return errors.New("missing node client certificate")
 	}
-	nodeID, serial, epoch, err := enroll.NodeCredentialIdentity(request.TLS.PeerCertificates[0])
+	verifiedLeaf := request.TLS.VerifiedChains[0][0]
+	if !bytes.Equal(verifiedLeaf.Raw, request.TLS.PeerCertificates[0].Raw) {
+		return errors.New("verified client certificate does not match peer leaf")
+	}
+	nodeID, serial, epoch, err := enroll.NodeCredentialIdentity(verifiedLeaf)
 	if err != nil {
 		return err
 	}
-	credential := enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: request.TLS.PeerCertificates[0].NotBefore, NotAfter: request.TLS.PeerCertificates[0].NotAfter}
+	credential := enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: verifiedLeaf.NotBefore, NotAfter: verifiedLeaf.NotAfter}
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
 		return fmt.Errorf("node credential rejected: %w", err)
 	}
@@ -231,14 +236,17 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 	if connection.Subprotocol() != "tewake.v1" {
 		return errors.New("missing tewake.v1 subprotocol")
 	}
+	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
+	deregister := sessions.Register(session)
+	defer deregister()
+	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
+		return fmt.Errorf("node credential rejected after upgrade: %w", err)
+	}
 	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
 		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {
 			return fmt.Errorf("node enrollment finalization failed: %w", err)
 		}
 	}
-	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
-	deregister := sessions.Register(session)
-	defer deregister()
 	return handler(request.Context(), session)
 }
 
