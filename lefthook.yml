@@ -1,0 +1,14 @@
+pre-commit:
+  parallel: true
+  commands:
+    go-format:
+      glob: "*.go"
+      run: test -z "$(gofmt -l {staged_files})"
+    web-format:
+      glob: "web/**/*.{ts,tsx,js,jsx,json,css,md}"
+      run: pnpm --dir web format:check
+
+pre-push:
+  commands:
+    check:
+      run: just check

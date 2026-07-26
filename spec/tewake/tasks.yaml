@@ -1,0 +1,308 @@
+version: 1
+feature: tewake
+
+tasks:
+  - id: twk-001
+    title: Bootstrap the OSS repository and specification
+    type: foundation
+    description: >
+      Create the repository, Apache-2.0 license, project instructions, spec pack,
+      Go and Web scaffolds, reproducible toolchain, and cross-platform CI.
+    depends_on: []
+    paths:
+      - .github
+      - cmd
+      - internal/buildinfo
+      - spec/tewake
+      - web
+      - .mise.toml
+      - justfile
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 1
+    status: done
+    acceptance:
+      - The requirements, design, and task vocabulary are consistent and executable.
+      - `just check` succeeds and emits machine-readable Go and Vitest results.
+      - `tewake` and `tewake-agent` cross-compile for supported Linux, macOS, and Windows targets.
+      - Required CI always reports and uses only GitHub-hosted runners.
+
+  - id: twk-002
+    title: Prove and isolate the GitHub scale-set contract
+    type: integration
+    description: >
+      Pin the official scale-set client behind an internal adapter and prove App
+      Manifest, multiple installations, scale-set lifecycle, JIT generation,
+      message replay, and job pickup behavior in a private sandbox.
+    depends_on: [twk-001]
+    paths:
+      - internal/github
+      - test/contract/github
+      - docs/github-sandbox.md
+    ci_targets: [lint, test, build]
+    pr_order: 2
+    status: todo
+    acceptance:
+      - Domain code imports no actions/scaleset package directly.
+      - A recorded or live contract test proves commit-before-ack and redelivery semantics.
+      - JIT configuration is passed as a secret value and is absent from persistence and logs.
+      - Startup latency and GitHub's current pickup/requeue behavior are measured in the sandbox.
+
+  - id: twk-003
+    title: Implement domain states and invariants
+    type: backend
+    description: >
+      Define Node, Target, Runner Profile, Slot, Execution, command, epoch, and
+      transition contracts without infrastructure dependencies.
+    depends_on: [twk-001]
+    paths:
+      - internal/domain
+    ci_targets: [lint, test, build]
+    pr_order: 3
+    status: todo
+    acceptance:
+      - Property tests reject slot double ownership and capacity overflow.
+      - Invalid execution transitions are rejected without mutating state.
+      - A repeated command ID with a different payload is rejected.
+      - Terminal executions cannot return to an active state.
+
+  - id: twk-004
+    title: Implement crash-safe controller and agent stores
+    type: backend
+    description: >
+      Add versioned migrations, WAL SQLite stores, atomic message/reservation
+      persistence, controller epochs, agent journal, backup, and recovery mode.
+    depends_on: [twk-003]
+    paths:
+      - internal/store
+      - internal/store/migrations
+    ci_targets: [lint, test, build]
+    pr_order: 4
+    status: todo
+    acceptance:
+      - Message, reservation, and desired execution commit atomically.
+      - Crash-boundary integration tests recover without duplicate active executions.
+      - Migration failure leaves the original database intact and readiness degraded.
+      - Backup and restore exclude OS-keystore secrets.
+
+  - id: twk-005
+    title: Implement enrollment and authenticated agent transport
+    type: backend
+    description: >
+      Implement controller identity, fingerprinted one-time join codes, node key
+      generation, mDNS discovery, node certificates, outbound mTLS WebSockets, and
+      the versioned envelope.
+    depends_on: [twk-003, twk-004]
+    paths:
+      - internal/enroll
+      - internal/transport
+      - cmd/tewake
+      - cmd/tewake-agent
+    ci_targets: [lint, test, build]
+    pr_order: 5
+    status: todo
+    acceptance:
+      - A valid join enrolls one node and consumes the token atomically.
+      - Token races, replay, fake controller, revoked node, and protocol mismatch fail closed.
+      - The node private key never leaves the node or enters its journal.
+      - mDNS results are ignored until the pinned fingerprint is verified.
+
+  - id: twk-006
+    title: Implement the native runner lifecycle
+    type: backend
+    description: >
+      Implement package caching, runtime preparation, process supervision,
+      one-job execution, cleanup verification, and quarantine using a fake runner
+      before live GitHub integration.
+    depends_on: [twk-003, twk-005]
+    paths:
+      - internal/runner
+      - test/integration/runner
+    ci_targets: [lint, test, build]
+    pr_order: 6
+    status: todo
+    acceptance:
+      - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
+      - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
+      - JIT material is consumed in memory and absent after cleanup.
+      - Cleanup verification failure prevents slot release.
+
+  - id: twk-007
+    title: Complete the Linux vertical slice
+    type: platform
+    description: >
+      Add systemd service-account packaging and run the first real private GitHub
+      job through the controller, Linux agent, scale set, and native runner.
+    depends_on: [twk-002, twk-004, twk-005, twk-006]
+    paths:
+      - packaging/linux
+      - internal/platform/linux
+      - test/live/linux
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 7
+    status: todo
+    acceptance:
+      - One private job completes and its workspace and JIT material are absent afterward.
+      - Service restart leaves exactly one runner listener and one agent process.
+      - Killing after DB commit and before GitHub ack causes safe replay without duplicate execution.
+      - Cleanup failure places the Linux node in quarantine.
+
+  - id: twk-008
+    title: Add macOS service and runner support
+    type: platform
+    description: >
+      Implement launchd, Keychain secret storage, process supervision, sleep/reconnect,
+      and native runner behavior for macOS arm64 and x64.
+    depends_on: [twk-005, twk-006]
+    paths:
+      - packaging/macos
+      - internal/platform/macos
+      - test/live/macos
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 8
+    status: todo
+    acceptance:
+      - The agent reconnects after reboot and sleep without duplicate local runtimes.
+      - Keychain material is unavailable to the runner account and absent from diagnostics.
+      - arm64 and x64 package selection is correct.
+      - Process tree and workspace cleanup pass on a real macOS node.
+
+  - id: twk-009
+    title: Add Windows service and runner support
+    type: platform
+    description: >
+      Implement Windows Service recovery, DPAPI secret storage, Job Object process
+      ownership, package selection, and locked-file cleanup handling.
+    depends_on: [twk-005, twk-006]
+    paths:
+      - packaging/windows
+      - internal/platform/windows
+      - test/live/windows
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 9
+    status: todo
+    acceptance:
+      - The service reconnects after reboot and recovery without duplicate runtimes.
+      - DPAPI-protected material is inaccessible outside the service identity.
+      - Job Object cleanup terminates descendant processes.
+      - A locked workspace file causes quarantine instead of false success.
+
+  - id: twk-010
+    title: Implement node-affined scheduling
+    type: backend
+    description: >
+      Implement the concrete slot ledger, per-target grants, deterministic
+      round-robin, eligibility filters, stable node ranking, and capacity advertisement.
+    depends_on: [twk-002, twk-003, twk-004, twk-007]
+    paths:
+      - internal/scheduler
+    ci_targets: [lint, test, build]
+    pr_order: 10
+    status: todo
+    acceptance:
+      - Randomized multi-target histories never exceed node or fleet capacity.
+      - One free slot is never advertised to two targets concurrently.
+      - Deterministic input produces deterministic placement.
+      - Draining, quarantined, offline, and unreconciled nodes are ineligible.
+      - Round-robin serves every continuously eligible target.
+
+  - id: twk-011
+    title: Implement restart and disconnect reconciliation
+    type: backend
+    description: >
+      Reconcile controller epochs, per-node snapshots, agent disconnects, drain,
+      quarantine, cleanup tombstones, stale GitHub state, and runner update state.
+    depends_on: [twk-007, twk-010]
+    paths:
+      - internal/reconcile
+      - test/fault
+    ci_targets: [lint, test, build]
+    pr_order: 11
+    status: todo
+    acceptance:
+      - Controller and agent kill tests do not create duplicate runners.
+      - One offline node does not block restored capacity from reconciled nodes.
+      - GitHub 5xx retains last-known state and surfaces stale metadata.
+      - Cleanup tombstones survive restart and keep a node quarantined.
+
+  - id: twk-012
+    title: Implement the management API and configuration contract
+    type: backend
+    description: >
+      Define OpenAPI, generated clients, REST/SSE handlers, single-admin session,
+      CSRF and Origin enforcement, audit persistence, and non-secret YAML import/export.
+    depends_on: [twk-004, twk-010, twk-011]
+    paths:
+      - api
+      - internal/api
+      - internal/auth
+      - internal/config
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 12
+    status: todo
+    acceptance:
+      - Generated Go and TypeScript contracts match the checked OpenAPI source.
+      - Unauthenticated, unauthorized, and cross-origin mutations return 401 or 403.
+      - Stale configuration revisions fail with an optimistic conflict.
+      - YAML export and every response exclude all secret material.
+
+  - id: twk-013
+    title: Build the embedded management UI
+    type: frontend
+    description: >
+      Build Setup, Overview, Nodes, Targets, Runs, and Settings against the generated
+      client and embed the production output into the controller.
+    depends_on: [twk-012]
+    paths:
+      - web
+      - internal/webui
+    ci_targets: [lint, typecheck, test, build, e2e]
+    pr_order: 13
+    status: todo
+    acceptance:
+      - Playwright component fixtures cover loading, empty, running, offline, stale, permission error, and quarantined states.
+      - The operator can complete setup, target creation, join-code management, and node drain journeys.
+      - Component screenshots have no unresolved visual or accessibility defects.
+      - A release binary serves the same generated UI with no Node.js runtime.
+
+  - id: twk-014
+    title: Validate cross-platform security and release behavior
+    type: verification
+    description: >
+      Run real three-OS, two-installation E2E and publish the threat model, security
+      contract, support matrix, native-isolation limitations, and machine-readable evidence.
+    depends_on: [twk-008, twk-009, twk-011, twk-013]
+    paths:
+      - docs/security
+      - test/live
+      - output/release-evidence
+    ci_targets: [lint, test, build, e2e, deploy-check]
+    pr_order: 14
+    status: todo
+    acceptance:
+      - Private generic and OS-specific jobs route correctly across all three OSes.
+      - Public target creation and unsafe runner-group access fail closed.
+      - Secret canaries are absent from databases, journals, logs, metrics, UI, and diagnostics.
+      - Restart, disconnect, drain, stale-state, and quarantine scenarios pass with real agents.
+
+  - id: twk-015
+    title: Package and publish the first OSS release
+    type: release
+    description: >
+      Add installers, service manifests, GoReleaser, signed checksums, SBOM,
+      artifact attestations, upgrade/uninstall flows, and public release documentation.
+    depends_on: [twk-014]
+    paths:
+      - .github/workflows/release.yml
+      - packaging
+      - .goreleaser.yaml
+      - README.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+    ci_targets: [lint, test, build, e2e, deploy-check]
+    pr_order: 15
+    status: todo
+    acceptance:
+      - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
+      - Checksums, SBOM, provenance, and available platform signatures verify.
+      - Every release gate and real-fleet evidence check succeeds.
+      - The public release documents unsupported signing or platform combinations explicitly.

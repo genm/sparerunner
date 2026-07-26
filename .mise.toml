@@ -1,0 +1,11 @@
+[tools]
+go = "1.26.5"
+node = "24.15.0"
+pnpm = "10.33.0"
+just = "1.57.0"
+lefthook = "2.1.10"
+process-compose = "1.120.0"
+actionlint = "1.7.12"
+
+[settings]
+experimental = true

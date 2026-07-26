@@ -1,0 +1,19 @@
+version: "0.5"
+
+processes:
+  controller:
+    command: go run ./cmd/tewake serve --dev
+    availability:
+      restart: on_failure
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 7443
+        path: /healthz
+      initial_delay_seconds: 2
+      period_seconds: 2
+
+  web:
+    command: pnpm --dir web dev --host 127.0.0.1
+    availability:
+      restart: on_failure

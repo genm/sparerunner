@@ -1,0 +1,24 @@
+.DS_Store
+.idea/
+.vscode/
+
+# Go
+/bin/
+/coverage/
+*.test
+
+# Web
+/web/node_modules/
+/web/dist/
+/web/playwright-report/
+/web/test-results/
+*.tsbuildinfo
+
+# Local runtime state
+/.tewake/
+/data/
+/output/
+
+# Tool state
+/.mise.local.toml
+/.process-compose/
