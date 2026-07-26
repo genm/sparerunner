@@ -56,7 +56,9 @@ tasks:
       - docs/github-sandbox.md
     ci_targets: [lint, test, build]
     pr_order: 2
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-26: Local fake-contract coverage proves commit-before-ack, replay, acknowledgement-failure redelivery, and JIT redaction. Private GitHub sandbox acceptance remains pending."
     acceptance:
       - Domain code imports no actions/scaleset package directly.
       - A recorded or live contract test proves commit-before-ack and redelivery semantics.
