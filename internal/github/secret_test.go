@@ -2,6 +2,7 @@ package github
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -32,6 +33,20 @@ func TestJITConfigRedactsFormattingAndRejectsSerialization(t *testing.T) {
 	}
 	if delivered != rawJIT {
 		t.Fatalf("Deliver() value = %q, want opaque JIT passed only to recipient", delivered)
+	}
+}
+
+func TestJITConfigDeliverReturnsAdapterOwnedSecretSafeError(t *testing.T) {
+	const rawJIT = "jit-canary-not-for-errors"
+	const callbackCanary = "runner-error-including-jit-canary"
+	jit := newJITConfig(rawJIT, RunnerReference{ID: 42, Name: "runner-42", ScaleSetID: 7})
+
+	err := jit.Deliver(func(string) error { return errors.New(callbackCanary) })
+	if !errors.Is(err, ErrJITDelivery) {
+		t.Fatalf("Deliver() error = %v, want ErrJITDelivery", err)
+	}
+	if err == nil || strings.Contains(err.Error(), rawJIT) || strings.Contains(err.Error(), callbackCanary) {
+		t.Fatalf("Deliver() leaked callback or JIT material: %v", err)
 	}
 }
 

@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 type fakeResolver struct{ addresses []netip.Addr }
@@ -71,14 +73,55 @@ func TestVettedDialerRejectsPrivateAndDialsVettedIP(t *testing.T) {
 	}
 }
 
-func TestHardenedRetryClientLimitsBodyAndDoesNotRetryPOST(t *testing.T) {
+func TestVettedDialerFallsBackAcrossVettedAnswers(t *testing.T) {
+	firstStarted := make(chan struct{})
+	firstCancelled := make(chan struct{})
+	dial := func(ctx context.Context, _ string, address string) (net.Conn, error) {
+		if address == "140.82.112.6:443" {
+			close(firstStarted)
+			<-ctx.Done()
+			close(firstCancelled)
+			return nil, ctx.Err()
+		}
+		<-firstStarted
+		left, _ := net.Pipe()
+		return left, nil
+	}
+	dialer := vettedDialer(fakeResolver{addresses: []netip.Addr{
+		netip.MustParseAddr("140.82.112.6"),
+		netip.MustParseAddr("140.82.113.6"),
+	}}, dial)
+	connection, err := dialer(context.Background(), "tcp", "api.github.com:443")
+	if err != nil {
+		t.Fatalf("vettedDialer() error = %v", err)
+	}
+	defer connection.Close()
+	select {
+	case <-firstCancelled:
+	case <-time.After(time.Second):
+		t.Fatal("blocked first vetted dial was not cancelled after fallback succeeded")
+	}
+}
+
+type closeTrackingReadCloser struct {
+	io.Reader
+	closed atomic.Int32
+}
+
+func (b *closeTrackingReadCloser) Close() error {
+	b.closed.Add(1)
+	return nil
+}
+
+func TestHardenedRetryableStandardClientClosesOversizeResponse(t *testing.T) {
 	attempts := 0
+	body := &closeTrackingReadCloser{Reader: bytes.NewReader(make([]byte, maxPreviewResponseBody+1))}
 	client := newHardenedRetryableClientWith(fakeResolver{addresses: []netip.Addr{netip.MustParseAddr("140.82.112.6")}}, func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("not used") }, roundTripFunc(func(*http.Request) (*http.Response, error) {
 		attempts++
-		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(make([]byte, maxPreviewResponseBody+1)))}, nil
+		return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: body}, nil
 	}))
 	request, _ := http.NewRequest(http.MethodPost, "https://api.github.com/test", nil)
-	response, err := client.HTTPClient.Do(request)
+	response, err := client.StandardClient().Do(request)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,6 +132,50 @@ func TestHardenedRetryClientLimitsBodyAndDoesNotRetryPOST(t *testing.T) {
 	}
 	if attempts != 1 {
 		t.Fatalf("POST attempts = %d, want 1", attempts)
+	}
+	if body.closed.Load() != 1 {
+		t.Fatalf("oversize response close calls = %d, want 1", body.closed.Load())
+	}
+}
+
+func TestHardenedRetryableStandardClientDoesNotRetryMutations(t *testing.T) {
+	failures := []struct {
+		name        string
+		result      func() (*http.Response, error)
+		wantRequest bool
+	}{
+		{name: "5xx", wantRequest: true, result: func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusServiceUnavailable, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		}},
+		{name: "transport error", result: func() (*http.Response, error) { return nil, errors.New("transport canary") }},
+		{name: "redirect", result: func() (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusTemporaryRedirect, Header: http.Header{"Location": []string{"https://api.github.com/redirect"}}, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		}},
+	}
+	for _, method := range []string{http.MethodPost, http.MethodPatch, http.MethodDelete} {
+		for _, failure := range failures {
+			t.Run(method+" "+failure.name, func(t *testing.T) {
+				attempts := 0
+				client := newHardenedRetryableClientWith(fakeResolver{}, func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("not used") }, roundTripFunc(func(*http.Request) (*http.Response, error) {
+					attempts++
+					return failure.result()
+				}))
+				request, _ := http.NewRequest(method, "https://api.github.com/test", nil)
+				response, err := client.StandardClient().Do(request)
+				if response != nil && response.Body != nil {
+					response.Body.Close()
+				}
+				if attempts != 1 {
+					t.Fatalf("%s %s attempts = %d, want 1", method, failure.name, attempts)
+				}
+				if failure.wantRequest && err != nil {
+					t.Fatalf("%s %s request error = %v", method, failure.name, err)
+				}
+				if !failure.wantRequest && err == nil {
+					t.Fatalf("%s %s succeeded, want failure", method, failure.name)
+				}
+			})
+		}
 	}
 }
 

@@ -10,11 +10,13 @@ import (
 	"net/netip"
 	"net/url"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/go-retryablehttp"
 )
 
 const maxPreviewResponseBody = 1 << 20 // 1 MiB: JSON control-plane responses, never runner logs or artifacts.
+const maxVettedDialAttempts = 4        // Bound untrusted DNS fan-out while racing safe answers under the request context.
 
 var (
 	ErrUnsafeGitHubEndpoint = errors.New("unsafe GitHub endpoint")
@@ -94,13 +96,52 @@ func vettedDialer(r resolver, dial dialContext) dialContext {
 		if err != nil {
 			return nil, err
 		}
+		candidates := make([]netip.Addr, 0, min(len(addresses), maxVettedDialAttempts))
 		for _, address := range addresses {
-			if unsafeIP(address) {
+			if unsafeIP(address) || len(candidates) == maxVettedDialAttempts {
 				continue
 			}
-			return dial(ctx, network, net.JoinHostPort(address.String(), port))
+			candidates = append(candidates, address)
 		}
-		return nil, ErrUnsafeGitHubEndpoint
+		if len(candidates) == 0 {
+			return nil, ErrUnsafeGitHubEndpoint
+		}
+
+		// A valid DNS answer can still blackhole a TCP connect. Race a small,
+		// vetted set under the caller context so one stalled answer cannot prevent
+		// fallback; cancellation stops losing default-net.Dialer attempts.
+		raceContext, cancel := context.WithCancel(ctx)
+		defer cancel()
+		type dialResult struct {
+			connection net.Conn
+			err        error
+		}
+		results := make(chan dialResult)
+		for _, candidate := range candidates {
+			go func(candidate netip.Addr) {
+				connection, err := dial(raceContext, network, net.JoinHostPort(candidate.String(), port))
+				select {
+				case results <- dialResult{connection: connection, err: err}:
+				case <-raceContext.Done():
+					if connection != nil {
+						_ = connection.Close()
+					}
+				}
+			}(candidate)
+		}
+		var lastDialError error
+		for range candidates {
+			select {
+			case result := <-results:
+				if result.err == nil {
+					return result.connection, nil
+				}
+				lastDialError = result.err
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return nil, lastDialError
 	}
 }
 
@@ -144,6 +185,8 @@ var blockedSpecialPrefixes = []netip.Prefix{
 type boundedReadCloser struct {
 	io.ReadCloser
 	remaining int64
+	closeOnce sync.Once
+	closeErr  error
 }
 
 func (b *boundedReadCloser) Read(data []byte) (int, error) {
@@ -156,12 +199,16 @@ func (b *boundedReadCloser) Read(data []byte) (int, error) {
 	n, err := b.ReadCloser.Read(data)
 	b.remaining -= int64(n)
 	if b.remaining < 0 {
+		_ = b.Close()
 		return max(0, n-1), ErrResponseTooLarge
 	}
 	return n, err
 }
 
-func (b *boundedReadCloser) Close() error { return b.ReadCloser.Close() }
+func (b *boundedReadCloser) Close() error {
+	b.closeOnce.Do(func() { b.closeErr = b.ReadCloser.Close() })
+	return b.closeErr
+}
 
 func endpointError(endpoint *url.URL) error {
 	return fmt.Errorf("%w: %s", ErrUnsafeGitHubEndpoint, endpoint.Hostname())

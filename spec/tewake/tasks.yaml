@@ -62,6 +62,7 @@ tasks:
       - "2026-07-26: Adapter hardening now fail-closes GitHub.com target URLs and malformed scale-set statistics; official v0.4.0 label defaults are preserved. Live sandbox acceptance remains pending."
       - "2026-07-26: Session demand is durably handled before polling, capacity is supplied per poll, and non-idempotent upstream retries are disabled. Live sandbox acceptance remains pending."
       - "2026-07-26: Preview HTTP transport now binds credentials to vetted GitHub endpoints and IPs, disables proxies/retries, and bounds response bodies. Actions allowlist and payload bound require live sandbox measurement."
+      - "2026-07-26: Review hardening gives every message session an independent retryable transport, validates initial/refreshed owner and scale-set bindings, fails closed on mismatched lifecycle responses, and redacts JIT delivery callback errors. Race, retry, response-close, and DNS-fallback coverage pass locally; live sandbox acceptance remains pending."
     acceptance:
       - Domain code imports no actions/scaleset package directly.
       - A recorded or live contract test proves commit-before-ack and redelivery semantics.

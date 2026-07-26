@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/actions/scaleset"
+	"github.com/hashicorp/go-retryablehttp"
 )
 
 // AppClientConfig identifies a single GitHub App installation. A controller
@@ -27,7 +28,10 @@ type AppClientConfig struct {
 // Client is the only production implementation that imports the official
 // github.com/actions/scaleset v0.4.0 dependency.
 type Client struct {
-	client *scaleset.Client
+	client                    *scaleset.Client
+	newSessionRetryableClient func() *retryablehttp.Client
+	openMessageSession        func(context.Context, int, string, *retryablehttp.Client) (*scaleset.MessageSessionClient, error)
+	readMessageSession        func(*scaleset.MessageSessionClient) scaleset.RunnerScaleSetSession
 }
 
 // NewAppClient creates a low-level client for one GitHub App installation.
@@ -47,6 +51,7 @@ func NewAppClient(config AppClientConfig) (*Client, error) {
 		return nil, errors.New("GitHub App private key is required")
 	}
 
+	newRetryableClient := newHardenedRetryableClient
 	client, err := scaleset.NewClientWithGitHubApp(scaleset.ClientWithGitHubAppConfig{
 		GitHubConfigURL: config.GitHubConfigURL,
 		GitHubAppAuth: scaleset.GitHubAppAuth{
@@ -60,12 +65,12 @@ func NewAppClient(config AppClientConfig) (*Client, error) {
 			CommitSHA: config.CommitSHA,
 			Subsystem: config.Subsystem,
 		},
-	}, scaleset.WithRetryableHTTPClint(newHardenedRetryableClient()))
+	}, scaleset.WithRetryableHTTPClint(newRetryableClient()))
 	if err != nil {
 		return nil, fmt.Errorf("creating GitHub scale-set client: %w", err)
 	}
 
-	return &Client{client: client}, nil
+	return &Client{client: client, newSessionRetryableClient: newRetryableClient}, nil
 }
 
 // ScaleSet describes the lifecycle fields owned by the GitHub scale-set API.
@@ -98,7 +103,7 @@ func (c *Client) CreateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSe
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("validating created GitHub runner scale set: %w", err)
 	}
-	if err := validateExpectedScaleSet(converted, scaleSet); err != nil {
+	if err := validateExpectedScaleSet(converted, scaleSet, false); err != nil {
 		return ScaleSet{}, err
 	}
 	return converted, nil
@@ -146,7 +151,7 @@ func (c *Client) UpdateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSe
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("validating updated GitHub runner scale set: %w", err)
 	}
-	if err := validateExpectedScaleSet(converted, scaleSet); err != nil {
+	if err := validateExpectedScaleSet(converted, scaleSet, true); err != nil {
 		return ScaleSet{}, err
 	}
 	return converted, nil
@@ -214,8 +219,12 @@ func validateJITResult(result *scaleset.RunnerScaleSetJitRunnerConfig, request J
 
 // MessageSession is a low-level, per-scale-set GitHub message source.
 type MessageSession struct {
-	client     *scaleset.MessageSessionClient
-	scaleSetID ScaleSetID
+	client        *scaleset.MessageSessionClient
+	scaleSetID    ScaleSetID
+	owner         string
+	readSession   func() scaleset.RunnerScaleSetSession
+	deleteMessage func(context.Context, int) error
+	acquireJobs   func(context.Context, []int64) ([]int64, error)
 }
 
 var _ MessageSource = (*MessageSession)(nil)
@@ -230,8 +239,25 @@ func (c *Client) OpenMessageSession(ctx context.Context, scaleSetID ScaleSetID, 
 		return nil, errors.New("GitHub message session owner is required")
 	}
 
+	newRetryableClient := c.newSessionRetryableClient
+	if newRetryableClient == nil {
+		return nil, ErrInvalidSession
+	}
+	retryableClient := newRetryableClient()
+	if retryableClient == nil {
+		return nil, ErrInvalidSession
+	}
+	open := c.openMessageSession
+	if open == nil {
+		if c.client == nil {
+			return nil, ErrInvalidSession
+		}
+		open = func(ctx context.Context, id int, owner string, retryableClient *retryablehttp.Client) (*scaleset.MessageSessionClient, error) {
+			return c.client.MessageSessionClient(ctx, id, owner, scaleset.WithRetryMax(0), scaleset.WithRetryableHTTPClint(retryableClient))
+		}
+	}
 	session, err := contain(func() (*scaleset.MessageSessionClient, error) {
-		return c.client.MessageSessionClient(ctx, int(scaleSetID), owner, scaleset.WithRetryMax(0))
+		return open(ctx, int(scaleSetID), owner, retryableClient)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("opening GitHub message session: %w", err)
@@ -239,16 +265,26 @@ func (c *Client) OpenMessageSession(ctx context.Context, scaleSetID ScaleSetID, 
 	if session == nil {
 		return nil, ErrInvalidSession
 	}
-	return &MessageSession{client: session, scaleSetID: scaleSetID}, nil
+	readSession := c.readMessageSession
+	if readSession == nil {
+		readSession = func(session *scaleset.MessageSessionClient) scaleset.RunnerScaleSetSession { return session.Session() }
+	}
+	messageSession := &MessageSession{
+		client:      session,
+		scaleSetID:  scaleSetID,
+		owner:       owner,
+		readSession: func() scaleset.RunnerScaleSetSession { return readSession(session) },
+	}
+	if err := messageSession.validateBinding(); err != nil {
+		return nil, err
+	}
+	return messageSession, nil
 }
 
 // Snapshot returns only the values needed for durable demand handling. Queue
 // endpoint and bearer token remain encapsulated in the official client.
 func (s *MessageSession) Snapshot() (SessionSnapshot, error) {
-	if s.client == nil {
-		return SessionSnapshot{}, ErrInvalidSession
-	}
-	session, err := contain(func() (scaleset.RunnerScaleSetSession, error) { return s.client.Session(), nil })
+	session, err := s.currentSession()
 	if err != nil {
 		return SessionSnapshot{}, err
 	}
@@ -264,11 +300,20 @@ func (s *MessageSession) Poll(ctx context.Context, lastAcknowledgedMessageID, ma
 	if maxCapacity < 0 {
 		return nil, ErrInvalidCapacity
 	}
+	if s == nil || s.client == nil {
+		return nil, ErrInvalidSession
+	}
+	if err := s.validateBinding(); err != nil {
+		return nil, err
+	}
 	message, err := contain(func() (*scaleset.RunnerScaleSetMessage, error) {
 		return s.client.GetMessage(ctx, lastAcknowledgedMessageID, maxCapacity)
 	})
 	if err != nil {
 		return nil, fmt.Errorf("getting GitHub scale-set message: %w", err)
+	}
+	if err := s.validateBinding(); err != nil {
+		return nil, err
 	}
 	if message == nil {
 		return nil, nil
@@ -286,11 +331,21 @@ func (s *MessageSession) DeleteMessage(ctx context.Context, messageID int) error
 	if messageID <= 0 {
 		return ErrInvalidMessageID
 	}
-	_, err := contain(func() (struct{}, error) { return struct{}{}, s.client.DeleteMessage(ctx, messageID) })
+	if s == nil || s.client == nil {
+		return ErrInvalidSession
+	}
+	if err := s.validateBinding(); err != nil {
+		return err
+	}
+	deleteMessage := s.deleteMessage
+	if deleteMessage == nil {
+		deleteMessage = s.client.DeleteMessage
+	}
+	_, err := contain(func() (struct{}, error) { return struct{}{}, deleteMessage(ctx, messageID) })
 	if err != nil {
 		return fmt.Errorf("deleting GitHub scale-set message: %w", err)
 	}
-	return nil
+	return s.validateBinding()
 }
 
 // AcquireJobs exposes the distinct low-level job acquisition operation. It is
@@ -300,9 +355,22 @@ func (s *MessageSession) AcquireJobs(ctx context.Context, requestIDs []int64) ([
 	if err := validateAcquireIDs(requestIDs); err != nil {
 		return nil, err
 	}
-	ids, err := contain(func() ([]int64, error) { return s.client.AcquireJobs(ctx, requestIDs) })
+	if s == nil || s.client == nil {
+		return nil, ErrInvalidSession
+	}
+	if err := s.validateBinding(); err != nil {
+		return nil, err
+	}
+	acquireJobs := s.acquireJobs
+	if acquireJobs == nil {
+		acquireJobs = s.client.AcquireJobs
+	}
+	ids, err := contain(func() ([]int64, error) { return acquireJobs(ctx, requestIDs) })
 	if err != nil {
 		return nil, fmt.Errorf("acquiring GitHub scale-set jobs: %w", err)
+	}
+	if err := s.validateBinding(); err != nil {
+		return nil, err
 	}
 	if err := validateAcquireResponse(requestIDs, ids); err != nil {
 		return nil, err
@@ -349,6 +417,9 @@ func validateAcquireResponse(requested, received []int64) error {
 
 // Close ends the GitHub message session.
 func (s *MessageSession) Close(ctx context.Context) error {
+	if s == nil || s.client == nil {
+		return ErrInvalidSession
+	}
 	_, err := contain(func() (struct{}, error) { return struct{}{}, s.client.Close(ctx) })
 	if err != nil {
 		return fmt.Errorf("closing GitHub message session: %w", err)
@@ -435,8 +506,14 @@ func validateRequestedScaleSet(scaleSet ScaleSet, requireID bool) error {
 	return nil
 }
 
-func validateExpectedScaleSet(actual, requested ScaleSet) error {
+func validateExpectedScaleSet(actual, requested ScaleSet, requireExactID bool) error {
+	if requireExactID && actual.ID != requested.ID {
+		return ErrInvalidPreviewResponse
+	}
 	if actual.Name != requested.Name || actual.RunnerGroupID != requested.RunnerGroupID {
+		return ErrInvalidPreviewResponse
+	}
+	if actual.DisableUpdate != requested.DisableUpdate {
 		return ErrInvalidPreviewResponse
 	}
 	if len(actual.Labels) != len(requested.Labels) {
@@ -448,6 +525,36 @@ func validateExpectedScaleSet(actual, requested ScaleSet) error {
 		}
 	}
 	return nil
+}
+
+func validateSessionBinding(session scaleset.RunnerScaleSetSession, scaleSetID ScaleSetID, owner string) error {
+	if scaleSetID <= 0 || owner == "" || session.RunnerScaleSet == nil || ScaleSetID(session.RunnerScaleSet.ID) != scaleSetID || session.OwnerName != owner {
+		return ErrInvalidSession
+	}
+	return nil
+}
+
+func (s *MessageSession) currentSession() (scaleset.RunnerScaleSetSession, error) {
+	if s == nil || s.client == nil {
+		return scaleset.RunnerScaleSetSession{}, ErrInvalidSession
+	}
+	readSession := s.readSession
+	if readSession == nil {
+		readSession = s.client.Session
+	}
+	session, err := contain(func() (scaleset.RunnerScaleSetSession, error) { return readSession(), nil })
+	if err != nil {
+		return scaleset.RunnerScaleSetSession{}, err
+	}
+	if err := validateSessionBinding(session, s.scaleSetID, s.owner); err != nil {
+		return scaleset.RunnerScaleSetSession{}, err
+	}
+	return session, nil
+}
+
+func (s *MessageSession) validateBinding() error {
+	_, err := s.currentSession()
+	return err
 }
 
 func fromMessage(scaleSetID ScaleSetID, message *scaleset.RunnerScaleSetMessage) (*Message, error) {

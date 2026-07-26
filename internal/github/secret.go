@@ -9,6 +9,7 @@ import (
 )
 
 var ErrSecretSerialization = errors.New("GitHub secret values must not be serialized")
+var ErrJITDelivery = errors.New("GitHub JIT delivery failed")
 
 // AppPrivateKey keeps GitHub App key material opaque at the adapter boundary.
 // It is constructed from a credential-store read and is never suitable for
@@ -71,9 +72,14 @@ func (c JITConfig) Digest() string {
 // all official runner material created after this handoff.
 func (c JITConfig) Deliver(deliver func(value string) error) error {
 	if deliver == nil {
-		return errors.New("JIT delivery callback is required")
+		return ErrJITDelivery
 	}
-	return deliver(c.encoded)
+	if err := deliver(c.encoded); err != nil {
+		// The callback may include runner output or JIT material in its error.
+		// Preserve failure classification without propagating that untrusted text.
+		return ErrJITDelivery
+	}
+	return nil
 }
 
 func (c JITConfig) String() string   { return "github.JITConfig(redacted)" }
