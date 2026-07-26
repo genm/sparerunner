@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
+	"strings"
 
 	"github.com/actions/scaleset"
 )
@@ -32,8 +34,8 @@ type Client struct {
 // PrivateKey remains opaque to callers and is passed directly to the official
 // client without being logged or persisted by this package.
 func NewAppClient(config AppClientConfig) (*Client, error) {
-	if config.GitHubConfigURL == "" {
-		return nil, errors.New("GitHub config URL is required")
+	if err := validateGitHubConfigURL(config.GitHubConfigURL); err != nil {
+		return nil, err
 	}
 	if config.ClientID == "" {
 		return nil, errors.New("GitHub App client ID is required")
@@ -73,7 +75,9 @@ type ScaleSet struct {
 	RunnerGroupID int
 	Labels        []string
 	DisableUpdate bool
-	Statistics    Statistics
+	// Statistics is nil when GitHub did not include statistics. Unknown state is
+	// deliberately distinct from an observed all-zero healthy scale set.
+	Statistics *Statistics
 }
 
 // CreateScaleSet creates one scale set in this Client's installation.
@@ -82,7 +86,11 @@ func (c *Client) CreateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSe
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("creating GitHub runner scale set: %w", err)
 	}
-	return fromScaleSet(*created), nil
+	converted, err := fromScaleSet(*created)
+	if err != nil {
+		return ScaleSet{}, fmt.Errorf("validating created GitHub runner scale set: %w", err)
+	}
+	return converted, nil
 }
 
 // GetScaleSet returns nil when GitHub has no scale set with that name in the
@@ -96,7 +104,10 @@ func (c *Client) GetScaleSet(ctx context.Context, runnerGroupID int, name string
 		return nil, nil
 	}
 
-	converted := fromScaleSet(*result)
+	converted, err := fromScaleSet(*result)
+	if err != nil {
+		return nil, fmt.Errorf("validating GitHub runner scale set: %w", err)
+	}
 	return &converted, nil
 }
 
@@ -109,7 +120,11 @@ func (c *Client) UpdateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSe
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("updating GitHub runner scale set: %w", err)
 	}
-	return fromScaleSet(*updated), nil
+	converted, err := fromScaleSet(*updated)
+	if err != nil {
+		return ScaleSet{}, fmt.Errorf("validating updated GitHub runner scale set: %w", err)
+	}
+	return converted, nil
 }
 
 // DeleteScaleSet deletes one GitHub scale set by immutable ID.
@@ -199,7 +214,11 @@ func (s *MessageSession) Poll(ctx context.Context, lastAcknowledgedMessageID, ma
 	if message == nil {
 		return nil, nil
 	}
-	return fromMessage(s.scaleSetID, message), nil
+	converted, err := fromMessage(s.scaleSetID, message)
+	if err != nil {
+		return nil, fmt.Errorf("validating GitHub scale-set message: %w", err)
+	}
+	return converted, nil
 }
 
 // DeleteMessage implements MessageSource with the pinned v0.4.0 acknowledgement
@@ -236,7 +255,9 @@ func (s *MessageSession) Close(ctx context.Context) error {
 func toScaleSet(scaleSet ScaleSet) *scaleset.RunnerScaleSet {
 	labels := make([]scaleset.Label, 0, len(scaleSet.Labels))
 	for _, label := range scaleSet.Labels {
-		labels = append(labels, scaleset.Label{Name: label, Type: "System"})
+		// v0.4.0's example builds labels with Name only; its CreateRunnerScaleSet
+		// applies the upstream default Type rather than requiring callers to set it.
+		labels = append(labels, scaleset.Label{Name: label})
 	}
 	return &scaleset.RunnerScaleSet{
 		ID:            int(scaleSet.ID),
@@ -247,7 +268,11 @@ func toScaleSet(scaleSet ScaleSet) *scaleset.RunnerScaleSet {
 	}
 }
 
-func fromScaleSet(scaleSet scaleset.RunnerScaleSet) ScaleSet {
+func fromScaleSet(scaleSet scaleset.RunnerScaleSet) (ScaleSet, error) {
+	statistics, err := fromStatistics(scaleSet.Statistics)
+	if err != nil {
+		return ScaleSet{}, err
+	}
 	labels := make([]string, 0, len(scaleSet.Labels))
 	for _, label := range scaleSet.Labels {
 		labels = append(labels, label.Name)
@@ -258,15 +283,25 @@ func fromScaleSet(scaleSet scaleset.RunnerScaleSet) ScaleSet {
 		RunnerGroupID: scaleSet.RunnerGroupID,
 		Labels:        labels,
 		DisableUpdate: scaleSet.RunnerSetting.DisableUpdate,
-		Statistics:    fromStatistics(scaleSet.Statistics),
-	}
+		Statistics:    statistics,
+	}, nil
 }
 
-func fromMessage(scaleSetID ScaleSetID, message *scaleset.RunnerScaleSetMessage) *Message {
+func fromMessage(scaleSetID ScaleSetID, message *scaleset.RunnerScaleSetMessage) (*Message, error) {
+	if message == nil {
+		return nil, errors.New("GitHub scale-set message is required")
+	}
+	statistics, err := fromStatistics(message.Statistics)
+	if err != nil {
+		return nil, err
+	}
+	if statistics == nil {
+		return nil, ErrInvalidStatistics
+	}
 	result := &Message{
 		ScaleSetID: scaleSetID,
 		ID:         message.MessageID,
-		Statistics: fromStatistics(message.Statistics),
+		Statistics: *statistics,
 	}
 	for _, job := range message.JobAvailableMessages {
 		result.Jobs = append(result.Jobs, fromJobMessage(MessageTypeJobAvailable, job.JobMessageBase, 0, "", ""))
@@ -280,7 +315,7 @@ func fromMessage(scaleSetID ScaleSetID, message *scaleset.RunnerScaleSetMessage)
 	for _, job := range message.JobCompletedMessages {
 		result.Jobs = append(result.Jobs, fromJobMessage(MessageTypeJobCompleted, job.JobMessageBase, job.RunnerID, job.RunnerName, job.Result))
 	}
-	return result
+	return result, nil
 }
 
 func fromJobMessage(messageType MessageType, job scaleset.JobMessageBase, runnerID int, runnerName, result string) JobMessage {
@@ -297,11 +332,11 @@ func fromJobMessage(messageType MessageType, job scaleset.JobMessageBase, runner
 	}
 }
 
-func fromStatistics(statistics *scaleset.RunnerScaleSetStatistic) Statistics {
+func fromStatistics(statistics *scaleset.RunnerScaleSetStatistic) (*Statistics, error) {
 	if statistics == nil {
-		return Statistics{}
+		return nil, nil
 	}
-	return Statistics{
+	converted := Statistics{
 		TotalAvailableJobs:     statistics.TotalAvailableJobs,
 		TotalAcquiredJobs:      statistics.TotalAcquiredJobs,
 		TotalAssignedJobs:      statistics.TotalAssignedJobs,
@@ -310,4 +345,83 @@ func fromStatistics(statistics *scaleset.RunnerScaleSetStatistic) Statistics {
 		TotalBusyRunners:       statistics.TotalBusyRunners,
 		TotalIdleRunners:       statistics.TotalIdleRunners,
 	}
+	if err := validateStatistics(converted); err != nil {
+		return nil, err
+	}
+	return &converted, nil
+}
+
+func validateStatistics(statistics Statistics) error {
+	values := []int{
+		statistics.TotalAvailableJobs,
+		statistics.TotalAcquiredJobs,
+		statistics.TotalAssignedJobs,
+		statistics.TotalRunningJobs,
+		statistics.TotalRegisteredRunners,
+		statistics.TotalBusyRunners,
+		statistics.TotalIdleRunners,
+	}
+	for _, value := range values {
+		if value < 0 {
+			return ErrInvalidStatistics
+		}
+	}
+	if statistics.TotalAssignedJobs < statistics.TotalRunningJobs {
+		return ErrInvalidStatistics
+	}
+	return nil
+}
+
+func validateGitHubConfigURL(configURL string) error {
+	if configURL == "" {
+		return errors.New("GitHub config URL is required")
+	}
+	parsed, err := url.ParseRequestURI(configURL)
+	if err != nil {
+		return fmt.Errorf("invalid GitHub config URL: %w", err)
+	}
+	if parsed.Scheme != "https" {
+		return errors.New("GitHub config URL must use https")
+	}
+	if !strings.EqualFold(parsed.Hostname(), "github.com") || parsed.Host != parsed.Hostname() {
+		return errors.New("GitHub config URL host must be github.com without a port")
+	}
+	if parsed.User != nil {
+		return errors.New("GitHub config URL must not include userinfo")
+	}
+	if parsed.RawQuery != "" || parsed.ForceQuery {
+		return errors.New("GitHub config URL must not include a query")
+	}
+	if parsed.Fragment != "" || strings.Contains(configURL, "#") {
+		return errors.New("GitHub config URL must not include a fragment")
+	}
+	if parsed.Opaque != "" {
+		return errors.New("GitHub config URL must be hierarchical")
+	}
+
+	parts := strings.Split(strings.Trim(parsed.EscapedPath(), "/"), "/")
+	if len(parts) < 1 || len(parts) > 2 || parts[0] == "" {
+		return errors.New("GitHub config URL path must identify an organization or repository")
+	}
+	for _, part := range parts {
+		if !isGitHubPathPart(part) {
+			return errors.New("GitHub config URL path must identify an organization or repository")
+		}
+	}
+	return nil
+}
+
+func isGitHubPathPart(part string) bool {
+	if part == "" || part == "." || part == ".." {
+		return false
+	}
+	for _, character := range part {
+		if !((character >= 'a' && character <= 'z') ||
+			(character >= 'A' && character <= 'Z') ||
+			(character >= '0' && character <= '9') ||
+			character == '-' || character == '_' || character == '.') {
+			return false
+		}
+	}
+	return true
 }

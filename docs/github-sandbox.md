@@ -7,6 +7,17 @@ Status: local fake-contract coverage is complete; live GitHub sandbox acceptance
 adapter client per GitHub App installation; it does not share authentication,
 message sessions, or target state between installations.
 
+The adapter accepts only `https://github.com/{organization}` or
+`https://github.com/{organization}/{repository}` configuration URLs. It rejects
+ports, userinfo, query strings, fragments, encoded path separators, and every
+other host before constructing the official client, so GitHub configuration
+cannot become an SSRF or local-endpoint transport.
+
+For labels, the adapter sends `scaleset.Label{Name: ...}` with an empty Type.
+This follows the pinned v0.4.0 primary source:
+`examples/dockerscaleset/config.go` builds Name-only labels, while
+`Client.CreateRunnerScaleSet` applies the upstream default Type internally.
+
 ## Local contract already exercised
 
 `go test ./test/contract/github ./internal/github` uses fakes to prove the

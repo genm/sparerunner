@@ -19,6 +19,7 @@ var (
 	ErrInvalidScaleSetID = errors.New("github scale set ID must be positive")
 	ErrInvalidMessageID  = errors.New("github message ID must be positive")
 	ErrInvalidCapacity   = errors.New("github max capacity must not be negative")
+	ErrInvalidStatistics = errors.New("github scale-set statistics are missing or inconsistent")
 	ErrNilMessageSource  = errors.New("github message source is required")
 	ErrNilMessageHandler = errors.New("github durable message handler is required")
 )
@@ -160,6 +161,10 @@ func (p *Poller) PollOnce(ctx context.Context) (*Message, error) {
 	if message.ID <= 0 {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "message_id"))
 		return nil, ErrInvalidMessageID
+	}
+	if err := validateStatistics(message.Statistics); err != nil {
+		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "statistics"))
+		return nil, err
 	}
 
 	if err := p.handler.CommitMessage(ctx, *message); err != nil {

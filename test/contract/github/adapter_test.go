@@ -85,6 +85,36 @@ func TestPollerRetriesRedeliveryAfterAcknowledgementFailure(t *testing.T) {
 	}
 }
 
+func TestPollerDoesNotCommitOrAcknowledgeInvalidStatistics(t *testing.T) {
+	message := githubadapter.Message{
+		ScaleSetID: 9,
+		ID:         101,
+		Statistics: githubadapter.Statistics{
+			TotalAssignedJobs: 1,
+			TotalRunningJobs:  2,
+		},
+	}
+	source := &fakeMessageSource{messages: []*githubadapter.Message{&message}}
+	handler := &durableFakeHandler{source: source}
+	poller := newPoller(t, source, handler)
+
+	if _, err := poller.PollOnce(context.Background()); !errors.Is(err, githubadapter.ErrInvalidStatistics) {
+		t.Fatalf("PollOnce() error = %v, want ErrInvalidStatistics", err)
+	}
+	if got := source.acks; len(got) != 0 {
+		t.Fatalf("acknowledgements after invalid statistics = %v, want none", got)
+	}
+	if got := handler.createdExecutions; got != 0 {
+		t.Fatalf("created executions = %d, want no durable commit", got)
+	}
+	if got := poller.LastAcknowledgedMessageID(); got != 0 {
+		t.Fatalf("cursor after invalid statistics = %d, want 0", got)
+	}
+	if want := []string{"poll:0"}; !slices.Equal(source.events, want) {
+		t.Fatalf("events = %v, want %v", source.events, want)
+	}
+}
+
 func newPoller(t *testing.T, source *fakeMessageSource, handler *durableFakeHandler) *githubadapter.Poller {
 	t.Helper()
 	poller, err := githubadapter.NewPoller(source, handler, 4, slog.New(slog.DiscardHandler))
