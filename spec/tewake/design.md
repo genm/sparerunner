@@ -181,9 +181,14 @@ order remains explicit.
 6. Prepare the runtime and generate JIT configuration only when the selected agent is
    ready.
 
-The JIT body is never stored; only a digest and delivery state are retained. GitHub's
-current assigned-job total is the scaling signal rather than summing a potentially
-truncated message list.
+Tewake never writes the JIT body to Controller SQLite, the Agent journal, logs, or
+diagnostics; only a digest and delivery state are retained. The official runner's
+current interface receives the body through `--jitconfig`, decodes it, and writes
+configuration and credential files below the runner root. The entire
+execution-specific runner root is therefore secret-bearing runtime material whose
+verified removal is part of correctness, rather than an in-memory-only guarantee.
+GitHub's current assigned-job total is the scaling signal rather than summing a
+potentially truncated message list.
 
 The adapter preserves last-known data on transient errors and exposes staleness
 metadata. It never converts an external 5xx into an empty successful snapshot.
@@ -209,6 +214,15 @@ mDNS `_tewake._tcp.local` provides endpoint candidates only. Before sending the 
 secret, the agent validates the fingerprint from the code. The agent generates its
 key locally; the controller certificate binds immutable `NodeID` with `clientAuth`
 usage. After enrollment, the node only creates outbound WSS+mTLS sessions.
+
+The self-signed controller CA defaults to ten years, while controller and node leaf
+certificates default to one year. These defaults follow the established kubeadm
+validity split and avoid making root rotation an annual fleet-wide recovery event.
+Leaf renewal occurs at a random point between 70% and 90% of the certificate
+lifetime, following the kubelet rotation window's precedent. Renewal authenticates
+with the still-valid current node credential, preserves `NodeID`, issues a new
+serial, and atomically supersedes the old serial. CA rollover is an explicit,
+separately specified fleet operation rather than a silent trust-anchor replacement.
 
 Revocation increments the node credential epoch, rejects old certificate serials,
 terminates active sessions, discards queued commands, and prevents capacity
@@ -259,10 +273,14 @@ Runner packages are downloaded from GitHub, checked against the official digest
 metadata, extracted into a content-addressed cache, and copied or linked into an
 execution-specific directory.
 
-The runtime is prepared before JIT generation. After one job, the agent stops the
-entire process tree, removes JIT material, runner diagnostics subject to explicit
-retention policy, workspace, and execution directory, then verifies absence.
-Failure to verify cleanup is a capacity-blocking quarantine.
+The runtime is prepared before JIT generation. The Agent passes the opaque value to
+the official runner through its required `--jitconfig` argument; the official runner
+then writes the decoded settings, credentials, and RSA material into its root. After
+one job, the agent stops the entire process tree, removes all runner configuration
+material, runner diagnostics subject to explicit retention policy, workspace, and
+the execution directory, then verifies absence. Tewake does not claim that a Go
+string, process argument, or official runner memory can be zeroized. Failure to
+verify filesystem and process cleanup is a capacity-blocking quarantine.
 
 Native mode narrows accidental blast radius; it is not a sandbox for malicious code.
 Host credentials, sockets, interactive users, and personal data must not be
@@ -383,6 +401,14 @@ The first public tag requires:
 Runner auto-update may be disabled only with an enforced release process that updates
 within GitHub's current supported window. Fleet upgrades drain nodes before replacing
 controller or agent binaries.
+
+## Primary implementation references
+
+- [GitHub JIT runner configuration REST API](https://docs.github.com/en/rest/actions/self-hosted-runners#create-configuration-for-a-just-in-time-runner-for-an-organization)
+- [Official runner JIT decode and file materialization](https://github.com/actions/runner/blob/main/src/Runner.Listener/Runner.cs)
+- [GitHub self-hosted runner routing and update windows](https://docs.github.com/en/actions/reference/runners/self-hosted-runners)
+- [kubeadm certificate validity defaults](https://kubernetes.io/docs/tasks/administer-cluster/kubeadm/kubeadm-certs/)
+- [kubelet certificate rotation window](https://v1-32.docs.kubernetes.io/docs/tasks/tls/certificate-rotation/)
 
 ## Risks and Open Questions
 

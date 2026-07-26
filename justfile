@@ -10,11 +10,11 @@ bootstrap:
   lefthook install
 
 fmt:
-  gofmt -w cmd internal
+  gofmt -w cmd internal spec/tewake
   pnpm --dir web format
 
 fmt-check:
-  test -z "$(gofmt -l cmd internal)"
+  test -z "$(gofmt -l cmd internal spec/tewake)"
   pnpm --dir web format:check
 
 lint:

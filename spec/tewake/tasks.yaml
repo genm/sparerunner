@@ -38,8 +38,8 @@ tasks:
     status: done
     acceptance:
       - The requirements, design, and task vocabulary are consistent and executable.
-      - `just check` succeeds and emits machine-readable Go and Vitest results.
-      - `tewake` and `tewake-agent` cross-compile for supported Linux, macOS, and Windows targets.
+      - "`just check` succeeds and emits machine-readable Go and Vitest results."
+      - "`tewake` and `tewake-agent` cross-compile for supported Linux, macOS, and Windows targets."
       - Required CI always reports and uses only GitHub-hosted runners.
 
   - id: twk-002
@@ -125,6 +125,7 @@ tasks:
       - Token races, replay, fake controller, revoked node, and protocol mismatch fail closed.
       - The node private key never leaves the node or enters its journal.
       - mDNS results are ignored until the pinned fingerprint is verified.
+      - Leaf renewal preserves Node ID and rejects expired or superseded certificate serials.
 
   - id: twk-006
     title: Implement the native runner lifecycle
@@ -143,7 +144,7 @@ tasks:
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
       - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
-      - JIT material is consumed in memory and absent after cleanup.
+      - Tewake never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
       - Cleanup verification failure prevents slot release.
 
   - id: twk-007

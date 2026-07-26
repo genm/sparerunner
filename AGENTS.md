@@ -12,7 +12,8 @@ These instructions supplement the user-scope rules. The closest specification un
 - Keep the user-facing concepts limited to Node, GitHub Target, and Runner Profile
   unless the requirements change.
 - Do not add arbitrary node, payload, history, or concurrency limits. Follow
-  `ai-rules/product-constraints.md` and protect measured resource boundaries instead.
+  the product-constraint rule that every limit needs a platform contract,
+  demonstrated security/integrity risk, or measured resource boundary.
 
 ## Source of truth and task flow
 
@@ -30,7 +31,10 @@ These instructions supplement the user-scope rules. The closest specification un
 - Only `internal/store` owns SQLite schemas and migrations.
 - Controller SQLite owns desired state; the agent journal and OS runtime own observed
   local state. Reconciliation must not silently overwrite either authority.
-- JIT configuration is an in-memory secret. Never persist or log the body.
+- JIT configuration is an opaque transit secret. Tewake never persists or logs the
+  body. The official runner receives it through `--jitconfig` and materializes
+  configuration files in its execution-specific root; Agent cleanup must remove and
+  verify those files before releasing capacity.
 - Web and CLI mutations use the same `/api/v1` contract.
 - Generated OpenAPI clients are never edited by hand; change `api/openapi.yaml` and
   run the canonical generation command.
