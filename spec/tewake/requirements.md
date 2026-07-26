@@ -88,11 +88,12 @@ parallelism, and re-registering broken runners.
 3. The controller persists the message and desired execution before acknowledging
    the message.
 4. The agent prepares the runner package and runtime directory.
-5. The controller generates JIT configuration last and sends it once to the selected
-   node.
+5. The controller generates JIT configuration last and delivers it to the selected
+   node without writing the body to Controller or Agent persistence.
 6. The official runner executes exactly one job.
-7. The agent destroys the process tree, runtime directory, workspace, and JIT
-   material before releasing the slot.
+7. The agent destroys the process tree, runtime directory, workspace, and every
+   configuration or credential file materialized by the official runner before
+   releasing the slot.
 
 ## Exception Journeys
 
@@ -126,6 +127,10 @@ parallelism, and re-registering broken runners.
   not a first-release requirement.
 - Nodes make outbound WSS connections authenticated with node certificates. mDNS is
   endpoint discovery only and is never an identity or authorization signal.
+- The controller CA defaults to a ten-year validity. Controller and node leaf
+  certificates default to one year and automatically renew at a jittered point
+  between 70% and 90% of their lifetime. Expired or superseded leaf credentials fail
+  closed.
 - Mutable configuration is stored in SQLite. Versioned YAML import/export may
   contain non-secret settings only.
 - The management listener is loopback-only by default. LAN exposure requires an
@@ -146,6 +151,8 @@ parallelism, and re-registering broken runners.
   agent shall send no join secret.
 - If a revoked node reconnects with an old certificate, the controller shall reject
   it and advertise no capacity for that node.
+- A connected node shall renew its leaf certificate before expiry without changing
+  its Node ID; a superseded serial and an expired certificate shall both be rejected.
 
 ### GitHub and routing
 
@@ -165,8 +172,9 @@ parallelism, and re-registering broken runners.
 - A free physical slot shall be granted to at most one GitHub Target at a time.
 - Duplicate commands and duplicate scale-set messages shall resolve idempotently and
   shall not create a second runtime.
-- After a successful job, runner registration, JIT material, workspace, runtime
-  process tree, and execution-specific runner directory shall be absent.
+- After a successful job, runner registration, workspace, runtime process tree,
+  execution-specific runner directory, and the configuration/credential files
+  materialized from JIT configuration shall be absent.
 - If cleanup verification fails, the execution shall enter `CleanupFailed` and the
   node shall enter `Quarantined` rather than `Idle`.
 - A warm node shall start the official runner quickly enough to satisfy GitHub's
@@ -188,7 +196,10 @@ parallelism, and re-registering broken runners.
 
 - GitHub App private keys, join secrets, JIT configuration, node private keys,
   authorization headers, and session secrets shall not appear in SQLite, YAML
-  exports, ordinary logs, metrics, UI responses, or diagnostic bundles.
+  exports, ordinary logs, metrics, UI responses, or diagnostic bundles. The official
+  runner's required transient `--jitconfig` argument and files under its private,
+  execution-specific root are treated as secret-bearing runtime material and must
+  disappear during verified cleanup.
 - Unauthenticated API mutations shall return 401; authenticated cross-origin
   mutations without a valid CSRF token and Origin shall return 403.
 - A missing or inaccessible OS credential store shall stop new runner admission and
