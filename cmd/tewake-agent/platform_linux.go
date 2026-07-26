@@ -95,7 +95,11 @@ func platformCommandRuntime(options nativeRunnerOptions) (func(context.Context, 
 		if err != nil {
 			return nil, err
 		}
-		return app.NewAgentCommandRuntime(state.NodeID, state.Store, manager, pkg)
+		lifecycle, err := bindNativeRunnerCredential(manager, state.CredentialReady)
+		if err != nil {
+			return nil, err
+		}
+		return app.NewAgentCommandRuntime(state.NodeID, state.Store, lifecycle, pkg)
 	}
 	return optionalNativeRunnerFactory(options.Required, build), nil
 }

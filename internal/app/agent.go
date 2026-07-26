@@ -484,7 +484,7 @@ func runAgentSessionActor(
 					clear(envelope.Payload)
 					return errors.New("native runner is unavailable")
 				}
-				if err := dispatchAgentCommand(ctx, commandRuntime, &envelope, func(messageID string) error {
+				if err := dispatchAgentCommand(ctx, options.readinessTimeout, commandRuntime, &envelope, func(messageID string) error {
 					return writeAgentAck(sessionCtx, connection, messageID)
 				}); err != nil {
 					return err
@@ -526,6 +526,7 @@ func runAgentSessionActor(
 
 func dispatchAgentCommand(
 	ctx context.Context,
+	readinessTimeout time.Duration,
 	runtime *AgentCommandRuntime,
 	envelope *transport.Envelope,
 	acknowledge func(string) error,
@@ -534,7 +535,7 @@ func dispatchAgentCommand(
 		return transport.ErrInvalidCommand
 	}
 	messageID := envelope.MessageID
-	accepted, err := runtime.Accept(ctx, envelope)
+	accepted, err := runtime.accept(ctx, readinessTimeout, envelope)
 	if err != nil {
 		return errors.New("controller command was rejected")
 	}

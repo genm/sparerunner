@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"time"
 
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/runner"
@@ -39,6 +40,7 @@ type AgentCommandRuntime struct {
 	locksMu sync.Mutex
 	locks   map[domain.ExecutionID]*executionCommandLock
 
+	admissionMu   sync.RWMutex
 	lifetimeMu    sync.Mutex
 	lifetime      context.Context
 	monitors      map[domain.ExecutionID]struct{}
@@ -74,16 +76,23 @@ func NewAgentCommandRuntime(nodeID string, agentStore *store.AgentStore, manager
 // Ready performs a live, non-secret platform admission probe. The returned
 // error is classification-only and must never be copied into heartbeat payloads.
 func (runtime *AgentCommandRuntime) Ready(ctx context.Context) bool {
-	if runtime == nil || runtime.manager == nil {
-		return false
+	return runtime.readinessError(ctx) == nil
+}
+
+func (runtime *AgentCommandRuntime) readinessError(ctx context.Context) error {
+	if runtime == nil || runtime.manager == nil || ctx == nil {
+		return runner.ErrStrongOwnershipUnavailable
 	}
 	runtime.lifetimeMu.Lock()
 	degraded := runtime.monitorFailed
 	runtime.lifetimeMu.Unlock()
 	if degraded {
-		return false
+		return runner.ErrStrongOwnershipUnavailable
 	}
-	return runtime.manager.Ready(ctx) == nil
+	if err := runtime.manager.Ready(ctx); err != nil {
+		return runner.ErrStrongOwnershipUnavailable
+	}
+	return nil
 }
 
 // Start binds background completion monitoring to the Agent process lifetime,
@@ -332,7 +341,15 @@ const (
 )
 
 func (runtime *AgentCommandRuntime) Accept(ctx context.Context, envelope *transport.Envelope) (*acceptedAgentCommand, error) {
-	if runtime == nil || envelope == nil ||
+	return runtime.accept(ctx, DefaultAgentReadinessTimeout, envelope)
+}
+
+func (runtime *AgentCommandRuntime) accept(
+	ctx context.Context,
+	readinessTimeout time.Duration,
+	envelope *transport.Envelope,
+) (*acceptedAgentCommand, error) {
+	if runtime == nil || ctx == nil || envelope == nil ||
 		(envelope.Type != transport.MessagePrepare && envelope.Type != transport.MessageStart && envelope.Type != transport.MessageCancel) {
 		return nil, transport.ErrInvalidCommand
 	}
@@ -397,10 +414,40 @@ func (runtime *AgentCommandRuntime) Accept(ctx context.Context, envelope *transp
 		return nil, err
 	}
 	if !replayed {
+		if envelope.Type != transport.MessageCancel {
+			if readinessTimeout <= 0 {
+				readinessTimeout = DefaultAgentReadinessTimeout
+			}
+			readinessContext, cancelReadiness := context.WithTimeout(ctx, readinessTimeout)
+			readinessErr := runtime.readinessError(readinessContext)
+			cancelReadiness()
+			if readinessErr != nil {
+				// A stale Controller capacity view must not turn a degraded local
+				// ownership boundary into durable command admission. Exact replays
+				// remain executable so already-owned cleanup can converge.
+				return nil, runner.ErrStrongOwnershipUnavailable
+			}
+		}
 		if err := runtime.validateExpectedState(ctx, envelope.Type, replayIdentity); err != nil {
 			return nil, err
 		}
-		replayed, err = runtime.store.RecordTypedCommand(ctx, typedIdentity)
+		if envelope.Type != transport.MessageCancel {
+			// Linearize the durable admission commit against an outbox monitor
+			// failure. A failure that wins this fence rejects the command; a
+			// record that wins is already admitted and remains replayable.
+			runtime.admissionMu.RLock()
+			runtime.lifetimeMu.Lock()
+			degraded := runtime.monitorFailed
+			runtime.lifetimeMu.Unlock()
+			if degraded {
+				runtime.admissionMu.RUnlock()
+				return nil, runner.ErrStrongOwnershipUnavailable
+			}
+			replayed, err = runtime.store.RecordTypedCommand(ctx, typedIdentity)
+			runtime.admissionMu.RUnlock()
+		} else {
+			replayed, err = runtime.store.RecordTypedCommand(ctx, typedIdentity)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -842,9 +889,11 @@ func (runtime *AgentCommandRuntime) terminalUpdatePending(
 }
 
 func (runtime *AgentCommandRuntime) failMonitor() {
+	runtime.admissionMu.Lock()
 	runtime.lifetimeMu.Lock()
 	runtime.monitorFailed = true
 	runtime.lifetimeMu.Unlock()
+	runtime.admissionMu.Unlock()
 	runtime.notifyUpdate()
 }
 

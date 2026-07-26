@@ -99,6 +99,21 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("controller did not stop")
 	}
+
+	enrolled, err := OpenAgent(ctx, agentDirectory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer enrolled.Close()
+	if err := enrolled.CredentialReady(ctx); err != nil {
+		t.Fatalf("enrolled credential readiness: %v", err)
+	}
+	if err := os.Remove(filepath.Join(agentDirectory, agentKeyFile)); err != nil {
+		t.Fatal(err)
+	}
+	if err := enrolled.CredentialReady(ctx); !errors.Is(err, ErrAgentCredentialUnavailable) {
+		t.Fatalf("deleted durable credential readiness: %v", err)
+	}
 }
 
 func TestControllerRestartInvalidatesUnusedCodeButNotFirstStartCode(t *testing.T) {
@@ -130,6 +145,29 @@ func TestControllerRestartInvalidatesUnusedCodeButNotFirstStartCode(t *testing.T
 	defer restarted.Close()
 	if _, err := restarted.Service.Enroll(ctx, unusedCode, csr); !errors.Is(err, enroll.ErrTokenNotFound) {
 		t.Fatalf("unused pre-restart code error = %v", err)
+	}
+}
+
+func TestControllerInitializationRollsBackPrivateMaterialBeforeRemovingStage(t *testing.T) {
+	ctx := context.Background()
+	root := privateTestDirectory(t)
+	controllerDirectory := filepath.Join(root, "controller")
+	if _, err := InitializeController(
+		ctx,
+		controllerDirectory,
+		[]string{"https://controller.example.test/path-is-not-allowed"},
+	); err == nil {
+		t.Fatal("invalid endpoint hint unexpectedly initialized the controller")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("failed initialization retained staging entries: %v", entries)
+	}
+	if code, err := InitializeController(ctx, controllerDirectory, nil); err != nil || code == "" {
+		t.Fatalf("retry after rollback: code=%q err=%v", code, err)
 	}
 }
 

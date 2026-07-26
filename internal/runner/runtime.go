@@ -134,6 +134,12 @@ func (m *Manager) Ready(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return ErrStrongOwnershipUnavailable
 	}
+	if _, ok := m.supervisor.(CompletionWaiter); !ok {
+		return ErrStrongOwnershipUnavailable
+	}
+	if _, ok := m.supervisor.(CleanupFinalizer); !ok {
+		return ErrStrongOwnershipUnavailable
+	}
 	cleanerBackend := m.cleaner.WorkspaceBackend()
 	if !m.cleaner.StrongWorkspaceOwnership() ||
 		!m.supervisor.StrongDescendantOwnership() ||

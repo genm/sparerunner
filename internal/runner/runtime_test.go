@@ -57,6 +57,24 @@ type cleanupFinalizingSupervisor struct {
 	garbageCalls  int
 }
 
+type finalizerWithoutWaiter struct {
+	Supervisor
+}
+
+func (finalizerWithoutWaiter) FinalizeCleanup(
+	context.Context,
+	Process,
+	*os.Root,
+	string,
+	WorkspaceRef,
+) error {
+	return nil
+}
+
+func (finalizerWithoutWaiter) GarbageCollectCleanup(context.Context, Process) error {
+	return nil
+}
+
 func (supervisor *cleanupFinalizingSupervisor) FinalizeCleanup(
 	ctx context.Context,
 	_ Process,
@@ -239,8 +257,10 @@ func TestManagerReadyRevalidatesPlatformOwnershipAndRuntimeRoot(t *testing.T) {
 		RuntimeRoot: t.TempDir(),
 		Cache:       testCache{root: t.TempDir()},
 		Journal:     NewMemoryJournal(),
-		Supervisor:  &testSupervisor{},
-		Cleaner:     cleaner,
+		Supervisor: &cleanupFinalizingSupervisor{
+			testSupervisor: &testSupervisor{},
+		},
+		Cleaner: cleaner,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -251,6 +271,35 @@ func TestManagerReadyRevalidatesPlatformOwnershipAndRuntimeRoot(t *testing.T) {
 	cleaner.err = errors.New("helper unavailable")
 	if err := manager.Ready(context.Background()); !errors.Is(err, ErrStrongOwnershipUnavailable) || cleaner.calls != 2 {
 		t.Fatalf("failed Ready error=%v calls=%d", err, cleaner.calls)
+	}
+}
+
+func TestManagerReadyRejectsIncompleteLifecycleCapabilities(t *testing.T) {
+	for name, supervisor := range map[string]Supervisor{
+		"missing completion waiter": &finalizerWithoutWaiter{
+			Supervisor: &testSupervisor{},
+		},
+		"missing cleanup finalizer": &testSupervisor{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleaner := &readinessCleaner{}
+			manager, err := NewManager(Options{
+				RuntimeRoot: t.TempDir(),
+				Cache:       testCache{root: t.TempDir()},
+				Journal:     NewMemoryJournal(),
+				Supervisor:  supervisor,
+				Cleaner:     cleaner,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Ready(context.Background()); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+				t.Fatalf("Ready error=%v", err)
+			}
+			if cleaner.calls != 0 {
+				t.Fatalf("runtime root probes=%d want=0", cleaner.calls)
+			}
+		})
 	}
 }
 

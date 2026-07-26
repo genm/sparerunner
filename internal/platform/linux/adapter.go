@@ -182,6 +182,9 @@ func New(config Config, runtime Runtime, workspace Workspace) (*Adapter, error) 
 		config.AmbiguousCleanupTimeout < 0 {
 		return nil, runner.ErrStrongOwnershipUnavailable
 	}
+	if _, ok := runtime.(RuntimeCleanupFinalizer); !ok {
+		return nil, runner.ErrStrongOwnershipUnavailable
+	}
 	if config.AmbiguousCleanupTimeout == 0 {
 		config.AmbiguousCleanupTimeout = DefaultAmbiguousCleanupTimeout
 	}

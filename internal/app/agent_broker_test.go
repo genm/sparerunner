@@ -582,10 +582,11 @@ func TestAgentBrokerForgetsFinishedExecutionCommandsOnlyAfterCommitAndAck(t *tes
 			})
 			assertBrokerAck(t, session, "terminal-update")
 
-			known := brokerKnownCommands(actor)
-			if len(known) != test.wantCount {
-				t.Fatalf("known command count = %d, want %d: %#v", len(known), test.wantCount, known)
-			}
+			var known map[domain.CommandID]domain.ExecutionID
+			eventuallyBroker(t, func() bool {
+				known = brokerKnownCommands(actor)
+				return len(known) == test.wantCount
+			})
 			if known["command-unrelated"] != "execution-active" {
 				t.Fatalf("unrelated command was removed: %#v", known)
 			}

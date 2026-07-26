@@ -210,6 +210,17 @@ func TestAdapterRejectsRootRunnerIdentityAtAdmission(t *testing.T) {
 	}
 }
 
+func TestAdapterRejectsRuntimeWithoutCleanupFinalizer(t *testing.T) {
+	runtimeWithoutFinalizer := struct{ Runtime }{Runtime: newTestRuntime()}
+	if _, err := New(
+		Config{Identity: StaticIdentity{UID: 1001, GID: 1001}},
+		runtimeWithoutFinalizer,
+		testWorkspace{},
+	); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+		t.Fatalf("New error=%v", err)
+	}
+}
+
 type testWorkspaceWithIdentity struct {
 	testWorkspace
 	identity RunnerIdentity

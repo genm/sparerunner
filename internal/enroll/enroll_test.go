@@ -392,6 +392,40 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	}
 }
 
+func TestPrivatePersistenceRemovalIsIdempotentAndRejectsSymlinks(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("platform credential store adapter is owned by twk008/twk009")
+	}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	path := directory + "/secret"
+	if err := SavePrivateMaterial(path, []byte("rollback-canary")); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePrivateMaterial(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePrivateMaterial(path); err != nil {
+		t.Fatalf("idempotent removal: %v", err)
+	}
+
+	target := directory + "/target"
+	if err := os.WriteFile(target, []byte("must-remain"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemovePrivateMaterial(path); err == nil {
+		t.Fatal("credential removal followed a symlink")
+	}
+	if contents, err := os.ReadFile(target); err != nil || string(contents) != "must-remain" {
+		t.Fatalf("symlink target changed: contents=%q err=%v", contents, err)
+	}
+}
+
 type bytesReader struct{ value byte }
 
 func (reader bytesReader) Read(buffer []byte) (int, error) {

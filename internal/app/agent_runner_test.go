@@ -148,7 +148,11 @@ func TestAgentPlatformUsesProtocolDomainNamesAndRejectsUnsupportedValues(t *test
 func TestAgentRuntimeReadinessFailsClosedAfterLocalJournalDegradation(t *testing.T) {
 	agentStore := openAgentCommandStore(t)
 	defer agentStore.Close()
-	manager := &fakeRunnerLifecycle{}
+	manager := &fakeRunnerLifecycle{
+		inspect: func(context.Context, string) (runner.Snapshot, error) {
+			return runner.Snapshot{}, runner.ErrExecutionNotFound
+		},
+	}
 	commandRuntime, err := NewAgentCommandRuntime(
 		"node-1",
 		agentStore,
@@ -164,6 +168,348 @@ func TestAgentRuntimeReadinessFailsClosedAfterLocalJournalDegradation(t *testing
 	commandRuntime.failMonitor()
 	if commandRuntime.Ready(context.Background()) {
 		t.Fatal("degraded journal/outbox authority remained ready")
+	}
+	metadata := transport.CommandMetadata{
+		CommandID:       "degraded-monitor-command",
+		ControllerEpoch: 1,
+		ExecutionID:     "degraded-monitor-execution",
+		ExpectedState:   domain.ExecutionReserved,
+	}
+	payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       string(metadata.CommandID),
+		Type:            transport.MessagePrepare,
+		Payload:         payload,
+	}
+	if _, err := commandRuntime.Accept(context.Background(), &envelope); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+		t.Fatalf("degraded monitor admission error=%v", err)
+	}
+	snapshot, err := agentStore.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Commands) != 0 || manager.prepares != 0 {
+		t.Fatalf("degraded monitor admitted commands=%d prepares=%d", len(snapshot.Commands), manager.prepares)
+	}
+}
+
+func TestAgentDegradedReadinessStillAllowsExactReplayAndCancel(t *testing.T) {
+	agentStore := openAgentCommandStore(t)
+	defer agentStore.Close()
+	cancelPhase := false
+	platformDegraded := false
+	manager := &fakeRunnerLifecycle{
+		ready: func(context.Context) error {
+			if platformDegraded {
+				return runner.ErrStrongOwnershipUnavailable
+			}
+			return nil
+		},
+		inspect: func(context.Context, string) (runner.Snapshot, error) {
+			if cancelPhase {
+				return runner.Snapshot{
+					ExecutionID: "degraded-replay-execution",
+					State:       runner.StateRunning,
+					Running:     true,
+				}, nil
+			}
+			return runner.Snapshot{}, runner.ErrExecutionNotFound
+		},
+	}
+	commandRuntime, err := NewAgentCommandRuntime("node-1", agentStore, manager, currentRunnerPackage(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepareMetadata := transport.CommandMetadata{
+		CommandID:       "degraded-replay-prepare",
+		ControllerEpoch: 1,
+		ExecutionID:     "degraded-replay-execution",
+		ExpectedState:   domain.ExecutionReserved,
+	}
+	newPrepare := func() transport.Envelope {
+		payload, encodeErr := transport.EncodePrepareCommandPayload(
+			prepareMetadata,
+			runner.OfficialRunnerVersion,
+			true,
+		)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		return transport.Envelope{
+			ProtocolVersion: transport.ProtocolVersion,
+			MessageID:       string(prepareMetadata.CommandID),
+			Type:            transport.MessagePrepare,
+			Payload:         payload,
+		}
+	}
+	first := newPrepare()
+	accepted, err := commandRuntime.Accept(context.Background(), &first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted.Discard()
+
+	commandRuntime.failMonitor()
+	platformDegraded = true
+	replay := newPrepare()
+	accepted, err = commandRuntime.Accept(context.Background(), &replay)
+	if err != nil || !accepted.replayed {
+		t.Fatalf("exact replay while degraded: replayed=%t err=%v", accepted != nil && accepted.replayed, err)
+	}
+	accepted.Discard()
+
+	cancelPhase = true
+	cancelMetadata := transport.CommandMetadata{
+		CommandID:       "degraded-replay-cancel",
+		ControllerEpoch: 1,
+		ExecutionID:     "degraded-replay-execution",
+		ExpectedState:   domain.ExecutionRunning,
+	}
+	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelEnvelope := transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       string(cancelMetadata.CommandID),
+		Type:            transport.MessageCancel,
+		Payload:         cancelPayload,
+	}
+	cancel, err := commandRuntime.Accept(context.Background(), &cancelEnvelope)
+	if err != nil {
+		t.Fatalf("cancel while degraded: %v", err)
+	}
+	cancel.Discard()
+}
+
+func TestAgentRejectsNewRunnerAdmissionWhenPlatformReadinessDegrades(t *testing.T) {
+	agentStore := openAgentCommandStore(t)
+	defer agentStore.Close()
+	manager := &fakeRunnerLifecycle{
+		ready: func(context.Context) error {
+			return runner.ErrStrongOwnershipUnavailable
+		},
+		inspect: func(context.Context, string) (runner.Snapshot, error) {
+			return runner.Snapshot{}, runner.ErrExecutionNotFound
+		},
+	}
+	commandRuntime, err := NewAgentCommandRuntime(
+		"node-1",
+		agentStore,
+		manager,
+		currentRunnerPackage(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := transport.CommandMetadata{
+		CommandID:       "degraded-prepare-command",
+		ControllerEpoch: 1,
+		ExecutionID:     "degraded-prepare-execution",
+		ExpectedState:   domain.ExecutionReserved,
+	}
+	payload, err := transport.EncodePrepareCommandPayload(
+		metadata,
+		runner.OfficialRunnerVersion,
+		true,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wire := append([]byte(nil), payload...)
+	envelope := transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       string(metadata.CommandID),
+		Type:            transport.MessagePrepare,
+		Payload:         wire,
+	}
+	if _, err := commandRuntime.Accept(context.Background(), &envelope); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+		t.Fatalf("Accept error=%v", err)
+	}
+	if envelope.Payload != nil || !bytes.Equal(wire, make([]byte, len(wire))) {
+		t.Fatal("rejected command retained raw payload")
+	}
+	snapshot, err := agentStore.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Commands) != 0 || manager.prepares != 0 {
+		t.Fatalf("commands=%d prepares=%d", len(snapshot.Commands), manager.prepares)
+	}
+}
+
+func TestAgentCommandAdmissionTimeoutReleasesExecutionLock(t *testing.T) {
+	agentStore := openAgentCommandStore(t)
+	defer agentStore.Close()
+	manager := &fakeRunnerLifecycle{
+		ready: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		},
+		inspect: func(context.Context, string) (runner.Snapshot, error) {
+			return runner.Snapshot{}, runner.ErrExecutionNotFound
+		},
+	}
+	commandRuntime, err := NewAgentCommandRuntime(
+		"node-1",
+		agentStore,
+		manager,
+		currentRunnerPackage(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newEnvelope := func(commandID string) transport.Envelope {
+		t.Helper()
+		metadata := transport.CommandMetadata{
+			CommandID:       domain.CommandID(commandID),
+			ControllerEpoch: 1,
+			ExecutionID:     "stalled-readiness-execution",
+			ExpectedState:   domain.ExecutionReserved,
+		}
+		payload, encodeErr := transport.EncodePrepareCommandPayload(
+			metadata,
+			runner.OfficialRunnerVersion,
+			true,
+		)
+		if encodeErr != nil {
+			t.Fatal(encodeErr)
+		}
+		return transport.Envelope{
+			ProtocolVersion: transport.ProtocolVersion,
+			MessageID:       commandID,
+			Type:            transport.MessagePrepare,
+			Payload:         payload,
+		}
+	}
+
+	stalled := newEnvelope("stalled-readiness-command")
+	started := time.Now()
+	if err := dispatchAgentCommand(
+		context.Background(),
+		20*time.Millisecond,
+		commandRuntime,
+		&stalled,
+		func(string) error { return nil },
+	); err == nil {
+		t.Fatal("stalled readiness admitted a command")
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("stalled readiness blocked for %s", elapsed)
+	}
+	snapshot, err := agentStore.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	commandRuntime.locksMu.Lock()
+	lockedExecutions := len(commandRuntime.locks)
+	commandRuntime.locksMu.Unlock()
+	if len(snapshot.Commands) != 0 || manager.prepares != 0 || lockedExecutions != 0 {
+		t.Fatalf(
+			"stalled admission left state: commands=%d prepares=%d locks=%d",
+			len(snapshot.Commands),
+			manager.prepares,
+			lockedExecutions,
+		)
+	}
+
+	manager.ready = nil
+	retry := newEnvelope("stalled-readiness-retry")
+	acknowledged := false
+	if err := dispatchAgentCommand(
+		context.Background(),
+		time.Second,
+		commandRuntime,
+		&retry,
+		func(string) error {
+			acknowledged = true
+			return nil
+		},
+	); err != nil {
+		t.Fatalf("retry after readiness recovery: %v", err)
+	}
+	if !acknowledged || manager.prepares != 1 {
+		t.Fatalf("retry acknowledged=%t prepares=%d", acknowledged, manager.prepares)
+	}
+}
+
+func TestAgentMonitorFailureLinearizesBeforeCommandRecord(t *testing.T) {
+	agentStore := openAgentCommandStore(t)
+	defer agentStore.Close()
+	probeStarted := make(chan struct{})
+	releaseProbe := make(chan struct{})
+	manager := &fakeRunnerLifecycle{
+		ready: func(ctx context.Context) error {
+			close(probeStarted)
+			select {
+			case <-releaseProbe:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		},
+		inspect: func(context.Context, string) (runner.Snapshot, error) {
+			return runner.Snapshot{}, runner.ErrExecutionNotFound
+		},
+	}
+	commandRuntime, err := NewAgentCommandRuntime(
+		"node-1",
+		agentStore,
+		manager,
+		currentRunnerPackage(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadata := transport.CommandMetadata{
+		CommandID:       "monitor-race-command",
+		ControllerEpoch: 1,
+		ExecutionID:     "monitor-race-execution",
+		ExpectedState:   domain.ExecutionReserved,
+	}
+	payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	envelope := transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       string(metadata.CommandID),
+		Type:            transport.MessagePrepare,
+		Payload:         payload,
+	}
+	result := make(chan error, 1)
+	go func() {
+		accepted, acceptErr := commandRuntime.Accept(context.Background(), &envelope)
+		if accepted != nil {
+			accepted.Discard()
+		}
+		result <- acceptErr
+	}()
+	select {
+	case <-probeStarted:
+	case <-time.After(time.Second):
+		t.Fatal("readiness probe did not start")
+	}
+	commandRuntime.failMonitor()
+	close(releaseProbe)
+	select {
+	case err := <-result:
+		if !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+			t.Fatalf("Accept error=%v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("admission did not resolve after readiness probe")
+	}
+	snapshot, err := agentStore.Snapshot(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Commands) != 0 || manager.prepares != 0 {
+		t.Fatalf("monitor failure admitted commands=%d prepares=%d", len(snapshot.Commands), manager.prepares)
 	}
 }
 
@@ -690,7 +1036,7 @@ func TestAgentCommandAckFailureStillExecutesCommittedCommand(t *testing.T) {
 	}
 	ackFailure := errors.New("acknowledgement failed")
 	envelope := transport.Envelope{ProtocolVersion: 1, MessageID: string(metadata.CommandID), Type: transport.MessageStart, Payload: payload}
-	if err := dispatchAgentCommand(context.Background(), commandRuntime, &envelope, func(string) error {
+	if err := dispatchAgentCommand(context.Background(), DefaultAgentReadinessTimeout, commandRuntime, &envelope, func(string) error {
 		return ackFailure
 	}); !errors.Is(err, ackFailure) {
 		t.Fatalf("ack failure = %v", err)
