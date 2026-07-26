@@ -60,7 +60,7 @@ func NewAppClient(config AppClientConfig) (*Client, error) {
 			CommitSHA: config.CommitSHA,
 			Subsystem: config.Subsystem,
 		},
-	})
+	}, scaleset.WithRetryMax(0))
 	if err != nil {
 		return nil, fmt.Errorf("creating GitHub scale-set client: %w", err)
 	}
@@ -82,13 +82,24 @@ type ScaleSet struct {
 
 // CreateScaleSet creates one scale set in this Client's installation.
 func (c *Client) CreateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSet, error) {
-	created, err := c.client.CreateRunnerScaleSet(ctx, toScaleSet(scaleSet))
+	if err := validateRequestedScaleSet(scaleSet, false); err != nil {
+		return ScaleSet{}, err
+	}
+	created, err := contain(func() (*scaleset.RunnerScaleSet, error) {
+		return c.client.CreateRunnerScaleSet(ctx, toScaleSet(scaleSet))
+	})
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("creating GitHub runner scale set: %w", err)
+	}
+	if created == nil {
+		return ScaleSet{}, ErrInvalidPreviewResponse
 	}
 	converted, err := fromScaleSet(*created)
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("validating created GitHub runner scale set: %w", err)
+	}
+	if err := validateExpectedScaleSet(converted, scaleSet); err != nil {
+		return ScaleSet{}, err
 	}
 	return converted, nil
 }
@@ -96,7 +107,10 @@ func (c *Client) CreateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSe
 // GetScaleSet returns nil when GitHub has no scale set with that name in the
 // given runner group.
 func (c *Client) GetScaleSet(ctx context.Context, runnerGroupID int, name string) (*ScaleSet, error) {
-	result, err := c.client.GetRunnerScaleSet(ctx, runnerGroupID, name)
+	if runnerGroupID <= 0 || !isGitHubPathPart(name) {
+		return nil, ErrInvalidPreviewResponse
+	}
+	result, err := contain(func() (*scaleset.RunnerScaleSet, error) { return c.client.GetRunnerScaleSet(ctx, runnerGroupID, name) })
 	if err != nil {
 		return nil, fmt.Errorf("getting GitHub runner scale set: %w", err)
 	}
@@ -108,21 +122,32 @@ func (c *Client) GetScaleSet(ctx context.Context, runnerGroupID int, name string
 	if err != nil {
 		return nil, fmt.Errorf("validating GitHub runner scale set: %w", err)
 	}
+	if converted.Name != name || converted.RunnerGroupID != runnerGroupID {
+		return nil, ErrInvalidPreviewResponse
+	}
 	return &converted, nil
 }
 
 // UpdateScaleSet updates an existing GitHub scale set by its immutable ID.
 func (c *Client) UpdateScaleSet(ctx context.Context, scaleSet ScaleSet) (ScaleSet, error) {
-	if scaleSet.ID <= 0 {
-		return ScaleSet{}, ErrInvalidScaleSetID
+	if err := validateRequestedScaleSet(scaleSet, true); err != nil {
+		return ScaleSet{}, err
 	}
-	updated, err := c.client.UpdateRunnerScaleSet(ctx, int(scaleSet.ID), toScaleSet(scaleSet))
+	updated, err := contain(func() (*scaleset.RunnerScaleSet, error) {
+		return c.client.UpdateRunnerScaleSet(ctx, int(scaleSet.ID), toScaleSet(scaleSet))
+	})
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("updating GitHub runner scale set: %w", err)
+	}
+	if updated == nil {
+		return ScaleSet{}, ErrInvalidPreviewResponse
 	}
 	converted, err := fromScaleSet(*updated)
 	if err != nil {
 		return ScaleSet{}, fmt.Errorf("validating updated GitHub runner scale set: %w", err)
+	}
+	if err := validateExpectedScaleSet(converted, scaleSet); err != nil {
+		return ScaleSet{}, err
 	}
 	return converted, nil
 }
@@ -159,15 +184,17 @@ func (c *Client) GenerateJITConfig(ctx context.Context, request JITRequest) (JIT
 		return JITConfig{}, errors.New("GitHub JIT work folder is required")
 	}
 
-	result, err := c.client.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{
-		Name:       request.Name,
-		WorkFolder: request.WorkFolder,
-	}, int(request.ScaleSetID))
+	result, err := contain(func() (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
+		return c.client.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{
+			Name:       request.Name,
+			WorkFolder: request.WorkFolder,
+		}, int(request.ScaleSetID))
+	})
 	if err != nil {
 		return JITConfig{}, fmt.Errorf("generating GitHub JIT configuration: %w", err)
 	}
-	if result == nil || result.Runner == nil || result.EncodedJITConfig == "" {
-		return JITConfig{}, errors.New("GitHub returned an incomplete JIT configuration")
+	if err := validateJITResult(result, request); err != nil {
+		return JITConfig{}, ErrInvalidPreviewResponse
 	}
 
 	return newJITConfig(result.EncodedJITConfig, RunnerReference{
@@ -175,6 +202,13 @@ func (c *Client) GenerateJITConfig(ctx context.Context, request JITRequest) (JIT
 		Name:       result.Runner.Name,
 		ScaleSetID: ScaleSetID(result.Runner.RunnerScaleSetID),
 	}), nil
+}
+
+func validateJITResult(result *scaleset.RunnerScaleSetJitRunnerConfig, request JITRequest) error {
+	if result == nil || result.Runner == nil || result.EncodedJITConfig == "" || result.Runner.ID <= 0 || result.Runner.Name != request.Name || ScaleSetID(result.Runner.RunnerScaleSetID) != request.ScaleSetID {
+		return ErrInvalidPreviewResponse
+	}
+	return nil
 }
 
 // MessageSession is a low-level, per-scale-set GitHub message source.
@@ -195,11 +229,24 @@ func (c *Client) OpenMessageSession(ctx context.Context, scaleSetID ScaleSetID, 
 		return nil, errors.New("GitHub message session owner is required")
 	}
 
-	session, err := c.client.MessageSessionClient(ctx, int(scaleSetID), owner)
+	session, err := contain(func() (*scaleset.MessageSessionClient, error) {
+		return c.client.MessageSessionClient(ctx, int(scaleSetID), owner, scaleset.WithRetryMax(0))
+	})
 	if err != nil {
 		return nil, fmt.Errorf("opening GitHub message session: %w", err)
 	}
 	return &MessageSession{client: session, scaleSetID: scaleSetID}, nil
+}
+
+// Snapshot returns only the values needed for durable demand handling. Queue
+// endpoint and bearer token remain encapsulated in the official client.
+func (s *MessageSession) Snapshot() (SessionSnapshot, error) {
+	session := s.client.Session()
+	statistics, err := fromStatistics(session.Statistics)
+	if err != nil || statistics == nil || session.SessionID.String() == "00000000-0000-0000-0000-000000000000" {
+		return SessionSnapshot{}, ErrInvalidPreviewResponse
+	}
+	return SessionSnapshot{ScaleSetID: s.scaleSetID, ID: session.SessionID.String(), Statistics: *statistics}, nil
 }
 
 // Poll implements MessageSource with the pinned v0.4.0 GetMessage operation.
@@ -277,14 +324,73 @@ func fromScaleSet(scaleSet scaleset.RunnerScaleSet) (ScaleSet, error) {
 	for _, label := range scaleSet.Labels {
 		labels = append(labels, label.Name)
 	}
-	return ScaleSet{
+	converted := ScaleSet{
 		ID:            ScaleSetID(scaleSet.ID),
 		Name:          scaleSet.Name,
 		RunnerGroupID: scaleSet.RunnerGroupID,
 		Labels:        labels,
 		DisableUpdate: scaleSet.RunnerSetting.DisableUpdate,
 		Statistics:    statistics,
-	}, nil
+	}
+	if err := validateScaleSet(converted); err != nil {
+		return ScaleSet{}, err
+	}
+	return converted, nil
+}
+
+var ErrInvalidPreviewResponse = errors.New("invalid GitHub scale-set preview response")
+
+func contain[T any](call func() (T, error)) (result T, err error) {
+	defer func() {
+		if recover() != nil {
+			var zero T
+			result = zero
+			err = ErrInvalidPreviewResponse
+		}
+	}()
+	return call()
+}
+
+func validateScaleSet(scaleSet ScaleSet) error {
+	if scaleSet.ID <= 0 || scaleSet.Name == "" || scaleSet.RunnerGroupID <= 0 || len(scaleSet.Labels) == 0 {
+		return ErrInvalidPreviewResponse
+	}
+	for _, label := range scaleSet.Labels {
+		if !isGitHubPathPart(label) {
+			return ErrInvalidPreviewResponse
+		}
+	}
+	return nil
+}
+
+func validateRequestedScaleSet(scaleSet ScaleSet, requireID bool) error {
+	if requireID && scaleSet.ID <= 0 {
+		return ErrInvalidScaleSetID
+	}
+	if scaleSet.Name == "" || scaleSet.RunnerGroupID <= 0 || len(scaleSet.Labels) == 0 {
+		return ErrInvalidPreviewResponse
+	}
+	for _, label := range scaleSet.Labels {
+		if !isGitHubPathPart(label) {
+			return ErrInvalidPreviewResponse
+		}
+	}
+	return nil
+}
+
+func validateExpectedScaleSet(actual, requested ScaleSet) error {
+	if actual.Name != requested.Name || actual.RunnerGroupID != requested.RunnerGroupID {
+		return ErrInvalidPreviewResponse
+	}
+	if len(actual.Labels) != len(requested.Labels) {
+		return ErrInvalidPreviewResponse
+	}
+	for index, label := range requested.Labels {
+		if actual.Labels[index] != label {
+			return ErrInvalidPreviewResponse
+		}
+	}
+	return nil
 }
 
 func fromMessage(scaleSetID ScaleSetID, message *scaleset.RunnerScaleSetMessage) (*Message, error) {

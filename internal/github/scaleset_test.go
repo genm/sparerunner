@@ -83,7 +83,7 @@ func TestFromMessageRejectsMissingOrInconsistentStatistics(t *testing.T) {
 }
 
 func TestFromScaleSetPreservesMissingStatisticsAsUnknown(t *testing.T) {
-	converted, err := fromScaleSet(scaleset.RunnerScaleSet{ID: 7, Name: "tewake"})
+	converted, err := fromScaleSet(scaleset.RunnerScaleSet{ID: 7, Name: "tewake", RunnerGroupID: 1, Labels: []scaleset.Label{{Name: "tewake"}}})
 	if err != nil {
 		t.Fatalf("fromScaleSet() error = %v", err)
 	}
@@ -100,6 +100,23 @@ func TestToScaleSetLeavesLabelTypeForOfficialClientDefault(t *testing.T) {
 	for _, label := range converted.Labels {
 		if label.Type != "" {
 			t.Fatalf("label %#v has Type %q, want empty so the official client applies its default", label, label.Type)
+		}
+	}
+}
+
+func TestValidateJITResultRejectsMismatchedRunnerIdentity(t *testing.T) {
+	request := JITRequest{ScaleSetID: 7, Name: "runner-7", WorkFolder: "_work"}
+	valid := &scaleset.RunnerScaleSetJitRunnerConfig{EncodedJITConfig: "opaque", Runner: &scaleset.RunnerReference{ID: 1, Name: request.Name, RunnerScaleSetID: int(request.ScaleSetID)}}
+	if err := validateJITResult(valid, request); err != nil {
+		t.Fatalf("valid JIT result error = %v", err)
+	}
+	for _, result := range []*scaleset.RunnerScaleSetJitRunnerConfig{
+		{EncodedJITConfig: "opaque", Runner: &scaleset.RunnerReference{ID: 0, Name: request.Name, RunnerScaleSetID: 7}},
+		{EncodedJITConfig: "opaque", Runner: &scaleset.RunnerReference{ID: 1, Name: "other", RunnerScaleSetID: 7}},
+		{EncodedJITConfig: "opaque", Runner: &scaleset.RunnerReference{ID: 1, Name: request.Name, RunnerScaleSetID: 8}},
+	} {
+		if !errors.Is(validateJITResult(result, request), ErrInvalidPreviewResponse) {
+			t.Fatal("mismatched JIT result accepted")
 		}
 	}
 }

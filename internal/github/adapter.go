@@ -24,6 +24,15 @@ var (
 	ErrNilMessageHandler = errors.New("github durable message handler is required")
 )
 
+// SessionSnapshot is the non-secret scaling signal supplied when a GitHub
+// message session is created or refreshed. It deliberately excludes queue URLs
+// and access tokens. Durable consumers deduplicate by (ScaleSetID, ID).
+type SessionSnapshot struct {
+	ScaleSetID ScaleSetID
+	ID         string
+	Statistics Statistics
+}
+
 // ScaleSetID identifies one GitHub runner scale set.
 type ScaleSetID int
 
@@ -81,6 +90,7 @@ type Message struct {
 type MessageSource interface {
 	Poll(ctx context.Context, lastAcknowledgedMessageID, maxCapacity int) (*Message, error)
 	DeleteMessage(ctx context.Context, messageID int) error
+	Snapshot() (SessionSnapshot, error)
 }
 
 // DurableMessageHandler commits the message, associated reservation, and
@@ -89,6 +99,7 @@ type MessageSource interface {
 // sent, allowing GitHub to redeliver the message.
 type DurableMessageHandler interface {
 	CommitMessage(ctx context.Context, message Message) error
+	CommitSessionDemand(ctx context.Context, snapshot SessionSnapshot) error
 }
 
 // Poller processes a single message session serially. lastAcknowledgedMessageID
@@ -99,8 +110,8 @@ type Poller struct {
 	mu                        sync.Mutex
 	source                    MessageSource
 	handler                   DurableMessageHandler
-	maxCapacity               int
 	lastAcknowledgedMessageID int
+	lastSessionSnapshotID     string
 	logger                    *slog.Logger
 }
 
@@ -108,25 +119,21 @@ type Poller struct {
 // replaced with a discard logger because GitHub errors may carry untrusted
 // response content; callers receive the wrapped error without the adapter
 // serializing it into logs.
-func NewPoller(source MessageSource, handler DurableMessageHandler, maxCapacity int, logger *slog.Logger) (*Poller, error) {
+func NewPoller(source MessageSource, handler DurableMessageHandler, logger *slog.Logger) (*Poller, error) {
 	if source == nil {
 		return nil, ErrNilMessageSource
 	}
 	if handler == nil {
 		return nil, ErrNilMessageHandler
 	}
-	if maxCapacity < 0 {
-		return nil, ErrInvalidCapacity
-	}
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
 
 	return &Poller{
-		source:      source,
-		handler:     handler,
-		maxCapacity: maxCapacity,
-		logger:      logger,
+		source:  source,
+		handler: handler,
+		logger:  logger,
 	}, nil
 }
 
@@ -141,11 +148,29 @@ func (p *Poller) LastAcknowledgedMessageID() int {
 
 // PollOnce runs exactly one poll -> durable commit -> acknowledgement sequence.
 // It never invokes DeleteMessage if validation or durable commit fails.
-func (p *Poller) PollOnce(ctx context.Context) (*Message, error) {
+func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	if maxCapacity < 0 {
+		return nil, ErrInvalidCapacity
+	}
 
-	message, err := p.source.Poll(ctx, p.lastAcknowledgedMessageID, p.maxCapacity)
+	snapshot, err := p.source.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("reading GitHub message session snapshot: %w", err)
+	}
+	if err := validateSessionSnapshot(snapshot); err != nil {
+		return nil, err
+	}
+	if snapshot.ID != p.lastSessionSnapshotID {
+		if err := p.handler.CommitSessionDemand(ctx, snapshot); err != nil {
+			p.logger.Warn("github_session_demand_commit_failed", slog.String("component", "github"), slog.Int("scale_set_id", int(snapshot.ScaleSetID)))
+			return nil, fmt.Errorf("durably committing GitHub session demand: %w", err)
+		}
+		p.lastSessionSnapshotID = snapshot.ID
+	}
+
+	message, err := p.source.Poll(ctx, p.lastAcknowledgedMessageID, maxCapacity)
 	if err != nil {
 		p.logger.Warn("github_message_poll_failed", slog.String("component", "github"))
 		return nil, fmt.Errorf("polling GitHub scale-set message: %w", err)
@@ -201,4 +226,11 @@ func (p *Poller) PollOnce(ctx context.Context) (*Message, error) {
 	)
 
 	return message, nil
+}
+
+func validateSessionSnapshot(snapshot SessionSnapshot) error {
+	if snapshot.ScaleSetID <= 0 || snapshot.ID == "" {
+		return ErrInvalidStatistics
+	}
+	return validateStatistics(snapshot.Statistics)
 }

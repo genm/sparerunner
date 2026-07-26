@@ -18,6 +18,16 @@ This follows the pinned v0.4.0 primary source:
 `examples/dockerscaleset/config.go` builds Name-only labels, while
 `Client.CreateRunnerScaleSet` applies the upstream default Type internally.
 
+The adapter disables the upstream transparent retry policy (`RetryMax=0`) for
+create, update, JIT, and message-session calls. These operations can have been
+applied before a timeout or 5xx is observed, so retries occur only in a future
+controller reconciliation loop after durable state is inspected.
+
+Session startup and refresh statistics are reduced to a token-free
+`SessionSnapshot` and committed before the first poll. The snapshot deliberately
+excludes GitHub's message queue URL and bearer token; a changed session ID follows
+the same idempotent durable-demand path.
+
 ## Local contract already exercised
 
 `go test ./test/contract/github ./internal/github` uses fakes to prove the

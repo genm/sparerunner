@@ -17,14 +17,14 @@ func TestPollerCommitsBeforeAcknowledgement(t *testing.T) {
 	handler := &durableFakeHandler{source: source}
 	poller := newPoller(t, source, handler)
 
-	got, err := poller.PollOnce(context.Background())
+	got, err := poller.PollOnce(context.Background(), 4)
 	if err != nil {
 		t.Fatalf("PollOnce() error = %v", err)
 	}
 	if got == nil || got.ID != message.ID {
 		t.Fatalf("PollOnce() message = %#v, want message %d", got, message.ID)
 	}
-	if want := []string{"poll:0", "commit:9/101", "ack:101"}; !slices.Equal(source.events, want) {
+	if want := []string{"demand:9/session-1", "poll:0/4", "commit:9/101", "ack:101"}; !slices.Equal(source.events, want) {
 		t.Fatalf("events = %v, want %v", source.events, want)
 	}
 	if got := poller.LastAcknowledgedMessageID(); got != 101 {
@@ -38,7 +38,7 @@ func TestPollerDoesNotAcknowledgeWhenDurableCommitFailsAndReplayIsIdempotent(t *
 	handler := &durableFakeHandler{source: source, failCommits: 1}
 	poller := newPoller(t, source, handler)
 
-	if _, err := poller.PollOnce(context.Background()); err == nil {
+	if _, err := poller.PollOnce(context.Background(), 4); err == nil {
 		t.Fatal("first PollOnce() succeeded, want durable commit failure")
 	}
 	if got := source.acks; len(got) != 0 {
@@ -48,7 +48,7 @@ func TestPollerDoesNotAcknowledgeWhenDurableCommitFailsAndReplayIsIdempotent(t *
 		t.Fatalf("cursor after failed commit = %d, want 0", got)
 	}
 
-	if _, err := poller.PollOnce(context.Background()); err != nil {
+	if _, err := poller.PollOnce(context.Background(), 4); err != nil {
 		t.Fatalf("replayed PollOnce() error = %v", err)
 	}
 	if got := source.acks; !slices.Equal(got, []int{101}) {
@@ -57,7 +57,7 @@ func TestPollerDoesNotAcknowledgeWhenDurableCommitFailsAndReplayIsIdempotent(t *
 	if got := handler.createdExecutions; got != 1 {
 		t.Fatalf("created executions = %d, want 1 after replay", got)
 	}
-	if want := []string{"poll:0", "commit:9/101", "poll:0", "commit:9/101", "ack:101"}; !slices.Equal(source.events, want) {
+	if want := []string{"demand:9/session-1", "poll:0/4", "commit:9/101", "poll:0/4", "commit:9/101", "ack:101"}; !slices.Equal(source.events, want) {
 		t.Fatalf("events = %v, want %v", source.events, want)
 	}
 }
@@ -68,13 +68,13 @@ func TestPollerRetriesRedeliveryAfterAcknowledgementFailure(t *testing.T) {
 	handler := &durableFakeHandler{source: source}
 	poller := newPoller(t, source, handler)
 
-	if _, err := poller.PollOnce(context.Background()); err == nil {
+	if _, err := poller.PollOnce(context.Background(), 4); err == nil {
 		t.Fatal("first PollOnce() succeeded, want acknowledgement failure")
 	}
 	if got := poller.LastAcknowledgedMessageID(); got != 0 {
 		t.Fatalf("cursor after acknowledgement failure = %d, want 0", got)
 	}
-	if _, err := poller.PollOnce(context.Background()); err != nil {
+	if _, err := poller.PollOnce(context.Background(), 4); err != nil {
 		t.Fatalf("replayed PollOnce() error = %v", err)
 	}
 	if got := handler.createdExecutions; got != 1 {
@@ -98,7 +98,7 @@ func TestPollerDoesNotCommitOrAcknowledgeInvalidStatistics(t *testing.T) {
 	handler := &durableFakeHandler{source: source}
 	poller := newPoller(t, source, handler)
 
-	if _, err := poller.PollOnce(context.Background()); !errors.Is(err, githubadapter.ErrInvalidStatistics) {
+	if _, err := poller.PollOnce(context.Background(), 4); !errors.Is(err, githubadapter.ErrInvalidStatistics) {
 		t.Fatalf("PollOnce() error = %v, want ErrInvalidStatistics", err)
 	}
 	if got := source.acks; len(got) != 0 {
@@ -110,14 +110,31 @@ func TestPollerDoesNotCommitOrAcknowledgeInvalidStatistics(t *testing.T) {
 	if got := poller.LastAcknowledgedMessageID(); got != 0 {
 		t.Fatalf("cursor after invalid statistics = %d, want 0", got)
 	}
-	if want := []string{"poll:0"}; !slices.Equal(source.events, want) {
+	if want := []string{"demand:9/session-1", "poll:0/4"}; !slices.Equal(source.events, want) {
+		t.Fatalf("events = %v, want %v", source.events, want)
+	}
+}
+
+func TestPollerCommitsInitialSessionDemandBeforeEmptyPollAndUsesDynamicCapacity(t *testing.T) {
+	source := &fakeMessageSource{snapshot: githubadapter.SessionSnapshot{ScaleSetID: 9, ID: "session-1", Statistics: githubadapter.Statistics{TotalAssignedJobs: 2}}}
+	handler := &durableFakeHandler{source: source}
+	poller := newPoller(t, source, handler)
+
+	if message, err := poller.PollOnce(context.Background(), 1); err != nil || message != nil {
+		t.Fatalf("first PollOnce() = (%#v, %v), want empty success", message, err)
+	}
+	source.snapshot.ID = "session-2" // models an upstream token refresh with new statistics.
+	if message, err := poller.PollOnce(context.Background(), 0); err != nil || message != nil {
+		t.Fatalf("second PollOnce() = (%#v, %v), want empty success", message, err)
+	}
+	if want := []string{"demand:9/session-1", "poll:0/1", "demand:9/session-2", "poll:0/0"}; !slices.Equal(source.events, want) {
 		t.Fatalf("events = %v, want %v", source.events, want)
 	}
 }
 
 func newPoller(t *testing.T, source *fakeMessageSource, handler *durableFakeHandler) *githubadapter.Poller {
 	t.Helper()
-	poller, err := githubadapter.NewPoller(source, handler, 4, slog.New(slog.DiscardHandler))
+	poller, err := githubadapter.NewPoller(source, handler, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatalf("NewPoller() error = %v", err)
 	}
@@ -129,16 +146,24 @@ type fakeMessageSource struct {
 	events   []string
 	acks     []int
 	failAcks int
+	snapshot githubadapter.SessionSnapshot
 }
 
-func (s *fakeMessageSource) Poll(_ context.Context, cursor, _ int) (*githubadapter.Message, error) {
-	s.events = append(s.events, "poll:"+strconv.Itoa(cursor))
+func (s *fakeMessageSource) Poll(_ context.Context, cursor, capacity int) (*githubadapter.Message, error) {
+	s.events = append(s.events, "poll:"+strconv.Itoa(cursor)+"/"+strconv.Itoa(capacity))
 	if len(s.messages) == 0 {
 		return nil, nil
 	}
 	message := s.messages[0]
 	s.messages = s.messages[1:]
 	return message, nil
+}
+
+func (s *fakeMessageSource) Snapshot() (githubadapter.SessionSnapshot, error) {
+	if s.snapshot.ID == "" {
+		s.snapshot = githubadapter.SessionSnapshot{ScaleSetID: 9, ID: "session-1"}
+	}
+	return s.snapshot, nil
 }
 
 func (s *fakeMessageSource) DeleteMessage(_ context.Context, messageID int) error {
@@ -156,6 +181,11 @@ type durableFakeHandler struct {
 	failCommits       int
 	committed         map[string]struct{}
 	createdExecutions int
+}
+
+func (h *durableFakeHandler) CommitSessionDemand(_ context.Context, snapshot githubadapter.SessionSnapshot) error {
+	h.source.events = append(h.source.events, "demand:"+strconv.Itoa(int(snapshot.ScaleSetID))+"/"+snapshot.ID)
+	return nil
 }
 
 func (h *durableFakeHandler) CommitMessage(_ context.Context, message githubadapter.Message) error {
