@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -20,13 +21,24 @@ func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	}
 }
 
-func TestRunWithoutArgumentsFailsClosedUntilImplemented(t *testing.T) {
+func TestServeRejectsUninitializedState(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	stateDirectory := filepath.Join(t.TempDir(), "agent")
+	if exitCode := run([]string{"serve", "--state-dir", stateDirectory}, &stdout, &stderr); exitCode == 0 {
+		t.Fatal("serve accepted uninitialized state")
+	}
+	if !strings.Contains(stderr.String(), "not initialized") {
+		t.Fatalf("serve stderr = %q", stderr.String())
+	}
+}
+
+func TestRunWithoutArgumentsRequiresACommand(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 
 	if exitCode := run(nil, &stdout, &stderr); exitCode == 0 {
-		t.Fatal("run() exit code = 0, want nonzero while runtime is unimplemented")
+		t.Fatal("run() exit code = 0, want nonzero without a command")
 	}
-	if !strings.Contains(stderr.String(), "not implemented") {
-		t.Fatalf("default stderr = %q, want explicit unimplemented status", stderr.String())
+	if !strings.Contains(stderr.String(), "command is required") {
+		t.Fatalf("default stderr = %q, want explicit command requirement", stderr.String())
 	}
 }

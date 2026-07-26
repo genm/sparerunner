@@ -17,7 +17,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/genm/tewake/internal/enroll"
 )
 
 const sqliteDriver = "sqlite"
@@ -79,7 +82,11 @@ func (s *baseStore) requireReady() error { return s.Ready() }
 
 // ControllerStore owns desired executions, reservations, and GitHub replay state.
 // It deliberately has no secret-bearing API.
-type ControllerStore struct{ *baseStore }
+type ControllerStore struct {
+	*baseStore
+	revocationMu   sync.RWMutex
+	revocationHook func(enroll.Credential)
+}
 
 // AgentStore owns the local journal. It stores identities and allowlisted observed
 // state only, never command payload material or OS-keystore values.
@@ -93,7 +100,7 @@ func OpenController(ctx context.Context, path string, options Options) (*Control
 	if base == nil {
 		return nil, err
 	}
-	return &ControllerStore{base}, err
+	return &ControllerStore{baseStore: base}, err
 }
 
 func OpenAgent(ctx context.Context, path string, options Options) (*AgentStore, error) {
@@ -722,10 +729,13 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"slot_reservations":      {"node_id", "slot_index", "target_id", "execution_id"},
 		"executions":             {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
 		"processed_messages":     {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
+		"enrollment_tokens":      {"token_id", "secret_digest", "controller_epoch"},
+		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
+		"enrollment_replays":     {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
-		tables = append(tables, "slot_reservations", "executions", "processed_messages")
+		tables = append(tables, "slot_reservations", "executions", "processed_messages", "enrollment_tokens", "enrolled_nodes", "enrollment_replays")
 	} else {
 		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones")
 	}

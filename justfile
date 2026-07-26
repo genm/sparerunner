@@ -27,6 +27,9 @@ test:
   go test -json ./... > output/test-results/go-test.json
   pnpm --dir web test:ci
 
+test-enrollment-cli-linux:
+  ./scripts/test-enrollment-cli-linux.sh
+
 build:
   mkdir -p bin
   go build -trimpath -o bin/tewake ./cmd/tewake
