@@ -16,6 +16,7 @@ var (
 	ErrReconciliationRequired     = errors.New("runner: reconciliation required")
 	ErrQuarantined                = errors.New("runner: node is quarantined")
 	ErrCleanupFailed              = errors.New("runner: cleanup verification failed")
+	ErrWorkspaceChanged           = errors.New("runner: workspace identity changed")
 	ErrStrongOwnershipUnavailable = errors.New("runner: strong descendant ownership unavailable")
 	ErrJournal                    = errors.New("runner: journal operation failed")
 )

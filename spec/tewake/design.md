@@ -261,6 +261,14 @@ operations are idempotent:
 - `Inspect`
 - `Destroy`
 
+Runner-journal records carry a monotonically increasing storage revision. Creating
+an execution is an insert-only `Preparing` claim made before its execution root is
+created; every later lifecycle mutation is a compare-and-swap against the revision
+that was loaded. This storage contract, rather than an in-process mutex, ensures
+that overlapping agent instances cannot both transition one execution from
+`Prepared` to `Starting`. Only the CAS winner may receive JIT material or start the
+runner. A stale writer returns an explicit reconciliation error.
+
 Protocol version mismatch is an explicit error before 1.0. Future WAN transport is
 limited to internal `PeerID`, discovery, and authenticated-session interfaces;
 Iroh-specific types or binaries are absent.
@@ -285,6 +293,12 @@ validated descendants; symlinks and traversal outside the root are rejected.
 Runner packages are downloaded from GitHub, checked against the official digest
 metadata, extracted into a content-addressed cache, and copied or linked into an
 execution-specific directory.
+
+Preparation captures an opaque platform workspace identity. The core re-observes
+that identity on replay, before claiming `Starting`, and inside the one-shot JIT
+callback. The platform supervisor receives the same identity and must validate it
+again in the start transaction immediately before exec. A replacement, missing
+directory, or unverifiable identity starts no process and quarantines the execution.
 
 The runtime is prepared before JIT generation. The Agent passes the opaque value to
 the official runner through its required `--jitconfig` argument; the official runner

@@ -147,8 +147,17 @@ func TestChangedExecutionSpecAndCrashStartingFailClosed(t *testing.T) {
 	}
 	// A journal recovered in starting state cannot safely infer whether a listener
 	// was spawned before the crash, so reopening refuses a potentially duplicate run.
-	if err := journal.Save(context.Background(), runner.Record{ExecutionID: request.ExecutionID, SpecDigest: digestFor(t, manager, request), State: runner.StateStarting, RootName: strings.Repeat("a", 64), JITDigest: fakeJIT{"hang"}.Digest()}); err != nil {
-		t.Fatal(err)
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found {
+		t.Fatalf("prepared record = %#v, found=%v, err=%v", record, found, err)
+	}
+	record.State = runner.StateStarting
+	record.RootName = strings.Repeat("a", 64)
+	record.JITDigest = fakeJIT{"hang"}.Digest()
+	record.WorkspaceRef = ""
+	record.Containment = runner.ContainmentRef{}
+	if _, swapped, err := journal.CompareAndSwap(context.Background(), record.ExecutionID, record.Revision, record.Record); err != nil || !swapped {
+		t.Fatalf("persist invalid crash record: swapped=%v err=%v", swapped, err)
 	}
 	reopened, _ := newManager(t, content, journal, nil)
 	if _, err := reopened.EnsureRunning(context.Background(), runner.Start{Preparation: request, JIT: fakeJIT{"hang"}}); !errors.Is(err, runner.ErrReconciliationRequired) {
@@ -289,26 +298,6 @@ func writeFakeRunner(t testing.TB, directory string) {
 	if err := os.WriteFile(filepath.Join(directory, "run.sh"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// These helpers preserve the external-package test boundary; digestFor is not
-// needed for behavior under test because EnsureRunning reaches the existing
-// starting record before comparing a spec again.
-func digestFor(t *testing.T, _ *runner.Manager, request runner.Preparation) string {
-	t.Helper()
-	// Construct it through a prepared record from a disposable manager rather than
-	// duplicating runner's private digest formula in a compatibility-sensitive test.
-	journal := runner.NewMemoryJournal()
-	content := fakeRunner(t)
-	manager, _ := newManager(t, content, journal, nil)
-	if _, err := manager.EnsurePrepared(context.Background(), request); err != nil {
-		t.Fatal(err)
-	}
-	record, _, err := journal.Load(context.Background(), request.ExecutionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return record.SpecDigest
 }
 
 func eventuallyGone(t *testing.T, pid int) {

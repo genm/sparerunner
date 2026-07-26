@@ -11,11 +11,12 @@ type Process struct {
 }
 
 type StartRequest struct {
-	Executable  string
-	Directory   string
-	Arguments   []string // non-secret flags only
-	Containment ContainmentRef
-	jit         jitArgument
+	Executable   string
+	Directory    string
+	Arguments    []string // non-secret flags only
+	WorkspaceRef string   // opaque identity captured by Cleaner.PrepareWorkspace
+	Containment  ContainmentRef
+	jit          jitArgument
 }
 
 func (StartRequest) String() string           { return "runner.start-request[redacted]" }
@@ -45,10 +46,15 @@ func (jitArgument) MarshalJSON() ([]byte, error) {
 // Job Object adapter; callers must fail closed instead of claiming cleanup.
 type Supervisor interface {
 	StrongDescendantOwnership() bool
-	// PrepareContainment creates or resolves the durable ownership boundary
-	// before any JIT-bearing process can start. A crash in StateStarting can
-	// therefore reconcile the boundary without trusting a PID.
+	// PrepareContainment derives or resolves the durable ownership boundary before
+	// any JIT-bearing process can start. It must be deterministic, idempotent, and
+	// free of non-idempotent resources for an ExecutionID so a journal CAS loser
+	// cannot own a second boundary. A crash in StateStarting can therefore
+	// reconcile the boundary without trusting a PID.
 	PrepareContainment(context.Context, string) (ContainmentRef, error)
+	// Start must verify StartRequest.WorkspaceRef against the execution directory
+	// in the same platform-owned transaction immediately before exec. It returns
+	// ErrWorkspaceChanged without starting a process when the identity differs.
 	Start(context.Context, StartRequest) (Process, error)
 	Stop(context.Context, Process) error
 	Alive(Process) (bool, error)
