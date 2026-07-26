@@ -48,8 +48,13 @@ type Cleaner interface {
 }
 
 type PackageCache interface {
-	Ensure(context.Context, Package) (string, error)
+	Ensure(context.Context, Package) (ArchiveRef, error)
 }
+
+// ArchiveRef points only at a verified immutable release artifact. A shared
+// extracted tree is never executable input; each execution extracts this archive
+// beneath its own private root.
+type ArchiveRef struct{ Directory, Archive string }
 
 type rootCleaner struct{}
 
@@ -130,7 +135,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 		}
 		return snapshot(record), stateError(record)
 	}
-	content, err := m.cache.Ensure(ctx, request.Package)
+	archive, err := m.cache.Ensure(ctx, request.Package)
 	if err != nil {
 		return Snapshot{}, err
 	}
@@ -138,7 +143,7 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	if err != nil {
 		return Snapshot{}, err
 	}
-	if err := materializePackage(content, request.Package, root); err != nil {
+	if err := materializePackage(archive, request.Package, root); err != nil {
 		root.Close()
 		_ = m.removeRoot(ctx, rootName)
 		return Snapshot{}, err
@@ -155,15 +160,19 @@ func (m *Manager) EnsurePrepared(ctx context.Context, request Preparation) (Snap
 	return snapshot(record), nil
 }
 
-func materializePackage(source string, pkg Package, destination *os.Root) error {
-	archivePath := filepath.Join(source, "archive")
-	if archive, err := os.Open(archivePath); err == nil {
-		defer archive.Close()
-		return extractArchive(destination, archive, pkg.Format)
+func materializePackage(source ArchiveRef, pkg Package, destination *os.Root) error {
+	if source.Archive == "test-tree" {
+		return copyTree(source.Directory, destination)
 	}
-	// Test-only PackageCache implementations may supply an already materialized
-	// tree. Production Cache supplies a pinned archive directory above.
-	return copyTree(source, destination)
+	if source.Directory == "" || source.Archive != "archive" {
+		return ErrPackageIntegrity
+	}
+	archive, err := os.Open(filepath.Join(source.Directory, source.Archive))
+	if err != nil {
+		return ErrPackageIntegrity
+	}
+	defer archive.Close()
+	return extractArchive(destination, archive, pkg.Format)
 }
 
 func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, error) {

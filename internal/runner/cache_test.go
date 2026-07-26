@@ -70,7 +70,7 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 	fetcher := &bytesFetcher{data: archive}
 	cache := Cache{Root: t.TempDir(), Fetcher: fetcher, verifyPackage: func(value Package) bool { return value == pkg }}
 	const callers = 12
-	paths := make(chan string, callers)
+	paths := make(chan ArchiveRef, callers)
 	errs := make(chan error, callers)
 	var group sync.WaitGroup
 	for range callers {
@@ -85,21 +85,21 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 	group.Wait()
 	close(paths)
 	close(errs)
-	var first string
+	var first ArchiveRef
 	for err := range errs {
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	for result := range paths {
-		if first == "" {
+		if first.Directory == "" {
 			first = result
 		}
 		if result != first {
 			t.Fatalf("cache paths differ: %q and %q", first, result)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(first, "archive")); err != nil {
+	if _, err := os.Stat(filepath.Join(first.Directory, "archive")); err != nil {
 		t.Fatalf("winner content unavailable: %v", err)
 	}
 	root, err := os.OpenRoot(cache.Root)

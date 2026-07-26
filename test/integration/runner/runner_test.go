@@ -21,7 +21,9 @@ import (
 
 type fakeCache struct{ content string }
 
-func (f fakeCache) Ensure(context.Context, runner.Package) (string, error) { return f.content, nil }
+func (f fakeCache) Ensure(context.Context, runner.Package) (runner.ArchiveRef, error) {
+	return runner.ArchiveRef{Directory: f.content, Archive: "test-tree"}, nil
+}
 
 type fakeJIT struct{ value string }
 

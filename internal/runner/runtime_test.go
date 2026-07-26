@@ -12,7 +12,9 @@ import (
 
 type testCache struct{ root string }
 
-func (c testCache) Ensure(context.Context, Package) (string, error) { return c.root, nil }
+func (c testCache) Ensure(context.Context, Package) (ArchiveRef, error) {
+	return ArchiveRef{Directory: c.root, Archive: "test-tree"}, nil
+}
 
 type testSupervisor struct {
 	starts, stops int

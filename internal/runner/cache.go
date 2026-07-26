@@ -38,60 +38,60 @@ type cacheManifest struct {
 // Ensure returns the immutable content directory. A complete cache entry becomes
 // visible only through an atomic directory rename; concurrent creators either win
 // that rename or discard their verified temporary copy and use the winner.
-func (c Cache) Ensure(ctx context.Context, pkg Package) (string, error) {
+func (c Cache) Ensure(ctx context.Context, pkg Package) (ArchiveRef, error) {
 	if c.Root == "" || c.Fetcher == nil || !c.validPackage(pkg) {
-		return "", ErrInvalidRequest
+		return ArchiveRef{}, ErrInvalidRequest
 	}
 	if err := os.MkdirAll(c.Root, 0o700); err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	root, err := os.OpenRoot(c.Root)
 	if err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	defer root.Close()
 	if err := root.MkdirAll("packages", 0o700); err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	entry := path.Join("packages", pkg.key())
 	if validCacheEntry(root, entry, pkg) {
-		return filepath.Join(c.Root, entry), nil
+		return ArchiveRef{Directory: filepath.Join(c.Root, entry), Archive: "archive"}, nil
 	}
 
 	temporary, err := cacheTemporaryName(root)
 	if err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	defer func() {
 		_ = thawCacheEntry(root, temporary)
 		_ = root.RemoveAll(temporary)
 	}()
 	if err := root.Mkdir(temporary, 0o700); err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	tempRoot, err := root.OpenRoot(temporary)
 	if err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	defer tempRoot.Close()
 	if err := c.downloadAndExtract(ctx, tempRoot, pkg); err != nil {
-		return "", err
+		return ArchiveRef{}, err
 	}
 	manifest, err := json.Marshal(cacheManifest{pkg.Version, pkg.Platform, pkg.Asset, pkg.Checksum, pkg.Size, string(pkg.Format)})
 	if err != nil || tempRoot.WriteFile("manifest.json", manifest, 0o600) != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	if err := freezeCacheEntry(tempRoot); err != nil {
-		return "", ErrPackageIntegrity
+		return ArchiveRef{}, ErrPackageIntegrity
 	}
 	// Renaming a populated directory onto another populated directory fails on
 	// supported hosts. That gives one complete winner without a stale lock file.
 	if err := root.Rename(temporary, entry); err != nil {
 		if !validCacheEntry(root, entry, pkg) {
-			return "", ErrPackageIntegrity
+			return ArchiveRef{}, ErrPackageIntegrity
 		}
 	}
-	return filepath.Join(c.Root, entry), nil
+	return ArchiveRef{Directory: filepath.Join(c.Root, entry), Archive: "archive"}, nil
 }
 
 // rebuildCachedContent treats the pinned archive, not the mutable extracted
