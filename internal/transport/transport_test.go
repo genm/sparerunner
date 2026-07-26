@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coder/websocket"
 	"github.com/genm/tewake/internal/enroll"
 )
 
@@ -194,6 +195,32 @@ func TestAuthenticatedWSSAcceptsCurrentMTLSCredential(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatal("controller did not receive authenticated WebSocket frame")
+	}
+}
+
+func TestAuthenticatedWSSRejectsMissingClientCertificate(t *testing.T) {
+	service, registry := transportService(t)
+	serverConfig, err := ControllerServerTLSConfig(service.Identity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if err := UpgradeAuthenticated(writer, request, registry, func(context.Context, *AuthenticatedSession) error { return nil }); err != nil {
+			http.Error(writer, "rejected", http.StatusUnauthorized)
+		}
+	}))
+	server.TLS = serverConfig
+	server.StartTLS()
+	defer server.Close()
+	pool := x509.NewCertPool()
+	pool.AddCert(service.Identity.CA)
+	endpoint := "wss" + strings.TrimPrefix(server.URL, "https")
+	_, response, err := websocket.Dial(context.Background(), endpoint, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: enroll.ControllerDNSName}}}, Subprotocols: []string{"tewake.v1"}})
+	if err == nil {
+		t.Fatal("missing client certificate accepted")
+	}
+	if response == nil || response.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing certificate response = %#v", response)
 	}
 }
 
