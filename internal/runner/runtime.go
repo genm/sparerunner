@@ -44,6 +44,7 @@ type Snapshot struct {
 // execution ID or secret-bearing absolute path.
 type Cleaner interface {
 	RemoveAndVerify(context.Context, *os.Root, string) error
+	StrongWorkspaceOwnership() bool
 }
 
 type PackageCache interface {
@@ -51,6 +52,8 @@ type PackageCache interface {
 }
 
 type rootCleaner struct{}
+
+func (rootCleaner) StrongWorkspaceOwnership() bool { return false }
 
 func (rootCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
 	// Absence before cleanup is not success: a renamed root can still contain
@@ -168,6 +171,9 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		return Snapshot{}, ErrInvalidRequest
 	}
 	if !m.supervisor.StrongDescendantOwnership() {
+		return Snapshot{}, ErrStrongOwnershipUnavailable
+	}
+	if !m.cleaner.StrongWorkspaceOwnership() {
 		return Snapshot{}, ErrStrongOwnershipUnavailable
 	}
 	prepared, err := m.EnsurePrepared(ctx, request.Preparation)

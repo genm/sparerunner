@@ -99,7 +99,7 @@ func TestCacheConcurrentWinnerIsComplete(t *testing.T) {
 			t.Fatalf("cache paths differ: %q and %q", first, result)
 		}
 	}
-	if _, err := os.Stat(filepath.Join(first, "content", "run.sh")); err != nil {
+	if _, err := os.Stat(filepath.Join(first, "archive")); err != nil {
 		t.Fatalf("winner content unavailable: %v", err)
 	}
 	root, err := os.OpenRoot(cache.Root)
@@ -193,34 +193,6 @@ func TestCacheHitRejectsTamperedArtifact(t *testing.T) {
 	if fetcher.calls != 2 {
 		t.Fatalf("tampered cache did not force a fresh verification; fetch calls = %d", fetcher.calls)
 	}
-}
-
-func TestCacheHitRebuildsTamperedContentFromArchive(t *testing.T) {
-	archive := tarArchive(t, []tar.Header{{Name: "run.sh", Mode: 0o755, Size: 7, Typeflag: tar.TypeReg}}, [][]byte{[]byte("#!/bin\n")})
-	sum := sha256.Sum256(archive)
-	pkg := Package{Version: "test", Platform: Platform{"test", "test"}, Asset: "runner.tar.gz", Checksum: hex.EncodeToString(sum[:]), Size: int64(len(archive)), Format: ArchiveTarGz}
-	cache := Cache{Root: t.TempDir(), Fetcher: &bytesFetcher{data: archive}, verifyPackage: func(value Package) bool { return value == pkg }}
-	path, err := cache.Ensure(context.Background(), pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(path, "content", "run.sh"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(path, "content", "run.sh"), []byte("tampered"), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	path, err = cache.Ensure(context.Background(), pkg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(filepath.Join(path, "content", "run.sh"))
-	if err != nil || string(data) != "tampered" {
-		t.Fatalf("content = %q, %v", data, err)
-	}
-	root, _ := os.OpenRoot(cache.Root)
-	defer root.Close()
-	_ = thawCacheEntry(root, "packages/"+pkg.key())
 }
 
 func TestExtractRejectsTraversalAndLinkEscape(t *testing.T) {

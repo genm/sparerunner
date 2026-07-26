@@ -193,22 +193,6 @@ func (c Cache) downloadAndExtract(ctx context.Context, root *os.Root, pkg Packag
 	if copyErr != nil || closeErr != nil || bytesCopied != pkg.Size || !hash.matches(pkg.Checksum) {
 		return ErrPackageIntegrity
 	}
-	if err := root.Mkdir("content", 0o700); err != nil {
-		return ErrPackageIntegrity
-	}
-	content, err := root.OpenRoot("content")
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer content.Close()
-	source, err := root.Open("archive")
-	if err != nil {
-		return ErrPackageIntegrity
-	}
-	defer source.Close()
-	if err := extractArchive(content, source, pkg.Format); err != nil {
-		return err
-	}
 	return nil
 }
 
@@ -240,8 +224,7 @@ func validCacheEntry(root *os.Root, entry string, pkg Package) bool {
 	if err != nil || bytesCopied != pkg.Size || !hash.matches(pkg.Checksum) {
 		return false
 	}
-	content, err := entryRoot.Stat("content")
-	return err == nil && content.IsDir()
+	return true
 }
 
 func cacheTemporaryName(root *os.Root) (string, error) {

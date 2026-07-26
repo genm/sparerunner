@@ -18,6 +18,9 @@ type testSupervisor struct {
 	starts, stops int
 	stopErr       error
 }
+type strongCleaner struct{ rootCleaner }
+
+func (strongCleaner) StrongWorkspaceOwnership() bool { return true }
 
 func (*testSupervisor) StrongDescendantOwnership() bool { return true }
 func (s *testSupervisor) Start(context.Context, StartRequest) (Process, error) {
@@ -53,7 +56,7 @@ func TestJITCallbackReplayStopsSingleProcess(t *testing.T) {
 	}
 	supervisor := &testSupervisor{}
 	journal := NewMemoryJournal()
-	manager, err := NewManager(Options{RuntimeRoot: t.TempDir(), Cache: testCache{content}, Journal: journal, Supervisor: supervisor})
+	manager, err := NewManager(Options{RuntimeRoot: t.TempDir(), Cache: testCache{content}, Journal: journal, Supervisor: supervisor, Cleaner: strongCleaner{}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -76,7 +79,7 @@ func TestJITDeliveryFailureWithStopFailureQuarantines(t *testing.T) {
 	}
 	supervisor := &testSupervisor{stopErr: ErrCleanupFailed}
 	journal := NewMemoryJournal()
-	manager, err := NewManager(Options{RuntimeRoot: t.TempDir(), Cache: testCache{content}, Journal: journal, Supervisor: supervisor})
+	manager, err := NewManager(Options{RuntimeRoot: t.TempDir(), Cache: testCache{content}, Journal: journal, Supervisor: supervisor, Cleaner: strongCleaner{}})
 	if err != nil {
 		t.Fatal(err)
 	}

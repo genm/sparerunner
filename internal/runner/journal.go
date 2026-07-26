@@ -25,7 +25,12 @@ type Record struct {
 	RootName    string
 	PID         int
 	Tombstone   bool
+	Containment ContainmentRef
 }
+
+// ContainmentRef is durable platform ownership metadata. PID is observation
+// only; twk-007 fills this with a systemd unit/cgroup/boot/invocation identity.
+type ContainmentRef struct{ Backend, Unit, ControlGroup, BootID, InvocationID string }
 
 // Journal is the durable local observation boundary. A future SQLite journal may
 // implement it without changing lifecycle behavior or receiving JIT material.
