@@ -27,7 +27,8 @@ func (s *unixSupervisor) Start(_ context.Context, request StartRequest) (Process
 	if request.Executable == "" || request.Directory == "" {
 		return Process{}, ErrInvalidRequest
 	}
-	command := exec.Command(request.Executable, request.Arguments...)
+	arguments := append(append([]string{}, request.Arguments...), "--jitconfig", request.jit.value)
+	command := exec.Command(request.Executable, arguments...)
 	command.Dir = request.Directory
 	command.Stdout = nil
 	command.Stderr = nil

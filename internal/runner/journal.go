@@ -18,14 +18,15 @@ const (
 // Record contains only replay-safe metadata. In particular it contains neither
 // JIT configuration nor process arguments, because those are secret-bearing.
 type Record struct {
-	ExecutionID string
-	SpecDigest  string
-	JITDigest   string
-	State       State
-	RootName    string
-	PID         int
-	Tombstone   bool
-	Containment ContainmentRef
+	ExecutionID  string
+	SpecDigest   string
+	JITDigest    string
+	State        State
+	RootName     string
+	PID          int
+	Tombstone    bool
+	Containment  ContainmentRef
+	WorkspaceRef string
 }
 
 // ContainmentRef is durable platform ownership metadata. PID is observation

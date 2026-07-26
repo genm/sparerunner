@@ -45,6 +45,7 @@ type Snapshot struct {
 type Cleaner interface {
 	RemoveAndVerify(context.Context, *os.Root, string) error
 	StrongWorkspaceOwnership() bool
+	WorkspaceRef(context.Context, *os.Root, string) (string, error)
 }
 
 type PackageCache interface {
@@ -59,6 +60,9 @@ type ArchiveRef struct{ Directory, Archive string }
 type rootCleaner struct{}
 
 func (rootCleaner) StrongWorkspaceOwnership() bool { return false }
+func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (string, error) {
+	return "", ErrStrongOwnershipUnavailable
+}
 
 func (rootCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
 	// Absence before cleanup is not success: a renamed root can still contain
@@ -198,6 +202,16 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 	if !validRecord(record) {
 		return Snapshot{}, ErrReconciliationRequired
 	}
+	if record.WorkspaceRef == "" {
+		ref, refErr := m.workspaceRef(ctx, record.RootName)
+		if refErr != nil || ref == "" {
+			return Snapshot{}, ErrStrongOwnershipUnavailable
+		}
+		record.WorkspaceRef = ref
+		if err := m.save(ctx, record); err != nil {
+			return Snapshot{}, err
+		}
+	}
 	jitDigest := request.JIT.Digest()
 	switch record.State {
 	case StateRunning:
@@ -236,7 +250,8 @@ func (m *Manager) EnsureRunning(ctx context.Context, request Start) (Snapshot, e
 		process, startErr = m.supervisor.Start(ctx, StartRequest{
 			Executable: runnerExecutable(m.runtimeRoot, record.RootName),
 			Directory:  executionPath(m.runtimeRoot, record.RootName),
-			Arguments:  runnerArguments(value, request.DisableUpdate),
+			Arguments:  runnerArguments(request.DisableUpdate),
+			jit:        jitArgument{value: value},
 		})
 		return startErr
 	}); err != nil {
@@ -327,6 +342,12 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		// release capacity on the strength of an unobservable guess.
 		return m.quarantine(ctx, record)
 	}
+	if record.WorkspaceRef == "" {
+		return m.quarantine(ctx, record)
+	}
+	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
+		return m.quarantine(ctx, record)
+	}
 	if record.PID > 0 {
 		if err := m.supervisor.Stop(ctx, Process{PID: record.PID}); err != nil {
 			return m.quarantine(ctx, record)
@@ -409,6 +430,20 @@ func (m *Manager) removeRoot(ctx context.Context, name string) error {
 	return nil
 }
 
+func (m *Manager) workspaceRef(ctx context.Context, name string) (string, error) {
+	parent, err := os.OpenRoot(m.runtimeRoot)
+	if err != nil {
+		return "", ErrCleanupFailed
+	}
+	defer parent.Close()
+	executions, err := parent.OpenRoot("executions")
+	if err != nil {
+		return "", ErrCleanupFailed
+	}
+	defer executions.Close()
+	return m.cleaner.WorkspaceRef(ctx, executions, name)
+}
+
 func (m *Manager) executionRootExists(name string) bool {
 	parent, err := os.OpenRoot(m.runtimeRoot)
 	if err != nil {
@@ -445,8 +480,8 @@ func executionRootName(executionID string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func runnerArguments(jit string, disableUpdate bool) []string {
-	args := []string{"--jitconfig", jit, "--ephemeral"}
+func runnerArguments(disableUpdate bool) []string {
+	args := []string{"--ephemeral"}
 	if disableUpdate {
 		args = append(args, "--disableupdate")
 	}

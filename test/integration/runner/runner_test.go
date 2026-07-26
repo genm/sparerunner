@@ -36,6 +36,9 @@ func (j fakeJIT) Deliver(deliver func(string) error) error { return deliver(j.va
 type failingCleaner struct{}
 
 func (failingCleaner) StrongWorkspaceOwnership() bool { return true }
+func (failingCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
+}
 
 func (failingCleaner) RemoveAndVerify(context.Context, *os.Root, string) error {
 	return errors.New("permission denied: secret path")

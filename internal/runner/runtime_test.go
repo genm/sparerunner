@@ -23,6 +23,9 @@ type testSupervisor struct {
 type strongCleaner struct{ rootCleaner }
 
 func (strongCleaner) StrongWorkspaceOwnership() bool { return true }
+func (strongCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (string, error) {
+	return "test:" + name, nil
+}
 
 func (*testSupervisor) StrongDescendantOwnership() bool { return true }
 func (s *testSupervisor) Start(context.Context, StartRequest) (Process, error) {
