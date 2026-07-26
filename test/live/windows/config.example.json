@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "evidenceDirectory": "C:\\TewakeEvidence",
+  "expectedCommitSha": "0123456789abcdef0123456789abcdef01234567",
+  "expectedAgentSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "installedAgent": "C:\\Program Files\\Tewake\\tewake-agent.exe",
+  "agentStateDirectory": "C:\\ProgramData\\Tewake\\agent-state",
+  "cacheRoot": "C:\\ProgramData\\Tewake\\cache",
+  "runtimeRoot": "C:\\ProgramData\\Tewake\\runtime"
+}

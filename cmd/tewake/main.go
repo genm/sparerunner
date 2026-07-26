@@ -156,7 +156,7 @@ func newJoinCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			nodeID, err := app.JoinAgent(command.Context(), app.JoinOptions{
+			nodeID, err := platformJoinAgent(command.Context(), app.JoinOptions{
 				StateDirectory:    directory,
 				JoinCode:          args[0],
 				Controller:        controller,
