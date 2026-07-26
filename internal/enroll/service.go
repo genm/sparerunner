@@ -7,8 +7,10 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"time"
 )
 
@@ -17,12 +19,29 @@ import (
 type Service struct {
 	Registry  Registry
 	Identity  ControllerIdentity
-	DigestKey [32]byte
+	digestKey [32]byte
 	// Epoch is the durable controller epoch captured in one-time tokens. It is
 	// distinct from a node credential epoch, which is per-node revocation state.
 	Epoch  uint64
 	Now    func() time.Time
 	Random io.Reader
+}
+
+func NewService(registry Registry, identity ControllerIdentity, digestKey [32]byte, epoch uint64) (Service, error) {
+	service := Service{Registry: registry, Identity: identity, digestKey: digestKey, Epoch: epoch}
+	if err := service.valid(); err != nil {
+		return Service{}, err
+	}
+	return service, nil
+}
+
+func (service Service) String() string       { return "enrollment-service[redacted]" }
+func (service Service) GoString() string     { return service.String() }
+func (service Service) LogValue() slog.Value { return slog.StringValue(service.String()) }
+func (service Service) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Epoch uint64 `json:"epoch"`
+	}{Epoch: service.Epoch})
 }
 
 type EnrollmentResult struct {
@@ -44,7 +63,7 @@ func (service Service) CreateJoinCode(ctx context.Context, hints []string) (stri
 	if err != nil {
 		return "", err
 	}
-	if err := service.Registry.CreateToken(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.DigestKey, code.tokenID, code.secret), Epoch: service.Epoch}); err != nil {
+	if err := service.Registry.CreateToken(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.digestKey, code.tokenID, code.secret), Epoch: service.Epoch}); err != nil {
 		return "", err
 	}
 	return code.Encode()
@@ -66,6 +85,15 @@ func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []
 		return EnrollmentResult{}, err
 	}
 	now := service.now()
+	csrRequest, parseErr := x509.ParseCertificateRequest(csrDER)
+	if parseErr != nil || csrRequest.CheckSignature() != nil {
+		return EnrollmentResult{}, errors.New("invalid certificate request")
+	}
+	publicKeyDER, marshalErr := x509.MarshalPKIXPublicKey(csrRequest.PublicKey)
+	if marshalErr != nil {
+		return EnrollmentResult{}, marshalErr
+	}
+	csrDigest := sha256.Sum256(publicKeyDER)
 	// Credential epoch is per node and starts at one. Controller process epoch is
 	// deliberately only a join-token generation guard; a restart must not invalidate
 	// an otherwise current node credential or prevent its renewal.
@@ -74,10 +102,19 @@ func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []
 		return EnrollmentResult{}, err
 	}
 	credential := credentialFor(nodeID, certificate, 1)
-	if err := service.Registry.ConsumeEnrollment(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.DigestKey, code.tokenID, code.secret), Epoch: service.Epoch}, NodeRecord{NodeID: nodeID, Credential: credential}); err != nil {
+	token := TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.digestKey, code.tokenID, code.secret), Epoch: service.Epoch}
+	node := NodeRecord{NodeID: nodeID, Credential: credential, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: service.Identity.CA.Raw}
+	if err := service.Registry.ConsumeEnrollment(ctx, token, node); err != nil {
+		if replay, replayErr := service.Registry.ReplayEnrollment(ctx, token, csrDigest); replayErr == nil {
+			return enrollmentResult(replay), nil
+		}
 		return EnrollmentResult{}, err
 	}
-	return EnrollmentResult{NodeID: nodeID, CertificateDER: certificateDER, CACertificateDER: service.Identity.CA.Raw, Credential: credential}, nil
+	return enrollmentResult(node), nil
+}
+
+func enrollmentResult(node NodeRecord) EnrollmentResult {
+	return EnrollmentResult{NodeID: node.NodeID, CertificateDER: append([]byte(nil), node.CertificateDER...), CACertificateDER: append([]byte(nil), node.CACertificateDER...), Credential: node.Credential}
 }
 
 func (service Service) Cancel(ctx context.Context, tokenID [16]byte) error {
@@ -106,7 +143,7 @@ func (service Service) Renew(ctx context.Context, current Credential, csrDER []b
 }
 
 func (service Service) valid() error {
-	if service.Registry == nil || service.Epoch == 0 || zeroBytes(service.DigestKey[:]) {
+	if service.Registry == nil || service.Epoch == 0 || zeroBytes(service.digestKey[:]) {
 		return errors.New("incomplete enrollment service")
 	}
 	return service.Identity.Validate(service.now())

@@ -31,7 +31,12 @@ func transportService(t *testing.T) (enroll.Service, *enroll.MemoryRegistry) {
 		t.Fatal(err)
 	}
 	registry := enroll.NewMemoryRegistry()
-	return enroll.Service{Registry: registry, Identity: identity, DigestKey: digestKey, Epoch: 4, Now: func() time.Time { return now }}, registry
+	service, err := enroll.NewService(registry, identity, digestKey, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Now = func() time.Time { return now }
+	return service, registry
 }
 
 func transportCSR(t *testing.T) ([]byte, ed25519.PrivateKey) {
@@ -90,7 +95,9 @@ func TestEnrollmentClientDoesNotSendBodyToWrongFingerprint(t *testing.T) {
 		t.Fatal(err)
 	}
 	csr, _ := transportCSR(t)
-	if _, err := (EnrollmentClient{}).Enroll(context.Background(), server.URL, code, csr); err == nil {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := (EnrollmentClient{}).Enroll(ctx, server.URL, code, csr); err == nil {
 		t.Fatal("fake controller accepted")
 	}
 	if got := received.Load(); got != 0 {
@@ -113,7 +120,9 @@ func TestEnrollmentHandlerAndPinnedClientCompleteInitialJoinWithoutClientCertifi
 		t.Fatal(err)
 	}
 	csr, _ := transportCSR(t)
-	response, err := (EnrollmentClient{}).Enroll(context.Background(), server.URL, code, csr)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	response, err := (EnrollmentClient{}).Enroll(ctx, server.URL, code, csr)
 	if err != nil {
 		t.Fatal(err)
 	}

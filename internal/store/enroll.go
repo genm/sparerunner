@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/genm/tewake/internal/enroll"
@@ -18,7 +19,7 @@ func (store *ControllerStore) CreateToken(ctx context.Context, token enroll.Toke
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if token.Epoch == 0 || token.Epoch > maxSQLiteInteger {
+	if token.Epoch == 0 || token.Epoch > maxSQLiteInteger || allZero(token.ID[:]) || allZero(token.SecretDigest[:]) {
 		return enroll.ErrTokenEpochMismatch
 	}
 	_, err := store.db.ExecContext(ctx, `INSERT INTO enrollment_tokens(token_id, secret_digest, controller_epoch) VALUES (?, ?, ?)`, token.ID[:], token.SecretDigest[:], token.Epoch)
@@ -29,7 +30,7 @@ func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied en
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if supplied.Epoch == 0 || supplied.Epoch > maxSQLiteInteger || node.NodeID == "" || node.Credential.NodeID != node.NodeID || node.Credential.Serial == "" || node.Credential.Epoch == 0 {
+	if supplied.Epoch == 0 || supplied.Epoch > maxSQLiteInteger || allZero(supplied.ID[:]) || allZero(supplied.SecretDigest[:]) || !canonicalNodeID(node.NodeID) || node.Credential.NodeID != node.NodeID || !canonicalSerial(node.Credential.Serial) || node.Credential.Epoch == 0 || allZero(node.PublicKeyDigest[:]) || len(node.CertificateDER) == 0 || len(node.CACertificateDER) == 0 {
 		return enroll.ErrCredentialRejected
 	}
 	before, after, err := enrollmentTimes(node.Credential)
@@ -56,7 +57,7 @@ func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied en
 	if len(digest) != len(supplied.SecretDigest) || subtle.ConstantTimeCompare(digest, supplied.SecretDigest[:]) != 1 {
 		return enroll.ErrTokenSecretMismatch
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO enrolled_nodes(node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked) VALUES (?, ?, ?, ?, ?, 0)`, node.NodeID, node.Credential.Serial, node.Credential.Epoch, before, after); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO enrolled_nodes(node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked, enrollment_token_id, enrollment_secret_digest, public_key_digest, certificate_der, ca_der) VALUES (?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)`, node.NodeID, node.Credential.Serial, node.Credential.Epoch, before, after, supplied.ID[:], supplied.SecretDigest[:], node.PublicKeyDigest[:], node.CertificateDER, node.CACertificateDER); err != nil {
 		return fmt.Errorf("create enrolled node: %w", err)
 	}
 	if result, err := tx.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, supplied.ID[:]); err != nil {
@@ -65,6 +66,44 @@ func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied en
 		return enroll.ErrTokenNotFound
 	}
 	return tx.Commit()
+}
+
+func (store *ControllerStore) ReplayEnrollment(ctx context.Context, supplied enroll.TokenRecord, csrDigest [32]byte) (enroll.NodeRecord, error) {
+	if err := store.requireReady(); err != nil {
+		return enroll.NodeRecord{}, err
+	}
+	if allZero(supplied.ID[:]) || allZero(supplied.SecretDigest[:]) || allZero(csrDigest[:]) {
+		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
+	}
+	var nodeID, serial string
+	var epoch uint64
+	var before, after int64
+	var revoked int
+	var storedSecret, storedDigest, certificateDER, caDER []byte
+	err := store.db.QueryRowContext(ctx, `SELECT node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked, enrollment_secret_digest, public_key_digest, certificate_der, ca_der FROM enrolled_nodes WHERE enrollment_token_id = ?`, supplied.ID[:]).Scan(&nodeID, &serial, &epoch, &before, &after, &revoked, &storedSecret, &storedDigest, &certificateDER, &caDER)
+	if errors.Is(err, sql.ErrNoRows) {
+		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
+	}
+	if err != nil {
+		return enroll.NodeRecord{}, err
+	}
+	if len(storedSecret) != 32 || len(storedDigest) != 32 || supplied.Epoch == 0 || subtle.ConstantTimeCompare(storedSecret, supplied.SecretDigest[:]) != 1 || subtle.ConstantTimeCompare(storedDigest, csrDigest[:]) != 1 {
+		return enroll.NodeRecord{}, enroll.ErrTokenNotFound
+	}
+	return enroll.NodeRecord{NodeID: nodeID, Credential: enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: time.Unix(0, before), NotAfter: time.Unix(0, after)}, Revoked: revoked != 0, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: caDER}, nil
+}
+
+func (store *ControllerStore) FinalizeEnrollment(ctx context.Context, credential enroll.Credential) error {
+	if err := store.requireReady(); err != nil {
+		return err
+	}
+	if err := store.AuthorizeCredential(ctx, credential, time.Now()); err != nil {
+		return err
+	}
+	// The replay material is currently co-located with the issued node row and
+	// cannot be deleted independently. A follow-up migration separates it before
+	// CLI join is wired; this method deliberately does not claim finalization.
+	return nil
 }
 
 func (store *ControllerStore) CancelToken(ctx context.Context, tokenID [16]byte) error {
@@ -82,6 +121,12 @@ func (store *ControllerStore) CancelToken(ctx context.Context, tokenID [16]byte)
 }
 
 func (store *ControllerStore) LookupNode(ctx context.Context, nodeID string) (enroll.NodeRecord, error) {
+	if err := store.requireReady(); err != nil {
+		return enroll.NodeRecord{}, err
+	}
+	if !canonicalNodeID(nodeID) {
+		return enroll.NodeRecord{}, enroll.ErrNodeNotFound
+	}
 	credential, revoked, err := store.readCredential(ctx, store.db, nodeID)
 	if err != nil {
 		return enroll.NodeRecord{}, err
@@ -90,6 +135,12 @@ func (store *ControllerStore) LookupNode(ctx context.Context, nodeID string) (en
 }
 
 func (store *ControllerStore) CurrentCredential(ctx context.Context, nodeID string) (enroll.Credential, error) {
+	if err := store.requireReady(); err != nil {
+		return enroll.Credential{}, err
+	}
+	if !canonicalNodeID(nodeID) {
+		return enroll.Credential{}, enroll.ErrNodeNotFound
+	}
 	credential, revoked, err := store.readCredential(ctx, store.db, nodeID)
 	if err != nil {
 		return enroll.Credential{}, err
@@ -104,7 +155,7 @@ func (store *ControllerStore) RenewCredential(ctx context.Context, nodeID string
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if nodeID == "" || replacement.NodeID != nodeID || replacement.Epoch != expected.Epoch || replacement.Serial == expected.Serial {
+	if !canonicalNodeID(nodeID) || replacement.NodeID != nodeID || !canonicalSerial(expected.Serial) || !canonicalSerial(replacement.Serial) || replacement.Epoch != expected.Epoch || replacement.Serial == expected.Serial {
 		return enroll.ErrCredentialRejected
 	}
 	before, after, err := enrollmentTimes(replacement)
@@ -167,6 +218,9 @@ func (store *ControllerStore) AuthorizeCredential(ctx context.Context, credentia
 	if err := store.requireReady(); err != nil {
 		return err
 	}
+	if !canonicalNodeID(credential.NodeID) || !canonicalSerial(credential.Serial) {
+		return enroll.ErrCredentialRejected
+	}
 	current, revoked, err := store.readCredential(ctx, store.db, credential.NodeID)
 	if err != nil || revoked || !equalCredential(current, credential) || now.Before(credential.NotBefore) || !now.Before(credential.NotAfter) {
 		return enroll.ErrCredentialRejected
@@ -210,6 +264,28 @@ func enrollmentTimes(credential enroll.Credential) (int64, int64, error) {
 
 func equalCredential(left, right enroll.Credential) bool {
 	return left.NodeID == right.NodeID && left.Serial == right.Serial && left.Epoch == right.Epoch && left.NotBefore.Equal(right.NotBefore) && left.NotAfter.Equal(right.NotAfter)
+}
+
+func allZero(value []byte) bool {
+	var combined byte
+	for _, item := range value {
+		combined |= item
+	}
+	return combined == 0
+}
+func canonicalNodeID(value string) bool {
+	return len(value) == 32 && value == strings.ToLower(value) && isLowerHex(value)
+}
+func canonicalSerial(value string) bool {
+	return value != "" && value == strings.ToLower(value) && isLowerHex(value)
+}
+func isLowerHex(value string) bool {
+	for _, item := range value {
+		if !(item >= '0' && item <= '9') && !(item >= 'a' && item <= 'f') {
+			return false
+		}
+	}
+	return true
 }
 
 var _ enroll.Registry = (*ControllerStore)(nil)

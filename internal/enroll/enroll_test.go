@@ -29,7 +29,12 @@ func testService(t *testing.T) (Service, *MemoryRegistry, time.Time) {
 		t.Fatal(err)
 	}
 	registry := NewMemoryRegistry()
-	return Service{Registry: registry, Identity: identity, DigestKey: digestKey, Epoch: 7, Now: func() time.Time { return now }}, registry, now
+	service, err := NewService(registry, identity, digestKey, 7)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Now = func() time.Time { return now }
+	return service, registry, now
 }
 
 func nodeCSR(t *testing.T) ([]byte, ed25519.PrivateKey) {
@@ -97,7 +102,7 @@ func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rendered := range []string{fmt.Sprint(code), fmt.Sprintf("%#v", code), code.LogValue().String(), service.Identity.String(), fmt.Sprintf("%#v", service.Identity), service.Identity.LogValue().String()} {
+	for _, rendered := range []string{fmt.Sprint(code), fmt.Sprintf("%#v", code), code.LogValue().String(), service.Identity.String(), fmt.Sprintf("%#v", service.Identity), service.Identity.LogValue().String(), service.String(), fmt.Sprintf("%#v", service), service.LogValue().String()} {
 		if strings.Contains(rendered, encoded) || strings.Contains(rendered, string(code.secret[:])) {
 			t.Fatalf("secret leaked through representation %q", rendered)
 		}
@@ -110,7 +115,11 @@ func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(serializedCode), encoded) || strings.Contains(string(serializedIdentity), string(service.Identity.key)) {
+	serializedService, err := json.Marshal(service)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(serializedCode), encoded) || strings.Contains(string(serializedIdentity), string(service.Identity.key)) || strings.Contains(string(serializedService), string(service.digestKey[:])) {
 		t.Fatal("secret leaked through JSON")
 	}
 }
@@ -129,8 +138,9 @@ func TestEnrollmentConsumesOnceAndFailsClosed(t *testing.T) {
 	if result.NodeID == "" || result.Credential.NodeID != result.NodeID || result.Credential.Epoch != 1 {
 		t.Fatal("missing node identity")
 	}
-	if _, err := service.Enroll(context.Background(), code, csr); !errors.Is(err, ErrTokenNotFound) {
-		t.Fatalf("replay = %v, want unavailable token", err)
+	replayed, err := service.Enroll(context.Background(), code, csr)
+	if err != nil || replayed.NodeID != result.NodeID || replayed.Credential != result.Credential {
+		t.Fatalf("idempotent replay = %+v, %v", replayed, err)
 	}
 	if err := registry.AuthorizeCredential(context.Background(), result.Credential, service.Now()); err != nil {
 		t.Fatalf("fresh credential rejected: %v", err)
@@ -258,6 +268,9 @@ func TestRenewalPreservesNodeAndSupersedesOldCredential(t *testing.T) {
 }
 
 func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("platform credential store adapter is owned by twk008/twk009")
+	}
 	service, _, now := testService(t)
 	identityDirectory := t.TempDir()
 	if err := os.Chmod(identityDirectory, 0700); err != nil {
@@ -299,8 +312,8 @@ func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 }
 
 func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("Windows persistence is intentionally fail-closed pending twk009")
+	if runtime.GOOS != "linux" {
+		t.Skip("platform credential store adapter is owned by twk008/twk009")
 	}
 	service, _, _ := testService(t)
 	directory := t.TempDir()

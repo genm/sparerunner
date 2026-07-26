@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"errors"
+	"math"
 	"sync"
 	"time"
 )
@@ -35,9 +36,12 @@ type Credential struct {
 }
 
 type NodeRecord struct {
-	NodeID     string
-	Credential Credential
-	Revoked    bool
+	NodeID           string
+	Credential       Credential
+	Revoked          bool
+	PublicKeyDigest  [32]byte
+	CertificateDER   []byte
+	CACertificateDER []byte
 }
 
 // Registry is the persistence boundary for enrollment. ConsumeEnrollment and
@@ -47,6 +51,8 @@ type NodeRecord struct {
 type Registry interface {
 	CreateToken(context.Context, TokenRecord) error
 	ConsumeEnrollment(context.Context, TokenRecord, NodeRecord) error
+	ReplayEnrollment(context.Context, TokenRecord, [32]byte) (NodeRecord, error)
+	FinalizeEnrollment(context.Context, Credential) error
 	CancelToken(context.Context, [16]byte) error
 	LookupNode(context.Context, string) (NodeRecord, error)
 	CurrentCredential(context.Context, string) (Credential, error)
@@ -58,13 +64,15 @@ type Registry interface {
 // MemoryRegistry is a concurrency-safe contract test implementation. It mirrors
 // the required atomic mutation boundary, but is not controller persistence.
 type MemoryRegistry struct {
-	mu     sync.Mutex
-	tokens map[[16]byte]TokenRecord
-	nodes  map[string]NodeRecord
+	mu           sync.Mutex
+	tokens       map[[16]byte]TokenRecord
+	nodes        map[string]NodeRecord
+	consumed     map[[16]byte]TokenRecord
+	consumedNode map[[16]byte]string
 }
 
 func NewMemoryRegistry() *MemoryRegistry {
-	return &MemoryRegistry{tokens: make(map[[16]byte]TokenRecord), nodes: make(map[string]NodeRecord)}
+	return &MemoryRegistry{tokens: make(map[[16]byte]TokenRecord), nodes: make(map[string]NodeRecord), consumed: make(map[[16]byte]TokenRecord), consumedNode: make(map[[16]byte]string)}
 }
 
 func (registry *MemoryRegistry) CreateToken(_ context.Context, token TokenRecord) error {
@@ -98,6 +106,38 @@ func (registry *MemoryRegistry) ConsumeEnrollment(_ context.Context, supplied To
 	}
 	delete(registry.tokens, supplied.ID)
 	registry.nodes[node.NodeID] = node
+	registry.consumed[supplied.ID] = supplied
+	registry.consumedNode[supplied.ID] = node.NodeID
+	return nil
+}
+
+func (registry *MemoryRegistry) ReplayEnrollment(_ context.Context, supplied TokenRecord, csrDigest [32]byte) (NodeRecord, error) {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	consumed, exists := registry.consumed[supplied.ID]
+	if !exists || consumed.Epoch != supplied.Epoch || subtle.ConstantTimeCompare(consumed.SecretDigest[:], supplied.SecretDigest[:]) != 1 {
+		return NodeRecord{}, ErrTokenNotFound
+	}
+	node, found := registry.nodes[registry.consumedNode[supplied.ID]]
+	if found && node.PublicKeyDigest == csrDigest && !node.Revoked {
+		return node, nil
+	}
+	return NodeRecord{}, ErrTokenNotFound
+}
+
+func (registry *MemoryRegistry) FinalizeEnrollment(_ context.Context, credential Credential) error {
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	node, found := registry.nodes[credential.NodeID]
+	if !found || node.Revoked || !sameCredential(node.Credential, credential) {
+		return ErrCredentialRejected
+	}
+	for tokenID, nodeID := range registry.consumedNode {
+		if nodeID == credential.NodeID {
+			delete(registry.consumedNode, tokenID)
+			delete(registry.consumed, tokenID)
+		}
+	}
 	return nil
 }
 
@@ -156,6 +196,9 @@ func (registry *MemoryRegistry) RevokeNode(_ context.Context, nodeID string) (Cr
 	node, exists := registry.nodes[nodeID]
 	if !exists {
 		return Credential{}, ErrNodeNotFound
+	}
+	if node.Credential.Epoch == math.MaxUint64 {
+		return Credential{}, ErrCredentialRejected
 	}
 	node.Revoked = true
 	node.Credential.Epoch++

@@ -35,12 +35,15 @@ type EnrollmentResponse struct {
 }
 
 func (EnrollmentClient) Enroll(ctx context.Context, endpoint, encodedCode string, csrDER []byte) (EnrollmentResponse, error) {
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		return EnrollmentResponse{}, errors.New("enrollment context requires an explicit deadline")
+	}
 	code, err := enroll.DecodeJoinCode(encodedCode)
 	if err != nil {
 		return EnrollmentResponse{}, err
 	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return EnrollmentResponse{}, errors.New("invalid enrollment endpoint")
 	}
 	csr, err := x509.ParseCertificateRequest(csrDER)

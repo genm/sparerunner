@@ -360,8 +360,8 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 }
 
 func atomicPrivateFile(path string, contents []byte) error {
-	if runtime.GOOS == "windows" {
-		return errors.New("Windows private material persistence requires the twk009 credential store")
+	if runtime.GOOS != "linux" {
+		return errors.New("private material persistence requires the platform credential store adapter")
 	}
 	parent := filepath.Dir(path)
 	if err := os.MkdirAll(parent, 0700); err != nil {
@@ -401,6 +401,9 @@ func atomicPrivateFile(path string, contents []byte) error {
 	if err := os.Link(temporaryPath, path); err != nil {
 		return fmt.Errorf("atomically persist private material: %w", err)
 	}
+	if err := os.Remove(temporaryPath); err != nil {
+		return fmt.Errorf("remove private material staging file: %w", err)
+	}
 	if err := syncDirectory(parent); err != nil {
 		return err
 	}
@@ -415,7 +418,7 @@ func requirePrivateDirectory(path string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("private material parent is unsafe")
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "linux" || info.Mode().Perm()&0o077 != 0 {
 		return errors.New("private material parent is not private")
 	}
 	return nil
@@ -429,16 +432,16 @@ func requirePrivateRegularFile(path string) error {
 	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("private material path is unsafe")
 	}
-	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "linux" || info.Mode().Perm() != 0o600 {
 		return errors.New("private material is not private")
 	}
 	return nil
 }
 
 func syncDirectory(path string) error {
-	if runtime.GOOS == "windows" {
-		return nil
-	} // ACL/DPAPI protection is owned by twk009.
+	if runtime.GOOS != "linux" {
+		return errors.New("private material durability requires the platform credential store adapter")
+	}
 	directory, err := os.Open(path)
 	if err != nil {
 		return err

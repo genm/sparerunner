@@ -30,7 +30,8 @@ func TestEnrollmentRegistryConsumesTokenAtomicallyAcrossStoreHandles(t *testing.
 		go func(index int, candidate *ControllerStore) {
 			defer group.Done()
 			<-start
-			results <- candidate.ConsumeEnrollment(ctx, token, enroll.NodeRecord{NodeID: enrollmentNodeID(index + 1), Credential: enrollmentCredential(enrollmentNodeID(index+1), "a"+string(rune('0'+index)), now)})
+			nodeID := enrollmentNodeID(index + 1)
+			results <- candidate.ConsumeEnrollment(ctx, token, enrollmentNodeRecord(nodeID, "a"+string(rune('0'+index)), now))
 		}(index, candidate)
 	}
 	close(start)
@@ -63,7 +64,7 @@ func TestEnrollmentRegistryRenewRevokeAndRestart(t *testing.T) {
 	if err := store.CreateToken(ctx, token); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.ConsumeEnrollment(ctx, token, enroll.NodeRecord{NodeID: nodeID, Credential: initial}); err != nil {
+	if err := store.ConsumeEnrollment(ctx, token, enrollmentNodeRecord(nodeID, "abc", now)); err != nil {
 		t.Fatal(err)
 	}
 	if err := store.Close(); err != nil {
@@ -104,4 +105,9 @@ func enrollmentNodeID(seed int) string {
 }
 func enrollmentCredential(nodeID, serial string, now time.Time) enroll.Credential {
 	return enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: 1, NotBefore: now.Add(-time.Minute), NotAfter: now.Add(time.Hour)}
+}
+func enrollmentNodeRecord(nodeID, serial string, now time.Time) enroll.NodeRecord {
+	var digest [32]byte
+	digest[0] = 1
+	return enroll.NodeRecord{NodeID: nodeID, Credential: enrollmentCredential(nodeID, serial, now), PublicKeyDigest: digest, CertificateDER: []byte{1}, CACertificateDER: []byte{2}}
 }

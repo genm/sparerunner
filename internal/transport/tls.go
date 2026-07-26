@@ -23,6 +23,10 @@ type CredentialAuthorizer interface {
 	AuthorizeCredential(context.Context, enroll.Credential, time.Time) error
 }
 
+type EnrollmentFinalizer interface {
+	FinalizeEnrollment(context.Context, enroll.Credential) error
+}
+
 func ControllerServerTLSConfig(identity enroll.ControllerIdentity) (*tls.Config, error) {
 	certificate, err := identity.TLSCertificate()
 	if err != nil {
@@ -161,6 +165,11 @@ func UpgradeAuthenticated(writer http.ResponseWriter, request *http.Request, aut
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
 		return fmt.Errorf("node credential rejected: %w", err)
 	}
+	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
+		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {
+			return fmt.Errorf("node enrollment finalization failed: %w", err)
+		}
+	}
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
 	if err != nil {
 		return err
@@ -178,7 +187,7 @@ func DialNodeWSS(ctx context.Context, endpoint string, config *tls.Config) (*web
 		return nil, nil, errors.New("missing node TLS config")
 	}
 	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" {
+	if err != nil || parsed.Scheme != "wss" || parsed.Host == "" || parsed.User != nil || parsed.Fragment != "" || parsed.RawQuery != "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, nil, errors.New("invalid secure WebSocket endpoint")
 	}
 	client := &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("WebSocket redirects are forbidden") }}

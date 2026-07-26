@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/coder/websocket"
 )
@@ -55,7 +54,7 @@ func (envelope Envelope) Validate() error {
 	if envelope.ProtocolVersion != ProtocolVersion {
 		return ErrProtocolVersion
 	}
-	if envelope.MessageID == "" || envelope.MessageID != strings.TrimSpace(envelope.MessageID) || len(envelope.Payload) == 0 || int64(len(envelope.Payload)) > MaxEnvelopeBytes || !json.Valid(envelope.Payload) || rejectDuplicateJSONKeys(envelope.Payload) != nil {
+	if envelope.MessageID == "" || len(envelope.Payload) == 0 || int64(len(envelope.Payload)) > MaxEnvelopeBytes || !json.Valid(envelope.Payload) || rejectDuplicateJSONKeys(envelope.Payload) != nil {
 		return ErrInvalidEnvelope
 	}
 	var object map[string]json.RawMessage
@@ -74,7 +73,11 @@ func MarshalEnvelope(envelope Envelope) ([]byte, error) {
 	if err := envelope.Validate(); err != nil {
 		return nil, err
 	}
-	return json.Marshal(envelope)
+	payload, err := json.Marshal(envelope)
+	if err != nil || int64(len(payload)) > MaxEnvelopeBytes {
+		return nil, ErrInvalidEnvelope
+	}
+	return payload, nil
 }
 
 func DecodeEnvelope(payload []byte) (Envelope, error) {

@@ -723,7 +723,7 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"executions":             {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
 		"processed_messages":     {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
 		"enrollment_tokens":      {"token_id", "secret_digest", "controller_epoch"},
-		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
+		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked", "enrollment_token_id", "enrollment_secret_digest", "public_key_digest", "certificate_der", "ca_der"},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
