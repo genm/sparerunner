@@ -376,19 +376,19 @@ func TestAgentSnapshotAndHeartbeatCarryTheExclusionSet(t *testing.T) {
 
 	state := &AgentState{Store: agentStore, NodeID: "node-1"}
 	snapshot, err := buildAgentSnapshot(
-		ctx, state, runner.OfficialRunnerVersion, true, domain.AvailabilityAccepting, excluded)
+		ctx, state, runner.OfficialRunnerVersion, true, domain.AvailabilityAccepting, &excluded)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(snapshot.ExcludedTargets) != 2 ||
-		snapshot.ExcludedTargets[0] != "target-a" || snapshot.ExcludedTargets[1] != "target-z" {
+	if snapshot.ExcludedTargets == nil || len(*snapshot.ExcludedTargets) != 2 ||
+		(*snapshot.ExcludedTargets)[0] != "target-a" || (*snapshot.ExcludedTargets)[1] != "target-z" {
 		t.Fatalf("snapshot exclusions = %v", snapshot.ExcludedTargets)
 	}
 	if _, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
 		NodeID:             "node-1",
 		NativeRunnerReady:  true,
 		AvailabilityIntent: domain.AvailabilityAccepting,
-		ExcludedTargets:    excluded,
+		ExcludedTargets:    &excluded,
 	}); err != nil {
 		t.Fatalf("heartbeat with exclusions: %v", err)
 	}

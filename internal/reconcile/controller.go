@@ -803,7 +803,7 @@ func (controller *Controller) reconcileAgentSnapshotAt(
 	// NativeReady but deliberately leave this alone: excluded stays excluded.
 	if snapshot.ExcludedTargets != nil {
 		candidate.scheduler.ExcludedTargets = append(
-			[]domain.TargetID(nil), snapshot.ExcludedTargets...)
+			[]domain.TargetID(nil), *snapshot.ExcludedTargets...)
 	}
 	candidate.scheduler.Reconciled = true
 	candidate.scheduler.ActiveExecutions = activeObservationIDs(snapshot.Observations)
@@ -1757,7 +1757,8 @@ func (controller *Controller) ApplyNodeOwnerState(
 		node.snapshot.AvailabilityIntent = intent
 	}
 	if exclusions != nil {
-		node.snapshot.ExcludedTargets = append([]domain.TargetID{}, exclusions...)
+		set := append([]domain.TargetID{}, exclusions...)
+		node.snapshot.ExcludedTargets = &set
 	}
 	controller.nodes[nodeID] = node
 	snapshot := cloneAgentSnapshot(node.snapshot)
@@ -2349,9 +2350,12 @@ func cloneActions(actions []Action) []Action {
 
 func cloneAgentSnapshot(snapshot transport.AgentSnapshot) transport.AgentSnapshot {
 	snapshot.Commands = append([]domain.Command(nil), snapshot.Commands...)
-	// Preserves nil, which distinguishes "no change reported" from an empty set.
-	snapshot.ExcludedTargets = append(
-		[]domain.TargetID(nil), snapshot.ExcludedTargets...)
+	// The pointer distinguishes "no change reported" (nil) from an empty set;
+	// clone the pointee so a caller's later mutation cannot leak in.
+	if snapshot.ExcludedTargets != nil {
+		set := append([]domain.TargetID{}, *snapshot.ExcludedTargets...)
+		snapshot.ExcludedTargets = &set
+	}
 	snapshot.Observations = append(
 		[]transport.AgentExecutionObservation(nil), snapshot.Observations...)
 	snapshot.CleanupTombstones = append(

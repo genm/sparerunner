@@ -51,7 +51,7 @@ func TestAgentHeartbeatExcludedTargetsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodedEmpty, err := DecodeAgentHeartbeat(emptyPayload)
-	if err != nil || decodedEmpty.ExcludedTargets == nil || len(decodedEmpty.ExcludedTargets) != 0 {
+	if err != nil || decodedEmpty.ExcludedTargets == nil || len(*decodedEmpty.ExcludedTargets) != 0 {
 		t.Fatalf("decoded empty ExcludedTargets = %#v, err = %v", decodedEmpty.ExcludedTargets, err)
 	}
 
@@ -59,16 +59,17 @@ func TestAgentHeartbeatExcludedTargetsRoundTrip(t *testing.T) {
 	populated := AgentHeartbeat{
 		NodeID:            "node-1",
 		NativeRunnerReady: true,
-		ExcludedTargets:   []domain.TargetID{"target-1", "target-2"},
+		ExcludedTargets:   TargetIDSet("target-1", "target-2"),
 	}
 	populatedPayload, err := EncodeAgentHeartbeat(populated)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decodedPopulated, err := DecodeAgentHeartbeat(populatedPayload)
-	if err != nil || len(decodedPopulated.ExcludedTargets) != 2 ||
-		decodedPopulated.ExcludedTargets[0] != "target-1" ||
-		decodedPopulated.ExcludedTargets[1] != "target-2" {
+	if err != nil || decodedPopulated.ExcludedTargets == nil ||
+		len(*decodedPopulated.ExcludedTargets) != 2 ||
+		(*decodedPopulated.ExcludedTargets)[0] != "target-1" ||
+		(*decodedPopulated.ExcludedTargets)[1] != "target-2" {
 		t.Fatalf("decoded populated ExcludedTargets = %#v, err = %v", decodedPopulated.ExcludedTargets, err)
 	}
 
@@ -93,7 +94,7 @@ func TestAgentHeartbeatExcludedTargetsRoundTrip(t *testing.T) {
 	oversizedHeartbeat := AgentHeartbeat{
 		NodeID:            "node-1",
 		NativeRunnerReady: true,
-		ExcludedTargets:   oversized,
+		ExcludedTargets:   &oversized,
 	}
 	if _, err := EncodeAgentHeartbeat(oversizedHeartbeat); err == nil {
 		t.Fatal("oversized ExcludedTargets accepted at encode")

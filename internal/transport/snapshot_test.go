@@ -91,7 +91,7 @@ func TestAgentSnapshotDigestExcludesExcludedTargets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	snapshot.ExcludedTargets = []domain.TargetID{"target-excluded"}
+	snapshot.ExcludedTargets = TargetIDSet("target-excluded")
 	changedDigest, err := AgentSnapshotDigest(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -129,27 +129,28 @@ func TestAgentSnapshotExcludedTargetsRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	decodedEmpty, err := DecodeAgentSnapshot(emptyPayload)
-	if err != nil || decodedEmpty.ExcludedTargets == nil || len(decodedEmpty.ExcludedTargets) != 0 {
+	if err != nil || decodedEmpty.ExcludedTargets == nil || len(*decodedEmpty.ExcludedTargets) != 0 {
 		t.Fatalf("decoded empty ExcludedTargets = %#v, err = %v", decodedEmpty.ExcludedTargets, err)
 	}
 
 	// Populated round-trips intact.
 	populated := base
-	populated.ExcludedTargets = []domain.TargetID{"target-1", "target-2"}
+	populated.ExcludedTargets = TargetIDSet("target-1", "target-2")
 	populatedPayload, err := EncodeAgentSnapshot(populated)
 	if err != nil {
 		t.Fatal(err)
 	}
 	decodedPopulated, err := DecodeAgentSnapshot(populatedPayload)
-	if err != nil || len(decodedPopulated.ExcludedTargets) != 2 ||
-		decodedPopulated.ExcludedTargets[0] != "target-1" ||
-		decodedPopulated.ExcludedTargets[1] != "target-2" {
+	if err != nil || decodedPopulated.ExcludedTargets == nil ||
+		len(*decodedPopulated.ExcludedTargets) != 2 ||
+		(*decodedPopulated.ExcludedTargets)[0] != "target-1" ||
+		(*decodedPopulated.ExcludedTargets)[1] != "target-2" {
 		t.Fatalf("decoded populated ExcludedTargets = %#v, err = %v", decodedPopulated.ExcludedTargets, err)
 	}
 
 	// A duplicate TargetID is corruption, not a legitimate repeat.
 	duplicated := base
-	duplicated.ExcludedTargets = []domain.TargetID{"target-1", "target-1"}
+	duplicated.ExcludedTargets = TargetIDSet("target-1", "target-1")
 	if _, err := EncodeAgentSnapshot(duplicated); err == nil {
 		t.Fatal("duplicate ExcludedTargets entry accepted at encode")
 	}
@@ -168,7 +169,7 @@ func TestAgentSnapshotExcludedTargetsRoundTrip(t *testing.T) {
 		oversized[index] = domain.TargetID(fmt.Sprintf("target-%d", index))
 	}
 	oversizedSnapshot := base
-	oversizedSnapshot.ExcludedTargets = oversized
+	oversizedSnapshot.ExcludedTargets = &oversized
 	if _, err := EncodeAgentSnapshot(oversizedSnapshot); err == nil {
 		t.Fatal("oversized ExcludedTargets accepted at encode")
 	}

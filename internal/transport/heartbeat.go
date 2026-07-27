@@ -18,10 +18,11 @@ type AgentHeartbeat struct {
 	// display and audit; capacity itself is withheld by NativeRunnerReady, so a
 	// Controller that ignores this field can never over-admit because of it.
 	AvailabilityIntent domain.AvailabilityIntent `json:"availabilityIntent,omitempty"`
-	// ExcludedTargets mirrors the AgentSnapshot field at heartbeat cadence.
-	// Absent means "no change reported"; an Agent that never populates it
-	// (this PR) always omits the field.
-	ExcludedTargets []domain.TargetID `json:"excludedTargets,omitempty"`
+	// ExcludedTargets mirrors the AgentSnapshot field at heartbeat cadence,
+	// with the same pointer semantics: nil omits the field ("no change
+	// reported"), while a non-nil empty set crosses as [] so removing the last
+	// exclusion still reaches the controller.
+	ExcludedTargets *[]domain.TargetID `json:"excludedTargets,omitempty"`
 }
 
 func (heartbeat AgentHeartbeat) Validate() error {
@@ -37,7 +38,7 @@ func (heartbeat AgentHeartbeat) Validate() error {
 		return ErrInvalidCommand
 	}
 	if heartbeat.ExcludedTargets != nil {
-		if err := ValidateExcludedTargets(heartbeat.ExcludedTargets); err != nil {
+		if err := ValidateExcludedTargets(*heartbeat.ExcludedTargets); err != nil {
 			return ErrInvalidCommand
 		}
 	}
@@ -86,7 +87,8 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 		heartbeat.AvailabilityIntent = *wire.AvailabilityIntent
 	}
 	if wire.ExcludedTargets != nil {
-		heartbeat.ExcludedTargets = append([]domain.TargetID{}, *wire.ExcludedTargets...)
+		set := append([]domain.TargetID{}, *wire.ExcludedTargets...)
+		heartbeat.ExcludedTargets = &set
 	}
 	if err := heartbeat.Validate(); err != nil {
 		return AgentHeartbeat{}, err

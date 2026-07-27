@@ -43,6 +43,61 @@ func TestSnapshotConsumerCommitsBeforeReturningNodeCapacity(t *testing.T) {
 	}
 }
 
+// TestSnapshotConsumerMapsOwnerStateIntoTheRecordedSnapshot pins the exact
+// production-only regression the live fleet hit: this consumer replaces the
+// store-backed one in every activated Controller, so an owner intent or
+// exclusion set it drops is silently never adopted at reconnect even though
+// every store- and consumer-level unit test stays green.
+func TestSnapshotConsumerMapsOwnerStateIntoTheRecordedSnapshot(t *testing.T) {
+	controller := restoreForTest(t, store.ControllerSnapshot{
+		ControllerEpoch: 2,
+		Nodes:           []store.NodeAdministration{{NodeID: "node-a", State: domain.NodeActive}},
+	}, Config{Nodes: []NodeDefinition{testNodeDefinition("node-a", 1)}})
+	recorder := &recordingSnapshotStore{}
+	consumer, err := NewSnapshotConsumer(recorder, controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	populated := transport.AgentSnapshot{
+		NodeID:             "node-a",
+		OS:                 domain.OSLinux,
+		Arch:               domain.ArchAMD64,
+		NativeRunnerReady:  true,
+		AvailabilityIntent: domain.AvailabilityStopped,
+		ExcludedTargets:    transport.TargetIDSet("target-a", "target-b"),
+		MaxControllerEpoch: 1,
+	}
+	if err := consumer.HandleAgentSnapshot(context.Background(), populated); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.snapshot.AvailabilityIntent != domain.AvailabilityStopped ||
+		len(recorder.snapshot.ExcludedTargets) != 2 {
+		t.Fatalf("owner state dropped before the snapshot transaction: %#v", recorder.snapshot)
+	}
+
+	// A confirmed-empty set must stay a non-nil replacement, and an absent one
+	// must stay nil ("no change reported") — collapsing either direction makes
+	// stale adopted rows immortal or wipes them spuriously.
+	empty := populated
+	empty.AvailabilityIntent = ""
+	empty.ExcludedTargets = transport.TargetIDSet()
+	if err := consumer.HandleAgentSnapshot(context.Background(), empty); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.snapshot.ExcludedTargets == nil || len(recorder.snapshot.ExcludedTargets) != 0 {
+		t.Fatalf("confirmed-empty set collapsed: %#v", recorder.snapshot.ExcludedTargets)
+	}
+	absent := populated
+	absent.AvailabilityIntent = ""
+	absent.ExcludedTargets = nil
+	if err := consumer.HandleAgentSnapshot(context.Background(), absent); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.snapshot.ExcludedTargets != nil {
+		t.Fatalf("absent set fabricated a replacement: %#v", recorder.snapshot.ExcludedTargets)
+	}
+}
+
 func TestSnapshotConsumerStoreFailureLeavesLastKnownProjectionUntouched(t *testing.T) {
 	controller := restoreForTest(t, store.ControllerSnapshot{
 		ControllerEpoch: 2,
