@@ -8,8 +8,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	pathpkg "path"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -159,7 +161,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 		Short: "Enroll this computer with a Tewake controller",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			directory, err := resolveStateDirectory(stateDirectory, "agent")
+			directory, err := resolveStateDirectoryForPlatform(stateDirectory, "agent", goos)
 			if err != nil {
 				return err
 			}
@@ -241,4 +243,16 @@ func resolveStateDirectory(explicit, role string) (string, error) {
 		return "", fmt.Errorf("resolve OS user configuration directory: %w", err)
 	}
 	return filepath.Join(config, "tewake", role), nil
+}
+
+func resolveStateDirectoryForPlatform(explicit, role, goos string) (string, error) {
+	if explicit != "" && goos == "darwin" {
+		// Tests and packaging adapters may exercise Darwin contracts from a
+		// non-Darwin host; use POSIX path semantics for that explicit contract.
+		if !strings.HasPrefix(explicit, "/") {
+			return "", fmt.Errorf("macOS state directory must be absolute: %s", explicit)
+		}
+		return pathpkg.Clean(explicit), nil
+	}
+	return resolveStateDirectory(explicit, role)
 }
