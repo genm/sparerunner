@@ -274,7 +274,7 @@ func newNodeCommand() *cobra.Command {
 			})
 		},
 	}
-	add.Flags().StringVar(&adminURL, "admin-url", defaultAdminURL, "loopback management API URL")
+	add.Flags().StringVar(&adminURL, "admin-url", defaultAdminURL, "loopback management API base, including the /api/v1 path")
 	add.Flags().StringVar(&stateDirectory, "state-dir", "", "controller state directory used to authorize the local admin session")
 	add.Flags().StringSliceVar(&hints, "hint", nil, "HTTPS controller endpoint hint embedded in the join code")
 	node.AddCommand(add)
@@ -318,7 +318,7 @@ func newUICommand() *cobra.Command {
 		&adminURL,
 		"admin-url",
 		defaultAdminURL,
-		"loopback management API URL",
+		"loopback management API base, including the /api/v1 path",
 	)
 	authorize.Flags().StringVar(
 		&stateDirectory,
@@ -340,7 +340,7 @@ func newConfigCommand() *cobra.Command {
 		&adminURL,
 		"admin-url",
 		defaultAdminURL,
-		"loopback management API URL",
+		"loopback management API base, including the /api/v1 path",
 	)
 	configuration.PersistentFlags().StringVar(
 		&stateDirectory,

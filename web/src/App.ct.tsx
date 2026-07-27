@@ -194,3 +194,81 @@ test("connected GitHub Target dialog exposes only the verified creation journey"
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await captureState(testInfo, page, `target-dialog-${testInfo.project.name}`);
 });
+
+test("an unverified Target runtime never blocks creating another Target", async ({
+  mount,
+  page,
+}, testInfo) => {
+  // The live regression: the first organization Target existed but its GitHub
+  // message session was not established yet, and the console claimed no
+  // verified installation existed and disabled further Target creation.
+  const base = createScenarioClient("empty");
+  const api: ManagementClient = {
+    ...base,
+    getSetup: async () => ({
+      ...(await base.getSetup()),
+      githubAppState: "connected",
+      manifestFlowSupported: true,
+      targetCount: 1,
+      conditions: [{ code: "github_target_runtime_unverified", status: "degraded" }],
+    }),
+    listTargets: async () => ({
+      targets: [
+        {
+          id: "target-org",
+          installationId: "42",
+          scopeKind: "organization",
+          scope: "acme",
+          scaleSetName: "tewake",
+          runnerProfileId: "profile-tewake",
+          status: "reconciling",
+          freshness: { state: "unknown" },
+        },
+      ],
+      configurationRevision: "1",
+    }),
+  };
+  const component = await mount(<App api={api} initialRoute="targets" />);
+  await expect(component.getByRole("button", { name: "Create target" })).toBeEnabled();
+  await expect(
+    component.getByText(
+      "A verified GitHub installation is required before a Target can be created.",
+    ),
+  ).toHaveCount(0);
+  // The Target keeps reporting its own unverified runtime; only the false
+  // App-level gate is gone.
+  await expect(component.getByText("Verification unavailable")).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `target-runtime-unverified-${testInfo.project.name}`);
+});
+
+test("setup step four links to Target creation once the App is connected", async ({ mount }) => {
+  // The step used to render a permanently disabled control whose stated reason
+  // — no verified GitHub installation — stayed on screen after one was
+  // verified. It now links to the page that owns creation.
+  const base = createScenarioClient("empty");
+  const connected: ManagementClient = {
+    ...base,
+    getSetup: async () => ({
+      ...(await base.getSetup()),
+      githubAppState: "connected",
+      manifestFlowSupported: true,
+    }),
+  };
+  const component = await mount(<App api={connected} initialRoute="setup" />);
+  await expect(component.getByRole("link", { name: "Create target" })).toHaveAttribute(
+    "href",
+    "#/targets",
+  );
+});
+
+test("setup step four states the real reason while no App is connected", async ({ mount }) => {
+  const base = createScenarioClient("empty");
+  const disconnected: ManagementClient = {
+    ...base,
+    getSetup: async () => ({ ...(await base.getSetup()), githubAppState: "disconnected" }),
+  };
+  const component = await mount(<App api={disconnected} initialRoute="setup" />);
+  await expect(component.getByText("Connect a GitHub App before creating a Target.")).toBeVisible();
+  await expect(component.getByRole("link", { name: "Create target" })).toHaveCount(0);
+});

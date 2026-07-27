@@ -594,6 +594,14 @@ provides:
 - controller settings and non-secret YAML export/apply
 - health, version, and staleness metadata
 
+Setup state separates two questions that a console must never conflate: whether
+the controller can act as the configured GitHub App, and whether each Target's
+GitHub runtime is currently verified. Only the first gates Target creation; the
+second is reported per Target through its own freshness and as a fleet-wide
+condition. Folding runtime staleness into the App state made the normal
+post-creation state — a Target whose message session has not been established
+yet — claim that no verified installation existed and refuse further Targets.
+
 Live list state uses SSE rather than a second browser WebSocket protocol.
 
 The first-release management mode is `loopback_http`. Its listener accepts only a

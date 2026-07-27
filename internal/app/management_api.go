@@ -84,6 +84,12 @@ func (backend *managementBackend) Setup(ctx context.Context) (gen.Setup, error) 
 	if err != nil {
 		return gen.Setup{}, err
 	}
+	// githubAppState answers exactly one question: can this controller act as
+	// the configured GitHub App right now. It is what gates Target creation, so
+	// it must not absorb unrelated runtime health — a Target whose message
+	// session has not been established yet is the normal state immediately
+	// after creation, and folding that in here told the operator no verified
+	// installation existed and refused every further Target.
 	appState := gen.SetupGithubAppStateDisconnected
 	manifestFlowSupported := backend.state.GitHubAuthority != nil
 	if backend.state.GitHubAuthority != nil {
@@ -94,25 +100,12 @@ func (backend *managementBackend) Setup(ctx context.Context) (gen.Setup, error) 
 			appState = gen.SetupGithubAppStateConnected
 		}
 	}
-	if len(configuration.GitHubTargets) > 0 {
-		if appState == gen.SetupGithubAppStateDisconnected {
-			appState = gen.SetupGithubAppStateDegraded
-		}
-		for _, target := range configuration.GitHubTargets {
-			freshness, freshnessErr := backend.state.Store.ReadGitHubRuntimeFreshness(
-				ctx,
-				store.GitHubTargetRuntimeBinding{
-					TargetID:   target.Target.ID,
-					ScaleSetID: target.ScaleSetID,
-					ProfileID:  target.Target.RunnerProfileID,
-				},
-			)
-			if freshnessErr != nil ||
-				combinedRuntimeFreshness(freshness) != store.RuntimeFreshnessFresh {
-				appState = gen.SetupGithubAppStateDegraded
-				break
-			}
-		}
+	// Configured Targets that reference an App this controller can no longer
+	// load are an App-authority problem, not a runtime one: report degraded
+	// rather than the disconnected state of a controller that never had one.
+	if len(configuration.GitHubTargets) > 0 &&
+		appState == gen.SetupGithubAppStateDisconnected {
+		appState = gen.SetupGithubAppStateDegraded
 	}
 	return gen.Setup{
 		ControllerInitialized: true,
@@ -120,7 +113,7 @@ func (backend *managementBackend) Setup(ctx context.Context) (gen.Setup, error) 
 		ManifestFlowSupported: manifestFlowSupported,
 		NodeCount:             len(configuration.Nodes),
 		TargetCount:           len(configuration.GitHubTargets),
-		Conditions:            backend.conditions(),
+		Conditions:            backend.conditions(ctx),
 	}, nil
 }
 
@@ -150,7 +143,7 @@ func (backend *managementBackend) Overview(ctx context.Context) (gen.Overview, e
 		ActiveRuns:         active,
 		NodeCount:          len(configuration.Nodes),
 		TargetCount:        len(configuration.GitHubTargets),
-		Conditions:         backend.conditions(),
+		Conditions:         backend.conditions(ctx),
 	}, nil
 }
 
@@ -584,10 +577,10 @@ func (backend *managementBackend) CurrentRevision(
 	return revisionString(configuration.Revision), nil
 }
 
-func (backend *managementBackend) conditions() []gen.Condition {
+func (backend *managementBackend) conditions(ctx context.Context) []gen.Condition {
 	// OpenAPI requires collection fields to stay arrays even when empty. A nil
 	// slice would serialize as null and break every real browser empty state.
-	conditions := make([]gen.Condition, 0, 2)
+	conditions := make([]gen.Condition, 0, 3)
 	if !backend.AuditHealthy() {
 		conditions = append(conditions, gen.Condition{
 			Code:   "audit_persistence_unavailable",
@@ -602,7 +595,45 @@ func (backend *managementBackend) conditions() []gen.Condition {
 			Status: gen.ConditionStatusUnavailable,
 		})
 	}
+	if backend.anyTargetRuntimeUnverified(ctx) {
+		// Runtime staleness is reported here rather than folded into
+		// githubAppState: it degrades scheduling for the affected Targets, not
+		// the controller's ability to act as the App. Each Target also carries
+		// its own freshness, so this is the fleet-wide roll-up only.
+		conditions = append(conditions, gen.Condition{
+			Code:   "github_target_runtime_unverified",
+			Status: gen.ConditionStatusDegraded,
+		})
+	}
 	return conditions
+}
+
+// anyTargetRuntimeUnverified reports whether at least one configured Target has
+// no fresh GitHub message session. A read failure counts as unverified: an
+// unreadable runtime is never presented as a healthy one.
+func (backend *managementBackend) anyTargetRuntimeUnverified(ctx context.Context) bool {
+	if backend == nil || backend.state == nil || backend.state.Store == nil {
+		return false
+	}
+	configuration, err := backend.state.Store.ReadManagementConfiguration(ctx)
+	if err != nil {
+		return true
+	}
+	for _, target := range configuration.GitHubTargets {
+		freshness, freshnessErr := backend.state.Store.ReadGitHubRuntimeFreshness(
+			ctx,
+			store.GitHubTargetRuntimeBinding{
+				TargetID:   target.Target.ID,
+				ScaleSetID: target.ScaleSetID,
+				ProfileID:  target.Target.RunnerProfileID,
+			},
+		)
+		if freshnessErr != nil ||
+			combinedRuntimeFreshness(freshness) != store.RuntimeFreshnessFresh {
+			return true
+		}
+	}
+	return false
 }
 
 func (backend *managementBackend) ensureDurableNodeProjection(

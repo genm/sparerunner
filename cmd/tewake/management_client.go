@@ -32,7 +32,16 @@ const (
 	managementHTTPTimeout = 30 * time.Second
 )
 
-var errInvalidAdminURL = errors.New("admin URL is invalid")
+// The message names the three constraints rather than echoing the caller's
+// value: the accepted form is canonical, so a caller who passes the browser's
+// own origin without the API path, or a hostname instead of a loopback
+// literal, otherwise gets a rejection with nothing to correct. It deliberately
+// contains no URL literal, because reflecting caller-supplied input back into
+// an error is exactly what the surrounding rejection tests forbid.
+var errInvalidAdminURL = errors.New(
+	"admin URL is invalid: expected the http scheme, a loopback IP literal " +
+		"host, and the /api/v1 path with no trailing slash or query",
+)
 
 var loadManagementBootstrapProof = app.LoadManagementBootstrapProof
 

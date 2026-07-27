@@ -526,9 +526,19 @@ function SetupPage({ api, csrfToken, snapshot, onRefresh, onToast, mutationsDisa
         </Step>
         <Step complete={snapshot.setup.targetCount > 0} index="04" title="Targets">
           <p>{snapshot.setup.targetCount} configured</p>
-          <DisabledAction reason="A verified GitHub installation is required before a Target can be created.">
-            Create target
-          </DisabledAction>
+          {/* Target creation lives on the Targets page, so this step links there
+              once the App can actually verify one. Rendering a permanently
+              disabled control here claimed no installation was verified even
+              after one was. */}
+          {snapshot.setup.githubAppState === "connected" ? (
+            <a className="step-action" href="#/targets">
+              Create target
+            </a>
+          ) : (
+            <DisabledAction reason="Connect a GitHub App before creating a Target.">
+              Create target
+            </DisabledAction>
+          )}
         </Step>
       </div>
       <ConditionStrip conditions={snapshot.setup.conditions} />
