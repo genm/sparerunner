@@ -70,9 +70,12 @@ type AgentSnapshot struct {
 	NativeRunnerReady  bool                      `json:"nativeRunnerReady"`
 	AvailabilityIntent domain.AvailabilityIntent `json:"availabilityIntent,omitempty"`
 	// ExcludedTargets is the node owner's editable withdrawal from otherwise
-	// eligible GitHub Targets. Absent means "no change reported"; an Agent
-	// that never populates it (this PR) always omits the field.
-	ExcludedTargets    []domain.TargetID           `json:"excludedTargets,omitempty"`
+	// eligible GitHub Targets. It is a pointer so a confirmed-empty set (the
+	// owner withdrew nothing) still crosses the wire as [] and replaces stale
+	// adopted rows, while nil omits the field and means "no change reported" —
+	// a plain slice with omitempty cannot express both, because encoding/json
+	// checks slice length rather than nilness.
+	ExcludedTargets    *[]domain.TargetID          `json:"excludedTargets,omitempty"`
 	MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
 	Commands           []domain.Command            `json:"commands"`
 	Observations       []AgentExecutionObservation `json:"observations"`
@@ -95,7 +98,7 @@ func (snapshot AgentSnapshot) Validate() error {
 	// empty one) is validated the same way ValidateEligibleTargets treats a
 	// duplicate identity: corruption, not a legitimate repeat.
 	if snapshot.ExcludedTargets != nil {
-		if err := ValidateExcludedTargets(snapshot.ExcludedTargets); err != nil {
+		if err := ValidateExcludedTargets(*snapshot.ExcludedTargets); err != nil {
 			return ErrInvalidCommand
 		}
 	}
@@ -199,9 +202,10 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 		snapshot.AvailabilityIntent = *wire.AvailabilityIntent
 	}
 	if wire.ExcludedTargets != nil {
-		// Preserve "present but empty" as a non-nil zero-length slice so the
+		// Preserve "present but empty" by keeping the pointer non-nil so the
 		// caller can distinguish it from "absent" after decode.
-		snapshot.ExcludedTargets = append([]domain.TargetID{}, *wire.ExcludedTargets...)
+		set := append([]domain.TargetID{}, *wire.ExcludedTargets...)
+		snapshot.ExcludedTargets = &set
 	}
 	if err := snapshot.Validate(); err != nil {
 		return AgentSnapshot{}, err

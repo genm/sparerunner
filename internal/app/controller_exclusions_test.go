@@ -130,7 +130,7 @@ func TestHeartbeatAdoptsOwnerStateBeforeAcknowledgement(t *testing.T) {
 		NodeID:             "node-1",
 		NativeRunnerReady:  true,
 		AvailabilityIntent: domain.AvailabilityStopped,
-		ExcludedTargets:    []domain.TargetID{"target-1"},
+		ExcludedTargets:    transport.TargetIDSet("target-1"),
 	}))
 	envelope := receiveBrokerWrite(t, session)
 	if envelope.Type != transport.MessageAck {
@@ -163,7 +163,7 @@ func TestHeartbeatAdoptsOwnerStateBeforeAcknowledgement(t *testing.T) {
 		NodeID:             "node-1",
 		NativeRunnerReady:  true,
 		AvailabilityIntent: domain.AvailabilityStopped,
-		ExcludedTargets:    []domain.TargetID{"target-1"},
+		ExcludedTargets:    transport.TargetIDSet("target-1"),
 	}))
 	if envelope := receiveBrokerWrite(t, session); envelope.Type != transport.MessageAck {
 		t.Fatalf("message type = %s, want ack", envelope.Type)
@@ -208,7 +208,7 @@ func TestHeartbeatOwnerStateAdoptionFailureFailsTheHeartbeat(t *testing.T) {
 			session.send(brokerEnvelope(t, "heartbeat-1", transport.MessageHeartbeat, transport.AgentHeartbeat{
 				NodeID:            "node-1",
 				NativeRunnerReady: true,
-				ExcludedTargets:   []domain.TargetID{"target-1"},
+				ExcludedTargets:   transport.TargetIDSet("target-1"),
 			}))
 			if err := <-serveResult; !errors.Is(err, test.wantErr) {
 				t.Fatalf("serve result = %v, want %v", err, test.wantErr)

@@ -1191,9 +1191,12 @@ func cloneAgentSnapshot(snapshot AgentSnapshot) AgentSnapshot {
 	snapshot.Commands = append([]domain.Command(nil), snapshot.Commands...)
 	snapshot.Observations = append([]transport.AgentExecutionObservation(nil), snapshot.Observations...)
 	snapshot.CleanupTombstones = append([]transport.AgentCleanupTombstone(nil), snapshot.CleanupTombstones...)
-	// append to a nil slice preserves nil, which is load-bearing here: nil
-	// ExcludedTargets means "no change reported", distinct from an empty set.
-	snapshot.ExcludedTargets = append([]domain.TargetID(nil), snapshot.ExcludedTargets...)
+	// The pointer distinguishes "no change reported" (nil) from an empty set;
+	// clone the pointee so a later caller mutation cannot leak in.
+	if snapshot.ExcludedTargets != nil {
+		set := append([]domain.TargetID{}, *snapshot.ExcludedTargets...)
+		snapshot.ExcludedTargets = &set
+	}
 	return snapshot
 }
 
@@ -1275,8 +1278,8 @@ func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
 	// that stopped reporting it.
 	if heartbeat.ExcludedTargets != nil &&
 		(actor.snapshot.ExcludedTargets == nil ||
-			!sameTargetIDSet(actor.snapshot.ExcludedTargets, heartbeat.ExcludedTargets)) {
-		exclusions = append([]domain.TargetID{}, heartbeat.ExcludedTargets...)
+			!sameTargetIDSet(*actor.snapshot.ExcludedTargets, *heartbeat.ExcludedTargets)) {
+		exclusions = append([]domain.TargetID{}, *heartbeat.ExcludedTargets...)
 	}
 	if intent == "" && exclusions == nil {
 		actor.stateMu.Unlock()
@@ -1308,7 +1311,8 @@ func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
 		actor.snapshot.AvailabilityIntent = intent
 	}
 	if exclusions != nil {
-		actor.snapshot.ExcludedTargets = append([]domain.TargetID{}, exclusions...)
+		set := append([]domain.TargetID{}, exclusions...)
+		actor.snapshot.ExcludedTargets = &set
 	}
 	actor.stateMu.Unlock()
 	return nil
