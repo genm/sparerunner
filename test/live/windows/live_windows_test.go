@@ -49,7 +49,12 @@ function Get-Sddl([string] $path) {
         [System.Security.AccessControl.AccessControlSections]::Group -bor
         [System.Security.AccessControl.AccessControlSections]::Access
     )
-    return (Get-Acl -LiteralPath $path).GetSecurityDescriptorSddlForm(
+    $security = if ((Get-Item -LiteralPath $path).PSIsContainer) {
+        [System.IO.Directory]::GetAccessControl($path)
+    } else {
+        [System.IO.File]::GetAccessControl($path)
+    }
+    return $security.GetSecurityDescriptorSddlForm(
         $sections
     )
 }
@@ -64,7 +69,12 @@ function Get-TreeSnapshot([string] $root) {
                     [System.Security.AccessControl.AccessControlSections]::Group -bor
                     [System.Security.AccessControl.AccessControlSections]::Access
                 )
-                $sddl = (Get-Acl -LiteralPath $_.FullName).GetSecurityDescriptorSddlForm(
+                $security = if ($_.PSIsContainer) {
+                    [System.IO.Directory]::GetAccessControl($_.FullName)
+                } else {
+                    [System.IO.File]::GetAccessControl($_.FullName)
+                }
+                $sddl = $security.GetSecurityDescriptorSddlForm(
                     $sections
                 )
                 if ($_.PSIsContainer) {
@@ -284,12 +294,18 @@ func runPowerShell(t *testing.T, script string, arguments ...string) {
 func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	prefix := "$args = 0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") }\n"
+	if err := os.WriteFile(scriptPath, []byte(prefix+script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
 	commandArguments = append(commandArguments, arguments...)
-	return exec.Command("powershell.exe", commandArguments...)
+	command := exec.Command("powershell.exe", commandArguments...)
+	command.Env = append(os.Environ(), fmt.Sprintf("TEWAKE_TEST_PS_ARG_COUNT=%d", len(arguments)))
+	for index, argument := range arguments {
+		command.Env = append(command.Env, fmt.Sprintf("TEWAKE_TEST_PS_ARG_%d=%s", index, argument))
+	}
+	return command
 }
 
 func livePath(t *testing.T, parts ...string) string {
