@@ -56,10 +56,17 @@ type nativeDarwinCredentialStore struct {
 
 func newNativeDarwinCredentialStore() nativeDarwinCredentialStore {
 	// TrustAll deliberately gives every process in the same Keychain user
-	// context access without a prompt; it does not bind access to Tewake's path
-	// or code-signing identity. The packaged boundary is the root service user
-	// versus the separate runner UID. A compromised root context is outside the
-	// native trusted-workflow threat model.
+	// context access; it does not bind access to Tewake's path or code-signing
+	// identity. The packaged boundary is the root service user versus the
+	// separate runner UID. A compromised root context is outside the native
+	// trusted-workflow threat model.
+	//
+	// The trust-all decrypt ACL is not the whole prompt story: macOS also writes
+	// a partition_id ACL naming the creating process, and for an ad-hoc signed
+	// binary that is a per-build cdhash. A rebuilt binary therefore still gets a
+	// login-password prompt until the partition list is emptied. Signed releases
+	// carry a stable team identifier, so this only bites local development —
+	// see `just trust-macos-keychain`.
 	return nativeDarwinCredentialStore{
 		keychain: keychain.New(
 			keychain.WithAccessMode(keychain.TrustAll),

@@ -947,7 +947,10 @@ single-implementation, every-surface-identical rule and the same audit shape.
 
 ## Secret Storage
 
-- macOS: Keychain
+- macOS: Keychain, stored with a trust-all decrypt ACL. Prompt-free access also
+  depends on the `partition_id` ACL macOS attaches, which names the creating
+  binary's code-signing identity; a signed release keeps that stable across
+  updates, while an unsigned local build changes it on every rebuild
 - Windows: DPAPI/CNG-protected material scoped to the service identity
 - Linux: systemd credentials or a service-user-only credential file with explicit
   permissions and no environment-variable transport
