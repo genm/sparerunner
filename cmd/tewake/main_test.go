@@ -45,3 +45,16 @@ func TestRunServeFailsClosedWhenControllerIsNotInitialized(t *testing.T) {
 		t.Fatalf("run(serve) error = %q, want initialization failure", err)
 	}
 }
+
+func TestEvidenceValidateRejectsMissingManifest(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"evidence", "validate", "--file", filepath.Join(t.TempDir(), "missing.json"),
+	}, &stdout, &stderr)
+	if err == nil {
+		t.Fatal("evidence validate accepted a missing manifest")
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("evidence validate output = stdout %q stderr %q, want no secret-bearing output", stdout.String(), stderr.String())
+	}
+}

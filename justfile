@@ -50,6 +50,9 @@ test-runner-linux:
 test-platform-linux:
   ./scripts/test-platform-linux.sh
 
+validate-release-evidence file='output/release-evidence/twk-014.json':
+  ./scripts/validate-release-evidence.sh "{{file}}"
+
 test-management-ui-linux: build
   ./scripts/test-management-ui-linux.sh bin/tewake
 

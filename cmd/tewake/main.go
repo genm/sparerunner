@@ -15,6 +15,7 @@ import (
 	"github.com/genm/tewake/internal/app"
 	"github.com/genm/tewake/internal/auth"
 	"github.com/genm/tewake/internal/buildinfo"
+	"github.com/genm/tewake/internal/releaseevidence"
 	"github.com/spf13/cobra"
 )
 
@@ -77,7 +78,35 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newNodeCommand())
 	root.AddCommand(newUICommand())
 	root.AddCommand(newConfigCommand())
+	root.AddCommand(newEvidenceCommand())
 	return root
+}
+
+func newEvidenceCommand() *cobra.Command {
+	evidence := &cobra.Command{
+		Use:   "evidence",
+		Short: "Validate machine-readable live release evidence",
+	}
+	var file string
+	validate := &cobra.Command{
+		Use:   "validate",
+		Short: "Validate a TWK-014 cross-platform evidence manifest",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			manifest, err := releaseevidence.ValidateFile(file)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(command.OutOrStdout(), "Valid release evidence: %s\n", manifest)
+			return nil
+		},
+	}
+	validate.Flags().StringVar(&file, "file", "", "path to a trusted live evidence manifest")
+	if err := validate.MarkFlagRequired("file"); err != nil {
+		panic(err)
+	}
+	evidence.AddCommand(validate)
+	return evidence
 }
 
 func newInitCommand() *cobra.Command {
