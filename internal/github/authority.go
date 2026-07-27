@@ -378,22 +378,41 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 	}
 	ownedName := "tewake-" + request.TargetID
 	for _, group := range runnerGroups {
-		if group.ID <= 0 || group.Visibility != "private" || group.AllowsPublicRepositories {
-			continue
-		}
+		// The owned name is claimed regardless of the group's attributes: a
+		// same-named group with different settings is still someone else's
+		// object, and adopting it would launder its access policy as ours.
 		if group.Name == ownedName {
 			return 0, false, ErrGitHubTargetConflict
 		}
-		if request.ScopeKind == "repository" && group.ID > 0 {
+		if request.ScopeKind == "repository" &&
+			group.ID > 0 && group.Visibility == "private" && !group.AllowsPublicRepositories {
 			return group.ID, false, nil
 		}
 	}
 	if request.ScopeKind == "repository" {
 		return 0, false, ErrGitHubRunnerGroupUnsafe
 	}
+	// Live GitHub accepts only "all" and "selected" for an organization runner
+	// group and silently coerces any other value, so requesting "private" used
+	// to come back as "all" and fail verification on every real organization.
+	// "all" matches the organization Target's own semantics — the whole private
+	// scope routes here — and the safety property Tewake actually needs is that
+	// public repositories can never reach the group.
 	var created runnerGroup
-	body := bytes.NewReader([]byte(`{"name":"` + ownedName + `","visibility":"private","allows_public_repositories":false,"restricted_to_workflows":false}`))
-	if err := authority.doJSON(ctx, http.MethodPost, "/orgs/"+url.PathEscape(request.Scope)+"/actions/runner-groups", token, body, &created); err != nil || created.ID <= 0 || created.Visibility != "private" || created.AllowsPublicRepositories {
+	body := bytes.NewReader([]byte(`{"name":"` + ownedName + `","visibility":"all","allows_public_repositories":false,"restricted_to_workflows":false}`))
+	if err := authority.doJSON(ctx, http.MethodPost, "/orgs/"+url.PathEscape(request.Scope)+"/actions/runner-groups", token, body, &created); err != nil {
+		return 0, false, ErrGitHubRunnerGroupUnsafe
+	}
+	if created.ID <= 0 || created.Name != ownedName ||
+		created.Visibility != "all" || created.AllowsPublicRepositories {
+		// The provider accepted the create but echoed different attributes.
+		// The group exists, so failing without removing it would leak a
+		// Tewake-named object into the organization on every rejected attempt.
+		if created.ID > 0 {
+			if cleanupErr := authority.deleteRunnerGroup(ctx, request, token, created.ID); cleanupErr != nil {
+				return 0, false, ErrGitHubProvisioningAmbiguous
+			}
+		}
 		return 0, false, ErrGitHubRunnerGroupUnsafe
 	}
 	return created.ID, true, nil

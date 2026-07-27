@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -33,12 +34,14 @@ func testCredential(t *testing.T) AppCredential {
 }
 
 type authorityRoundTripper struct {
-	t                *testing.T
-	private          bool
-	unsafeGroup      bool
-	createdGroup     bool
-	scaleSetCalls    int
-	runnerGroupPages map[string]string
+	deletedGroup       bool
+	createEchoesPublic bool
+	t                  *testing.T
+	private            bool
+	unsafeGroup        bool
+	createdGroup       bool
+	scaleSetCalls      int
+	runnerGroupPages   map[string]string
 }
 
 func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -70,9 +73,31 @@ func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.
 		} else {
 			body = `{"runner_groups":[{"id":7,"name":"Default","visibility":"private","allows_public_repositories":false}]}`
 		}
+	case strings.Contains(path, "/actions/runner-groups/") && request.Method == http.MethodDelete:
+		transport.deletedGroup = true
+		status = http.StatusNoContent
+		body = ""
 	case strings.HasSuffix(path, "/actions/runner-groups") && request.Method == http.MethodPost:
 		transport.createdGroup = true
-		body = `{"id":8,"name":"tewake-target-org","visibility":"private","allows_public_repositories":false}`
+		if transport.createEchoesPublic {
+			var unsafeRequest struct {
+				Name string `json:"name"`
+			}
+			payload, _ := io.ReadAll(request.Body)
+			_ = json.Unmarshal(payload, &unsafeRequest)
+			body = `{"id":8,"name":"` + unsafeRequest.Name + `","visibility":"all","allows_public_repositories":true}`
+			break
+		}
+		// Live GitHub echoes the requested name but coerces any requested
+		// visibility to "all" for an organization runner group; the fake
+		// mirrors the live echo so the verifier is tested against reality
+		// rather than the request we sent.
+		var groupRequest struct {
+			Name string `json:"name"`
+		}
+		payload, _ := io.ReadAll(request.Body)
+		_ = json.Unmarshal(payload, &groupRequest)
+		body = `{"id":8,"name":"` + groupRequest.Name + `","visibility":"all","allows_public_repositories":false}`
 	default:
 		status = http.StatusNotFound
 		body = `{}`
@@ -158,6 +183,31 @@ func TestAuthorityCreatesPrivateOrganizationGroupAndScaleSet(t *testing.T) {
 	}
 	if result.ScaleSetID != 99 || result.RunnerGroupID != 8 || !transport.createdGroup {
 		t.Fatalf("verified target = %+v groupCreated=%v", result, transport.createdGroup)
+	}
+}
+
+// TestAuthorityRemovesTheGroupWhenTheCreateEchoIsUnsafe pins the live-found
+// leak: GitHub accepted the create (201) but echoed attributes the verifier
+// refuses, and the old path returned unsafe while leaving the freshly created
+// Tewake-named group behind in the organization on every rejected attempt.
+func TestAuthorityRemovesTheGroupWhenTheCreateEchoIsUnsafe(t *testing.T) {
+	credential := testCredential(t)
+	store := &MemoryAppCredentialStore{}
+	_ = store.Save(credential)
+	transport := &authorityRoundTripper{t: t, private: true, createEchoesPublic: true}
+	authority, err := NewAuthority(AuthorityOptions{CredentialStore: store, HTTPClient: &http.Client{Transport: transport}, CreateScaleSet: func(_ context.Context, _ AppClientConfig, requested ScaleSet) (ScaleSet, error) {
+		t.Fatal("unsafe group reached scale-set creation")
+		return ScaleSet{}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"})
+	if !errors.Is(err, ErrGitHubRunnerGroupUnsafe) {
+		t.Fatalf("unsafe echo error = %v", err)
+	}
+	if !transport.createdGroup || !transport.deletedGroup {
+		t.Fatalf("created=%v deleted=%v; the rejected group must be removed", transport.createdGroup, transport.deletedGroup)
 	}
 }
 
