@@ -20,13 +20,14 @@ scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
 work for development, including pinned enrollment, mTLS WebSockets, reconnect,
 the signed GitHub App Manifest flow, installation discovery, private Target
-verification, and the generated management UI/API. Scheduling, OS service
-installation, GitHub job execution, cleanup, the desktop tray client, the
-Raycast extension, and live three-OS sandbox evidence remain incomplete. A tag
-now produces a draft, checksummed six-platform bundle with CycloneDX SBOM and
-GitHub attestation steps; it is not a supported release until the real-machine
-gate and platform signing prerequisites pass. Do not install it on a
-production runner fleet.
+verification, generated management UI/API, node-affined scheduling, native runner
+lifecycle, and verified cleanup. Those core paths have local and fault-injection
+coverage, but OS service installation, a real private GitHub job, the desktop
+tray client, the Raycast extension, and live three-OS sandbox evidence remain
+release gates. A tag now produces a draft, checksummed six-platform bundle with
+CycloneDX SBOM and GitHub attestation steps; it is not a supported release until
+the real-machine gate and platform signing prerequisites pass. Do not install it
+on a production runner fleet.
 
 The specification is the project source of truth:
 
