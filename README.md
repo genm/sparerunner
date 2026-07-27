@@ -108,9 +108,9 @@ by Git.
 ## Security
 
 Please read [SECURITY.md](SECURITY.md) before reporting a vulnerability. The native
-runner isolation contract and threat model will be completed before the first public
-tag; until then, this repository is development software and has no security-support
-promise.
+runner isolation contract and threat model are documented, while their three-OS live
+evidence and signing prerequisites remain release gates. Until those gates pass, this
+repository is development software and has no security-support promise.
 
 ## License
 
