@@ -163,26 +163,28 @@ func (authority *Authority) ListInstallations(ctx context.Context) ([]Installati
 	var result []Installation
 	complete := false
 	for page := 1; page <= 100; page++ {
-		var response struct {
-			Installations []struct {
-				ID                  int64  `json:"id"`
-				RepositorySelection string `json:"repository_selection"`
-				Account             struct {
-					Login string `json:"login"`
-					Type  string `json:"type"`
-				} `json:"account"`
-			} `json:"installations"`
+		// GET /app/installations returns a bare JSON array, unlike
+		// /user/installations whose response wraps the list in an object.
+		// The live GitHub API is the authority here; decoding the wrapped
+		// shape silently reported every configured App as unavailable.
+		var response []struct {
+			ID                  int64  `json:"id"`
+			RepositorySelection string `json:"repository_selection"`
+			Account             struct {
+				Login string `json:"login"`
+				Type  string `json:"type"`
+			} `json:"account"`
 		}
 		if err := authority.doJSON(ctx, http.MethodGet, "/app/installations?per_page=100&page="+strconv.Itoa(page), token, nil, &response); err != nil {
 			return nil, err
 		}
-		for _, item := range response.Installations {
+		for _, item := range response {
 			if item.ID <= 0 || !canonicalPathPart(item.Account.Login) || (item.Account.Type != "User" && item.Account.Type != "Organization") {
 				return nil, ErrGitHubProviderFailure
 			}
 			result = append(result, Installation{ID: item.ID, AccountLogin: item.Account.Login, AccountType: item.Account.Type, RepositorySelection: item.RepositorySelection})
 		}
-		if len(response.Installations) < 100 {
+		if len(response) < 100 {
 			complete = true
 			break
 		}
