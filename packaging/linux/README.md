@@ -19,6 +19,17 @@ The native Linux adapter requires:
 Unsupported or partially delegated cgroups fail closed: the node may stay
 connected for diagnostics, but it must not advertise or start a native runner.
 
+The Supervisor service deliberately runs with both its primary user and group
+set to `root`. systemd changes a delegated service cgroup's ownership to the
+configured service user and group; using the Agent group there would make the
+trusted cgroup boundary writable by that unprivileged group and would correctly
+fail Supervisor startup. The package's tmpfiles rule independently creates
+`/run/tewake-supervisor` as `root:tewake-agent 0750` so the Agent can reach the
+peer-authenticated local socket. The unit must not use `RuntimeDirectory=`:
+systemd reapplies the service's primary `root:root` ownership after
+`ExecStartPre=`, which would make the socket directory fail its exact ownership
+check. The delegated cgroup itself remains `root:root`.
+
 The network-facing Agent parses mTLS and GitHub-derived messages without root
 privileges. The Supervisor accepts a versioned fixed-operation protocol only on
 `/run/tewake-supervisor/supervisor.sock`, verifies the peer UID with
@@ -61,6 +72,7 @@ the complete descendant boundary.
 
 | Path | Owner/mode | Purpose |
 |---|---|---|
+| `/run/tewake-supervisor` | `root:tewake-agent 0750` | volatile parent of the peer-authenticated local socket |
 | `/var/lib/tewake-agent` | `tewake-agent 0700` | enrollment state and Agent SQLite |
 | `/var/cache/tewake-agent` | `tewake-agent 0700` | verified official runner package cache |
 | `/var/lib/tewake-supervisor/fences` | `root:root 0700` | durable start/stop fences |

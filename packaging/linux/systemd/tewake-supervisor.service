@@ -2,11 +2,15 @@
 Description=Tewake privileged native runner supervisor
 Documentation=https://github.com/genm/tewake
 ConditionPathIsDirectory=/sys/fs/cgroup
+After=systemd-tmpfiles-setup.service
 
 [Service]
 Type=simple
 User=root
-Group=tewake-agent
+# Delegate= changes the service cgroup ownership to the service user and group.
+# Keep both root-owned so the Supervisor can reject a replaced cgroup boundary;
+# tmpfiles owns the separate local socket directory for the Agent group.
+Group=root
 ExecStart=/usr/local/bin/tewake-agent supervisor \
     --socket=/run/tewake-supervisor/supervisor.sock \
     --runtime-root=/var/lib/tewake-runtime \
@@ -21,8 +25,6 @@ KillMode=control-group
 # outer service cgroup and gets a separate margin to complete final teardown.
 TimeoutStopSec=30s
 Delegate=yes
-RuntimeDirectory=tewake-supervisor
-RuntimeDirectoryMode=0750
 
 # The Supervisor has no remote listener and accepts only the fixed local
 # protocol from the kernel-authenticated tewake-agent UID. These are the
