@@ -57,11 +57,20 @@ func (client Client) call(operation Operation) (Status, error) {
 	if err != nil {
 		return Status{}, &Error{Class: ErrorClassInvalidRequest, Message: err.Error()}
 	}
-	if _, err := connection.Write(append(payload, '\n')); err != nil {
-		return Status{}, &Error{Class: ErrorClassEndpointUnavailable, Message: err.Error()}
-	}
+	writeErr := func() error {
+		_, err := connection.Write(append(payload, '\n'))
+		return err
+	}()
+	// The server rejects an unauthorized peer before ever reading the request,
+	// so on a fast machine our write can hit the already-closed socket. The
+	// rejection verdict is still buffered on the connection; a failed write
+	// must therefore fall through to the read and surface that verdict instead
+	// of masking it as an unavailable endpoint.
 	frame, err := readFrame(connection)
 	if err != nil {
+		if writeErr != nil {
+			return Status{}, &Error{Class: ErrorClassEndpointUnavailable, Message: writeErr.Error()}
+		}
 		return Status{}, &Error{Class: ErrorClassEndpointUnavailable, Message: err.Error()}
 	}
 	var response Response
