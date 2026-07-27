@@ -46,8 +46,10 @@ No component claims another component's observations as fact without reconciliat
 api/                     OpenAPI source and generated boundary
 cmd/tewake/              Controller and operator CLI entrypoint
 cmd/tewake-agent/        Node service entrypoint
+cmd/tewake-tray/         Optional per-user desktop tray client
 internal/
   agent/                 Local reconciliation and command handling
+  nodectl/               Local control endpoint and node availability intent
   api/                   Management handlers and SSE
   domain/                Shared states and invariants
   enroll/                One-time enrollment and PKI
@@ -71,6 +73,7 @@ web/                     React management UI
 | CLI | Cobra |
 | Daily commands | `just`; Process Compose for local processes; lefthook for local gates |
 | Agent transport | `net/http`, `coder/websocket`, node certificates, mDNS discovery |
+| Node-local control | Unix domain socket or Windows named pipe with OS peer-identity checks; optional cgo tray binary built natively per platform |
 | Management API | Contract-first `/api/v1` OpenAPI; generated Go and TypeScript types; SSE |
 | Storage | SQLite WAL with `database/sql` and a pure-Go driver; separate controller and agent DBs |
 | UI | React, TypeScript, Vite, pnpm; generated static output embedded into the Go binary |
@@ -102,6 +105,16 @@ Node observed states are:
 ```text
 Online | Offline | Stale | Reconciling
 ```
+
+A node additionally carries a node-local availability intent owned by the node owner:
+
+```text
+Accepting | Stopped
+```
+
+The intent is durable on the node and is reported to the controller as observed
+state. Effective admission is the conjunction of the administrative state and the
+intent, so the intent can only subtract capacity.
 
 ### GitHub Target
 
@@ -171,7 +184,8 @@ Weighted fairness, aging, and resource vectors are intentionally absent.
 
 Node selection:
 
-1. retain online, reconciled, active, non-quarantined nodes matching OS/architecture;
+1. retain online, reconciled, active, non-quarantined nodes whose last reported
+   availability intent is `Accepting` and whose OS/architecture matches;
 2. enforce optional minimum available memory;
 3. sort by active runner count ascending;
 4. sort by available memory descending;
@@ -547,7 +561,8 @@ The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The 
 provides:
 
 - setup and GitHub App Manifest lifecycle
-- node inventory, join-code creation/cancellation, drain/resume, revoke
+- node inventory, join-code creation/cancellation, drain/resume, revoke, and the
+  node-reported availability intent with its observation age
 - target and runner-profile configuration
 - execution history and audit events
 - controller settings and non-secret YAML export/apply
@@ -562,6 +577,84 @@ Audit persistence failure blocks new high-impact mutations and runner admission.
 
 The API never returns credential material. Configuration apply uses an optimistic
 revision and fails on stale input rather than silently overwriting newer state.
+
+## Node Availability Control and Tray Client
+
+The tray is a presentation surface, not a new authority. It shows the node's own
+state and toggles one value: whether this computer accepts new jobs.
+
+```mermaid
+flowchart LR
+    T["tewake-tray<br/>desktop user"] <-->|"local socket / named pipe"| A["Agent service"]
+    A <-->|"outbound WSS + mTLS"| C["Controller"]
+    UI["Web UI / CLI"] <-->|"/api/v1"| C
+```
+
+### Two authorities, one effective value
+
+The controller owns the Node administrative state (`Active`, `Draining`,
+`Quarantined`, `Revoked`). The node owner owns the node-local availability intent
+(`Accepting`, `Stopped`), stored in the agent database so it survives service restart
+and reboot. Admission requires both, and the intent is monotonically restrictive: a
+local `Accepting` never overrides a controller `Draining`, `Quarantined`, or
+`Revoked`, and never re-admits a node the controller refuses. Reconciliation reports
+the intent to the controller as observed state and never rewrites it; the controller's
+administrative state is likewise never rewritten by the agent.
+
+That asymmetry defines the degraded behavior. `Stopped` only subtracts capacity, so
+the agent applies it locally the moment it is recorded, even with no controller
+session. `Accepting` only adds capacity, so it stays `pending` and ineffective until
+the controller acknowledges it; the tray shows `pending`, never `accepting`, until
+then.
+
+Stopping never touches a running execution. The agent advertises no further capacity,
+the running job completes, and normal verified cleanup releases the slot. Cancelling
+a running job stays a separate, explicit controller-side operation.
+
+### Local control endpoint
+
+The agent service exposes a same-host control endpoint: a Unix domain socket under a
+service-owned directory on Linux and macOS, and a named pipe with an explicit DACL on
+Windows. It is never bound to a network address. The agent verifies the peer's OS
+identity from the kernel — `SO_PEERCRED` on Linux, `LOCAL_PEERCRED`/`getpeereid` on
+macOS, and the client token on the Windows pipe — and authorizes only the configured
+node-owner identities. An unauthorized or unidentifiable peer is refused without a
+state change.
+
+The endpoint is an allowlist of two operations: read non-secret node status, and set
+the availability intent. It exposes no execution logs, JIT material, tokens,
+certificates, join codes, or arbitrary command surface, so a compromised desktop
+session cannot escalate through the privileged agent beyond withholding this
+computer's own capacity.
+
+### Tray client
+
+`tewake-tray` is an unprivileged per-user binary started as a login item: a launchd
+LaunchAgent on macOS, an XDG autostart entry on Linux, and a per-user startup entry on
+Windows. The agent service never depends on it; a missing, crashed, or never-installed
+tray changes no fleet behavior.
+
+It renders exactly what the agent reports — administrative state, connection state,
+observation age, intent including `pending`, and the running executions on this node —
+plus the on/off toggle and a link to the controller UI. Unreachable agent, stale
+observation, and quarantine are distinct explicit presentations; none of them renders
+as accepting or idle.
+
+Linux has no universal tray. The client uses StatusNotifierItem where the desktop
+provides it and otherwise exits with an explicit unsupported-environment error,
+pointing at the CLI. It never degrades into a silent no-op window.
+
+Because tray integration needs cgo on macOS and Linux, `tewake-tray` is a separate
+optional artifact built natively per platform and excluded from the pure-Go
+cross-build matrix. Controller and agent releases never gate on it, and the support
+matrix states which platform packages include it.
+
+### Surface parity and audit
+
+The availability mutation exists once in `/api/v1` and is used by the Web UI, by
+`tewake node pause`/`tewake node resume`, and by the tray through the agent. Each
+change persists an audit event with node ID, requesting surface, actor identity,
+previous and next value, and result.
 
 ## Secret Storage
 
@@ -585,6 +678,8 @@ observed runtimes. The controller reconciles each node independently:
 - controller desired execution absent locally: retry idempotent command or fail it;
 - local runtime absent from controller: inspect and destroy before capacity returns;
 - cleanup tombstone: keep node quarantined until explicit successful remediation;
+- reported availability intent: adopt it as observed state, apply it to capacity, and
+  never replace it with a controller-side default;
 - offline node: retain last-known state and do not block reconciliation of other
   nodes.
 
@@ -603,6 +698,10 @@ prevents new starts but does not turn known running jobs into an empty state.
 | Agent offline during job | continue locally, cleanup locally, reconcile on reconnect |
 | Cleanup failure | `CleanupFailed`, node `Quarantined`, capacity zero |
 | Secret store failure | runner admission and protected mutations fail closed |
+| Node stopped by its owner | withhold capacity immediately; running job completes and cleans up normally |
+| Availability intent unreported | controller keeps the last reported intent and marks it stale; resume stays pending |
+| Tray cannot reach the agent | present unknown state and an explicit error; confirm no change |
+| Unauthorized local control peer | refuse without state change and record an audit event |
 | Protocol mismatch | explicit incompatibility error; no backward-compatibility shim pre-1.0 |
 | Disk/database failure | preserve error, enter recovery/degraded mode, never synthesize success |
 
@@ -615,8 +714,9 @@ prevents new starts but does not turn known running jobs into an empty state.
   latency, runner startup latency, GitHub polling staleness, reconciliation, and
   cleanup failures
 - append-only audit events for enrollment, credential lifecycle, GitHub App/Target
-  changes, scheduling decisions, node administrative changes, and authentication
-  failures
+  changes, scheduling decisions, node administrative changes, node availability
+  changes with their requesting surface, local control authorization failures, and
+  authentication failures
 - last-known state contains observation timestamps and explicit stale/offline flags
 
 Logs never include JIT payloads, tokens, keys, authorization headers, workflow
@@ -634,7 +734,11 @@ secrets, or raw environment snapshots.
 - Limited browser E2E for setup, join-code management, target creation, and drain
 - Real sandbox E2E across Linux/macOS/Windows and at least two GitHub installations
 - Security tests for public-scope rejection, token/certificate replay, JIT canaries,
-  traversal/symlinks, unauthenticated/CSRF mutation, and diagnostics redaction
+  traversal/symlinks, unauthenticated/CSRF mutation, local control endpoint peer
+  authorization, and diagnostics redaction
+- Availability tests for durable intent across restart, stop during a running job,
+  disconnected stop and pending resume, and the precedence of controller `Draining`,
+  `Quarantined`, and `Revoked` over a local `Accepting`
 
 Test evidence is emitted as JSON or JUnit and aggregated by `just check`. Debug
 artifacts have explicit short retention and are uploaded only on failure.
