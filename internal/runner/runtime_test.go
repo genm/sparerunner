@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 type testCache struct{ root string }
@@ -27,8 +28,13 @@ func (c testCache) Ensure(context.Context, Package) (PreparedPackage, error) {
 
 type testSupervisor struct {
 	starts, stops, prepareCalls int
+	waits                       int
 	startErr                    error
 	stopErr                     error
+	waitErr                     error
+	waitGate                    chan struct{}
+	waitEntered                 chan struct{}
+	waitOnce                    sync.Once
 	materializeOnStart          bool
 	deliverTwice                bool
 	skipJITDelivery             bool
@@ -38,7 +44,107 @@ type testSupervisor struct {
 	startRequest                StartRequest
 	observed                    []Process
 	stopped                     []Process
+	waited                      []Process
 }
+
+type cleanupFinalizingSupervisor struct {
+	*testSupervisor
+	finalizeErr   error
+	garbageErr    error
+	garbageBlock  bool
+	finalized     bool
+	finalizeCalls int
+	garbageCalls  int
+}
+
+type finalizerWithoutWaiter struct {
+	Supervisor
+}
+
+func (finalizerWithoutWaiter) FinalizeCleanup(
+	context.Context,
+	Process,
+	*os.Root,
+	string,
+	WorkspaceRef,
+) error {
+	return nil
+}
+
+func (finalizerWithoutWaiter) GarbageCollectCleanup(context.Context, Process) error {
+	return nil
+}
+
+func (supervisor *cleanupFinalizingSupervisor) FinalizeCleanup(
+	ctx context.Context,
+	_ Process,
+	root *os.Root,
+	name string,
+	_ WorkspaceRef,
+) error {
+	supervisor.finalizeCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if supervisor.finalizeErr != nil {
+		return supervisor.finalizeErr
+	}
+	if supervisor.finalized {
+		if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return ErrCleanupFailed
+		}
+		return nil
+	}
+	if _, err := root.Lstat(name); err != nil {
+		return ErrCleanupFailed
+	}
+	if err := root.RemoveAll(name); err != nil {
+		return ErrCleanupFailed
+	}
+	if _, err := root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+		return ErrCleanupFailed
+	}
+	supervisor.finalized = true
+	return nil
+}
+
+func (supervisor *cleanupFinalizingSupervisor) GarbageCollectCleanup(ctx context.Context, _ Process) error {
+	supervisor.garbageCalls++
+	if supervisor.garbageBlock {
+		<-ctx.Done()
+		return ctx.Err()
+	}
+	if supervisor.garbageErr == nil {
+		supervisor.finalized = false
+	}
+	return supervisor.garbageErr
+}
+
+type failReleasedJournal struct {
+	inner        *MemoryJournal
+	failReleased bool
+}
+
+func (journal *failReleasedJournal) Load(ctx context.Context, executionID string) (VersionedRecord, bool, error) {
+	return journal.inner.Load(ctx, executionID)
+}
+func (journal *failReleasedJournal) Create(ctx context.Context, mutationToken string, record Record) (VersionedRecord, bool, error) {
+	return journal.inner.Create(ctx, mutationToken, record)
+}
+func (journal *failReleasedJournal) CompareAndSwap(
+	ctx context.Context,
+	executionID string,
+	expectedRevision uint64,
+	mutationToken string,
+	record Record,
+) (VersionedRecord, bool, error) {
+	if journal.failReleased && record.State == StateReleased {
+		current, _, _ := journal.inner.Load(ctx, executionID)
+		return current, false, ErrJournal
+	}
+	return journal.inner.CompareAndSwap(ctx, executionID, expectedRevision, mutationToken, record)
+}
+
 type strongCleaner struct{ rootCleaner }
 
 func (strongCleaner) StrongWorkspaceOwnership() bool { return true }
@@ -55,6 +161,20 @@ func (strongCleaner) PrepareWorkspace(_ context.Context, _ *os.Root, name string
 }
 func (strongCleaner) WorkspaceRef(_ context.Context, _ *os.Root, name string) (WorkspaceRef, error) {
 	return WorkspaceRef{Backend: "test-v1", OwnerID: "test:" + name}, nil
+}
+
+type readinessCleaner struct {
+	strongCleaner
+	err   error
+	calls int
+}
+
+func (cleaner *readinessCleaner) ValidateRuntimeRoot(ctx context.Context, _ string) error {
+	cleaner.calls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return cleaner.err
 }
 
 func (*testSupervisor) StrongDescendantOwnership() bool { return true }
@@ -114,6 +234,257 @@ func (s *testSupervisor) Stop(_ context.Context, process Process) error {
 func (s *testSupervisor) Alive(process Process) (bool, error) {
 	s.observed = append(s.observed, process)
 	return true, nil
+}
+func (s *testSupervisor) Wait(ctx context.Context, process Process) error {
+	s.waits++
+	s.waited = append(s.waited, process)
+	if s.waitEntered != nil {
+		s.waitOnce.Do(func() { close(s.waitEntered) })
+	}
+	if s.waitGate != nil {
+		select {
+		case <-s.waitGate:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return s.waitErr
+}
+
+func TestManagerReadyRevalidatesPlatformOwnershipAndRuntimeRoot(t *testing.T) {
+	cleaner := &readinessCleaner{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{root: t.TempDir()},
+		Journal:     NewMemoryJournal(),
+		Supervisor: &cleanupFinalizingSupervisor{
+			testSupervisor: &testSupervisor{},
+		},
+		Cleaner: cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Ready(context.Background()); err != nil || cleaner.calls != 1 {
+		t.Fatalf("Ready error=%v calls=%d", err, cleaner.calls)
+	}
+	cleaner.err = errors.New("helper unavailable")
+	if err := manager.Ready(context.Background()); !errors.Is(err, ErrStrongOwnershipUnavailable) || cleaner.calls != 2 {
+		t.Fatalf("failed Ready error=%v calls=%d", err, cleaner.calls)
+	}
+}
+
+func TestManagerReadyRejectsIncompleteLifecycleCapabilities(t *testing.T) {
+	for name, supervisor := range map[string]Supervisor{
+		"missing completion waiter": &finalizerWithoutWaiter{
+			Supervisor: &testSupervisor{},
+		},
+		"missing cleanup finalizer": &testSupervisor{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cleaner := &readinessCleaner{}
+			manager, err := NewManager(Options{
+				RuntimeRoot: t.TempDir(),
+				Cache:       testCache{root: t.TempDir()},
+				Journal:     NewMemoryJournal(),
+				Supervisor:  supervisor,
+				Cleaner:     cleaner,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := manager.Ready(context.Background()); !errors.Is(err, ErrStrongOwnershipUnavailable) {
+				t.Fatalf("Ready error=%v", err)
+			}
+			if cleaner.calls != 0 {
+				t.Fatalf("runtime root probes=%d want=0", cleaner.calls)
+			}
+		})
+	}
+}
+
+func prepareRunningForFinalization(
+	t *testing.T,
+	executionID string,
+	journal Journal,
+	supervisor Supervisor,
+) (*Manager, Preparation, string) {
+	t.Helper()
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("#!/bin/sh\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeRoot := t.TempDir()
+	manager, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{root: content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := OfficialPackage(CurrentPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := Preparation{ExecutionID: executionID, Package: pkg}
+	if _, err := manager.EnsureRunning(context.Background(), Start{
+		Preparation: request,
+		JIT:         &callbackJIT{calls: 1, value: "finalize-jit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return manager, request, runtimeRoot
+}
+
+func TestDestroyCommitsReleasedOnlyAfterPlatformFinalization(t *testing.T) {
+	journal := NewMemoryJournal()
+	supervisor := &cleanupFinalizingSupervisor{testSupervisor: &testSupervisor{}}
+	manager, request, runtimeRoot := prepareRunningForFinalization(
+		t, "platform-finalize-success", journal, supervisor,
+	)
+	released, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("Destroy=%#v err=%v", released, err)
+	}
+	if supervisor.finalizeCalls != 1 || supervisor.garbageCalls != 1 {
+		t.Fatalf("finalize=%d garbage=%d", supervisor.finalizeCalls, supervisor.garbageCalls)
+	}
+	if _, err := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("released workspace remains: %v", err)
+	}
+}
+
+func TestFinalizeFailureQuarantinesWithoutReleasingOrErasingWorkspace(t *testing.T) {
+	journal := NewMemoryJournal()
+	supervisor := &cleanupFinalizingSupervisor{
+		testSupervisor: &testSupervisor{},
+		finalizeErr:    errors.New("injected finalize failure"),
+	}
+	manager, request, runtimeRoot := prepareRunningForFinalization(
+		t, "platform-finalize-failure", journal, supervisor,
+	)
+	state, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if !errors.Is(err, ErrQuarantined) || !state.Quarantined {
+		t.Fatalf("Destroy=%#v err=%v", state, err)
+	}
+	record, found, loadErr := journal.Load(context.Background(), request.ExecutionID)
+	if loadErr != nil || !found || record.State != StateCleanupFailed {
+		t.Fatalf("record=%#v found=%v err=%v", record, found, loadErr)
+	}
+	if _, err := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); err != nil {
+		t.Fatalf("failed finalize erased workspace: %v", err)
+	}
+	if supervisor.garbageCalls != 0 {
+		t.Fatal("failed finalize reached finalized-fence GC")
+	}
+}
+
+func TestRestartRecoversCleaningAfterFinalizeBeforeReleasedCommit(t *testing.T) {
+	journal := &failReleasedJournal{inner: NewMemoryJournal(), failReleased: true}
+	supervisor := &cleanupFinalizingSupervisor{testSupervisor: &testSupervisor{}}
+	manager, request, runtimeRoot := prepareRunningForFinalization(
+		t, "restart-after-platform-finalize", journal, supervisor,
+	)
+	if state, err := manager.Destroy(context.Background(), request.ExecutionID); err == nil || state.State == StateReleased {
+		t.Fatalf("first Destroy=%#v err=%v", state, err)
+	}
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found || record.State != StateCleaning || !supervisor.finalized {
+		t.Fatalf("crash boundary record=%#v found=%v err=%v finalized=%v", record, found, err, supervisor.finalized)
+	}
+	if _, err := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("finalized workspace remains: %v", err)
+	}
+	journal.failReleased = false
+	restarted, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{root: t.TempDir()},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	released, err := restarted.Recover(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("Recover=%#v err=%v", released, err)
+	}
+	if supervisor.finalizeCalls < 2 || supervisor.garbageCalls != 1 {
+		t.Fatalf("finalize=%d garbage=%d", supervisor.finalizeCalls, supervisor.garbageCalls)
+	}
+}
+
+func TestReleasedGarbageCollectionIsBoundedAndRetriedWithoutChangingTerminalState(t *testing.T) {
+	journal := NewMemoryJournal()
+	supervisor := &cleanupFinalizingSupervisor{
+		testSupervisor: &testSupervisor{},
+		garbageBlock:   true,
+	}
+	manager, request, _ := prepareRunningForFinalization(
+		t,
+		"bounded-finalized-garbage-collection",
+		journal,
+		supervisor,
+	)
+	started := time.Now()
+	released, err := manager.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("Destroy=%#v err=%v", released, err)
+	}
+	if elapsed := time.Since(started); elapsed > 2*cleanupHousekeepingTimeout {
+		t.Fatalf("garbage collection blocked Destroy for %s", elapsed)
+	}
+	if !supervisor.finalized || supervisor.garbageCalls != 1 {
+		t.Fatalf(
+			"finalized=%v garbageCalls=%d",
+			supervisor.finalized,
+			supervisor.garbageCalls,
+		)
+	}
+
+	supervisor.garbageBlock = false
+	restarted, err := NewManager(Options{
+		RuntimeRoot: manager.runtimeRoot,
+		Cache:       manager.cache,
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     manager.cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := restarted.Recover(context.Background(), request.ExecutionID)
+	if err != nil || recovered.State != StateReleased {
+		t.Fatalf("Recover=%#v err=%v", recovered, err)
+	}
+	if supervisor.finalized || supervisor.garbageCalls != 2 {
+		t.Fatalf(
+			"finalized=%v garbageCalls=%d",
+			supervisor.finalized,
+			supervisor.garbageCalls,
+		)
+	}
+}
+
+func TestManagerReadyRejectsBackendMismatchBeforeRootProbe(t *testing.T) {
+	cleaner := &readinessCleaner{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{root: t.TempDir()},
+		Journal:     NewMemoryJournal(),
+		Supervisor:  &testSupervisor{workspaceBackend: "other-v1"},
+		Cleaner:     cleaner,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.Ready(context.Background()); !errors.Is(err, ErrStrongOwnershipUnavailable) || cleaner.calls != 0 {
+		t.Fatalf("Ready error=%v calls=%d", err, cleaner.calls)
+	}
 }
 
 type callbackJIT struct {
@@ -890,6 +1261,137 @@ func TestTwoManagersUseJournalCASToStartExactlyOneRunner(t *testing.T) {
 	}
 }
 
+func TestRestartedManagerRecoversRunningContainmentAndCleansIt(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeRoot := t.TempDir()
+	journal := NewMemoryJournal()
+	supervisor := &testSupervisor{}
+	first, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "restart-running-adoption", Package: pkg}
+	if _, err := first.EnsureRunning(context.Background(), Start{
+		Preparation: request,
+		JIT:         &callbackJIT{calls: 1, value: "restart-jit"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	runningRecord, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found || runningRecord.State != StateRunning {
+		t.Fatalf("running record=%#v found=%v err=%v", runningRecord, found, err)
+	}
+
+	restarted, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := restarted.Recover(context.Background(), request.ExecutionID)
+	if err != nil || recovered.State != StateRunning {
+		t.Fatalf("Recover = %#v, %v", recovered, err)
+	}
+	expectedProcess := Process{PID: runningRecord.PID, Containment: runningRecord.Containment}
+	if len(supervisor.observed) != 1 || supervisor.observed[0] != expectedProcess {
+		t.Fatalf("adopted process=%#v want=%#v", supervisor.observed, expectedProcess)
+	}
+	if _, err := restarted.Wait(context.Background(), request.ExecutionID); err != nil {
+		t.Fatalf("Wait after recovery: %v", err)
+	}
+	released, err := restarted.Destroy(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("Destroy after recovery = %#v, %v", released, err)
+	}
+	if supervisor.starts != 1 || supervisor.stops != 1 || supervisor.waits != 1 {
+		t.Fatalf("starts=%d stops=%d waits=%d", supervisor.starts, supervisor.stops, supervisor.waits)
+	}
+}
+
+func TestLaunchAckLossStartingJournalDestroysWithoutReplayingJIT(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	runtimeRoot := t.TempDir()
+	journal := NewMemoryJournal()
+	supervisor := &testSupervisor{}
+	first, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	request := Preparation{ExecutionID: "restart-starting-cleanup", Package: pkg}
+	if _, err := first.EnsurePrepared(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	record, found, err := journal.Load(context.Background(), request.ExecutionID)
+	if err != nil || !found {
+		t.Fatalf("Load prepared = %#v, %v", record, err)
+	}
+	jitDigest := sha256.Sum256([]byte("lost-one-shot-jit"))
+	record.State = StateStarting
+	record.JITDigest = hex.EncodeToString(jitDigest[:])
+	record.Containment = ContainmentRef{
+		Backend:    "test",
+		OwnerID:    "unit-" + request.ExecutionID,
+		FenceToken: strings.Repeat("a", 32),
+	}
+	// Starting is the journal boundary when the root Helper may have launched and
+	// durably marked the listener but the Agent lost its PID ACK. Recovery must
+	// destroy that exact containment instead of requesting another one-shot JIT.
+	mutation, err := newOpaqueToken()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, swapped, err := journal.CompareAndSwap(
+		context.Background(), request.ExecutionID, record.Revision, mutation, record.Record,
+	); err != nil || !swapped {
+		t.Fatalf("seed Starting swapped=%v err=%v", swapped, err)
+	}
+
+	restarted, err := NewManager(Options{
+		RuntimeRoot: runtimeRoot,
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	released, err := restarted.Recover(context.Background(), request.ExecutionID)
+	if err != nil || released.State != StateReleased {
+		t.Fatalf("Recover Starting = %#v, %v", released, err)
+	}
+	if supervisor.starts != 0 || supervisor.jitDeliveries != 0 || supervisor.stops != 1 {
+		t.Fatalf("starts=%d deliveries=%d stops=%d", supervisor.starts, supervisor.jitDeliveries, supervisor.stops)
+	}
+	if _, statErr := os.Lstat(filepath.Join(runtimeRoot, "executions", executionRootName(request.ExecutionID))); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("recovered Starting workspace remained: %v", statErr)
+	}
+}
+
 func TestDestroyFencesInFlightStartBeforeReleasingWorkspace(t *testing.T) {
 	content := t.TempDir()
 	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
@@ -1253,6 +1755,151 @@ func TestLifecycleRetainsContainmentAcrossStartReplayInspectAndDestroy(t *testin
 	record, found, err := journal.Load(context.Background(), preparation.ExecutionID)
 	if err != nil || !found || record.Containment != expected || record.State != StateReleased {
 		t.Fatalf("released record = %#v, found=%v, err=%v", record, found, err)
+	}
+}
+
+func TestWaitObservesExactRunningContainmentWithoutReleasingWorkspace(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &testSupervisor{waitGate: make(chan struct{}), waitEntered: make(chan struct{})}
+	journal := NewMemoryJournal()
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	start := Start{
+		Preparation: Preparation{ExecutionID: "wait-running-containment", Package: pkg},
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	}
+	running, err := manager.EnsureRunning(context.Background(), start)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	waited := make(chan struct {
+		snapshot Snapshot
+		err      error
+	}, 1)
+	go func() {
+		snapshot, waitErr := manager.Wait(context.Background(), start.ExecutionID)
+		waited <- struct {
+			snapshot Snapshot
+			err      error
+		}{snapshot: snapshot, err: waitErr}
+	}()
+	<-supervisor.waitEntered
+	if supervisor.waits != 1 || len(supervisor.waited) != 1 {
+		t.Fatalf("completion waits = %d %#v", supervisor.waits, supervisor.waited)
+	}
+	select {
+	case result := <-waited:
+		t.Fatalf("Wait returned before containment emptied: %#v, %v", result.snapshot, result.err)
+	default:
+	}
+	close(supervisor.waitGate)
+	result := <-waited
+	if result.err != nil || result.snapshot != running {
+		t.Fatalf("Wait = %#v, %v; want running snapshot %#v", result.snapshot, result.err, running)
+	}
+	record, found, err := journal.Load(context.Background(), start.ExecutionID)
+	if err != nil || !found || record.State != StateRunning {
+		t.Fatalf("Wait changed durable lifecycle: %#v, found=%v, err=%v", record, found, err)
+	}
+	if supervisor.waited[0].Containment != supervisor.startRequest.Containment {
+		t.Fatalf("waited containment = %#v, start = %#v", supervisor.waited[0].Containment, supervisor.startRequest.Containment)
+	}
+}
+
+func TestWaitCancellationLeavesRunningExecutionForReconciliation(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	supervisor := &testSupervisor{waitGate: make(chan struct{}), waitEntered: make(chan struct{})}
+	journal := NewMemoryJournal()
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     journal,
+		Supervisor:  supervisor,
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	start := Start{
+		Preparation: Preparation{ExecutionID: "wait-context-cancel", Package: pkg},
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	}
+	if _, err := manager.EnsureRunning(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan struct {
+		snapshot Snapshot
+		err      error
+	}, 1)
+	go func() {
+		snapshot, waitErr := manager.Wait(ctx, start.ExecutionID)
+		result <- struct {
+			snapshot Snapshot
+			err      error
+		}{snapshot: snapshot, err: waitErr}
+	}()
+	<-supervisor.waitEntered
+	cancel()
+	waitResult := <-result
+	snapshot, err := waitResult.snapshot, waitResult.err
+	if !errors.Is(err, context.Canceled) || snapshot.State != StateRunning {
+		t.Fatalf("Wait = %#v, %v", snapshot, err)
+	}
+	record, found, loadErr := journal.Load(context.Background(), start.ExecutionID)
+	if loadErr != nil || !found || record.State != StateRunning || record.Tombstone {
+		t.Fatalf("cancelled wait mutated journal: %#v, found=%v, err=%v", record, found, loadErr)
+	}
+}
+
+type supervisorWithoutCompletionWait struct {
+	Supervisor
+}
+
+func TestWaitFailsClosedWhenPlatformCannotObserveDescendantCompletion(t *testing.T) {
+	content := t.TempDir()
+	if err := os.WriteFile(filepath.Join(content, "run.sh"), []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	platform := &testSupervisor{}
+	manager, err := NewManager(Options{
+		RuntimeRoot: t.TempDir(),
+		Cache:       testCache{content},
+		Journal:     NewMemoryJournal(),
+		Supervisor:  supervisorWithoutCompletionWait{Supervisor: platform},
+		Cleaner:     strongCleaner{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, _ := OfficialPackage(CurrentPlatform())
+	start := Start{
+		Preparation: Preparation{ExecutionID: "wait-unsupported-platform", Package: pkg},
+		JIT:         &callbackJIT{calls: 1, value: "jit-value"},
+	}
+	if _, err := manager.EnsureRunning(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := manager.Wait(context.Background(), start.ExecutionID)
+	if !errors.Is(err, ErrStrongOwnershipUnavailable) || snapshot.State != StateRunning {
+		t.Fatalf("Wait = %#v, %v", snapshot, err)
 	}
 }
 

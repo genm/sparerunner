@@ -1,0 +1,47 @@
+[Unit]
+Description=Tewake GitHub Actions runner agent
+Documentation=https://github.com/genm/tewake
+Wants=network-online.target
+After=network-online.target
+Wants=tewake-supervisor.service
+After=tewake-supervisor.service
+ConditionPathIsDirectory=/sys/fs/cgroup
+
+[Service]
+Type=simple
+User=tewake-agent
+Group=tewake-agent
+ExecStart=/usr/local/bin/tewake-agent serve \
+    --state-dir=/var/lib/tewake-agent \
+    --cache-root=/var/cache/tewake-agent \
+    --runtime-root=/var/lib/tewake-runtime \
+    --supervisor-socket=/run/tewake-supervisor/supervisor.sock \
+    --require-native-runner
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+
+# This process parses mTLS/WebSocket and GitHub-derived input. It never runs as
+# root and owns no cgroup, chown, setuid, or process-kill capability.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateDevices=yes
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=all
+ReadWritePaths=/var/lib/tewake-agent /var/cache/tewake-agent /var/lib/tewake-runtime
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

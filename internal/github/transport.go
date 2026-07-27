@@ -11,12 +11,20 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/hashicorp/go-retryablehttp"
 )
 
-const maxPreviewResponseBody = 1 << 20 // 1 MiB: JSON control-plane responses, never runner logs or artifacts.
-const maxVettedDialAttempts = 4        // Bound untrusted DNS fan-out while racing safe answers under the request context.
+const (
+	maxPreviewResponseBody = 1 << 20 // 1 MiB: JSON control-plane responses, never runner logs or artifacts.
+	maxVettedDialAttempts  = 4       // Bound untrusted DNS fan-out while racing safe answers under the request context.
+	// Keep finite control-plane operations within the same request budget used
+	// by the runner-release observer. GetMessage long polling deliberately does
+	// not use this budget.
+	finiteOperationTimeout = 30 * time.Second
+)
 
 var (
 	ErrUnsafeGitHubEndpoint = errors.New("unsafe GitHub endpoint")
@@ -49,6 +57,23 @@ func newHardenedRetryableClientWith(r resolver, dial dialContext, next http.Roun
 
 func neverRetry(context.Context, *http.Response, error) (bool, error) { return false, nil }
 
+// WithFiniteOperationTimeout returns a child context for a finite GitHub
+// control-plane operation. Callers must not use it for GetMessage long polling.
+// A nil context is retained so existing API boundary validation can reject it.
+func WithFiniteOperationTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	return withFiniteOperationTimeout(ctx, finiteOperationTimeout)
+}
+
+func withFiniteOperationTimeout(
+	ctx context.Context,
+	timeout time.Duration,
+) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		return nil, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 // Redirects can replay a mutating request after the first endpoint already applied
 // it. Canonical GitHub API endpoints must respond directly; reconciliation, not an
 // HTTP redirect or retry, owns recovery from an ambiguous result.
@@ -57,6 +82,14 @@ func rejectRedirect(*http.Request, []*http.Request) error { return ErrUnsafeGitH
 type endpointTransport struct{ next http.RoundTripper }
 
 func (t endpointTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request == nil {
+		return nil, ErrUnsafeGitHubEndpoint
+	}
+	// One logical scale-set operation may first refresh a token and then issue
+	// the actual API request. Clear the earlier response before every attempt,
+	// including endpoint validation, so a final transport/rejection failure
+	// cannot inherit a successful refresh status.
+	resetProviderResponseStatus(request.Context())
 	if err := validateEndpoint(request.URL); err != nil {
 		return nil, err
 	}
@@ -64,8 +97,51 @@ func (t endpointTransport) RoundTrip(request *http.Request) (*http.Response, err
 	if err != nil || response == nil {
 		return response, err
 	}
+	recordProviderResponseStatus(request.Context(), response.StatusCode)
 	response.Body = &boundedReadCloser{ReadCloser: response.Body, remaining: maxPreviewResponseBody}
 	return response, nil
+}
+
+// providerStatusRecorder is scoped to one public message-session operation.
+// The official client can refresh an expired token and issue several requests;
+// retaining the final response lets callers classify only the operation's
+// terminal provider failure without parsing the vendor's error text.
+type providerStatusRecorder struct{ status atomic.Int64 }
+
+type providerStatusRecorderContextKey struct{}
+
+func withProviderStatusRecorder(ctx context.Context) (context.Context, *providerStatusRecorder) {
+	recorder := &providerStatusRecorder{}
+	if ctx == nil {
+		// Preserve the official client's existing invalid-context failure path:
+		// its request construction remains inside contain at the call site.
+		return nil, recorder
+	}
+	return context.WithValue(ctx, providerStatusRecorderContextKey{}, recorder), recorder
+}
+
+func recordProviderResponseStatus(ctx context.Context, statusCode int) {
+	if statusCode <= 0 {
+		return
+	}
+	recorder, _ := ctx.Value(providerStatusRecorderContextKey{}).(*providerStatusRecorder)
+	if recorder != nil {
+		recorder.status.Store(int64(statusCode))
+	}
+}
+
+func resetProviderResponseStatus(ctx context.Context) {
+	recorder, _ := ctx.Value(providerStatusRecorderContextKey{}).(*providerStatusRecorder)
+	if recorder != nil {
+		recorder.status.Store(0)
+	}
+}
+
+func (r *providerStatusRecorder) responseStatusCode() int {
+	if r == nil {
+		return 0
+	}
+	return int(r.status.Load())
 }
 
 func validateEndpoint(endpoint *url.URL) error {

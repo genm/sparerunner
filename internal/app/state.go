@@ -20,7 +20,9 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/reconcile"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
@@ -36,8 +38,9 @@ const (
 )
 
 var (
-	ErrAlreadyInitialized = errors.New("tewake state is already initialized")
-	ErrNotInitialized     = errors.New("tewake state is not initialized")
+	ErrAlreadyInitialized         = errors.New("tewake state is already initialized")
+	ErrNotInitialized             = errors.New("tewake state is not initialized")
+	ErrAgentCredentialUnavailable = errors.New("agent credential is unavailable")
 )
 
 type ControllerState struct {
@@ -46,6 +49,8 @@ type ControllerState struct {
 	Store        *store.ControllerStore
 	Service      enroll.Service
 	Sessions     *transport.ActiveSessionRegistry
+	AgentBroker  *AgentBroker
+	Reconciler   *reconcile.Controller
 	AdminSession [32]byte
 	Epoch        uint64
 }
@@ -63,9 +68,11 @@ func (state ControllerState) MarshalJSON() ([]byte, error) {
 }
 
 // InitializeController publishes a complete state directory atomically. A
-// failed initializer removes only its own uniquely-created staging directory.
-func InitializeController(ctx context.Context, directory string, hints []string) (string, error) {
-	directory, err := absoluteStateDirectory(directory)
+// failed initializer rolls back platform credentials before removing its
+// uniquely-created staging directory; failed credential cleanup preserves the
+// private locators for explicit recovery.
+func InitializeController(ctx context.Context, directory string, hints []string) (code string, err error) {
+	directory, err = absoluteStateDirectory(directory)
 	if err != nil {
 		return "", err
 	}
@@ -87,9 +94,29 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 		return "", err
 	}
 	published := false
+	privateMaterial := []string{
+		filepath.Join(staging, controllerIdentityFile),
+		filepath.Join(staging, controllerDigestFile),
+		filepath.Join(staging, controllerSessionFile),
+	}
 	defer func() {
-		if !published {
-			_ = os.RemoveAll(staging)
+		if published {
+			return
+		}
+		var rollbackErr error
+		for index := len(privateMaterial) - 1; index >= 0; index-- {
+			if removeErr := enroll.RemovePrivateMaterial(privateMaterial[index]); removeErr != nil {
+				rollbackErr = errors.Join(rollbackErr, removeErr)
+			}
+		}
+		// Keep locators in the private staging directory when credential-store
+		// cleanup fails; deleting them would turn a recoverable item into an
+		// unreferenced secret.
+		if rollbackErr == nil {
+			rollbackErr = os.RemoveAll(staging)
+		}
+		if rollbackErr != nil {
+			err = errors.Join(err, fmt.Errorf("rollback controller state: %w", rollbackErr))
 		}
 	}()
 
@@ -131,7 +158,7 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 		_ = controllerStore.Close()
 		return "", err
 	}
-	code, err := service.CreateJoinCode(ctx, hints)
+	code, err = service.CreateJoinCode(ctx, hints)
 	if closeErr := controllerStore.Close(); err == nil && closeErr != nil {
 		err = closeErr
 	}
@@ -202,12 +229,44 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 	}
 	sessions := transport.NewActiveSessionRegistry()
 	controllerStore.SetCredentialRevocationHook(sessions.Revoke)
+	var reconciler *reconcile.Controller
+	if activate {
+		restartSnapshot, snapshotErr := controllerStore.RestartSnapshot(ctx)
+		if snapshotErr != nil {
+			_ = controllerStore.Close()
+			return nil, snapshotErr
+		}
+		reconciler, snapshotErr = reconcile.RestoreRestart(restartSnapshot, timeNow)
+		if snapshotErr != nil {
+			_ = controllerStore.Close()
+			return nil, snapshotErr
+		}
+	}
+	agentConsumers := newStoreBackedAgentConsumers(controllerStore)
+	if reconciler != nil {
+		agentConsumers = newStoreBackedAgentConsumers(controllerStore, reconciler)
+	}
+	if activate {
+		snapshotConsumer, consumerErr := reconcile.NewSnapshotConsumer(
+			controllerStore,
+			reconciler,
+		)
+		if consumerErr != nil {
+			_ = controllerStore.Close()
+			return nil, consumerErr
+		}
+		// Command and execution-update ownership remains store-backed; only the
+		// snapshot owner adds commit-before-projection reconciliation.
+		agentConsumers.Snapshot = snapshotConsumer
+	}
 	return &ControllerState{
 		Directory:    directory,
 		Identity:     identity,
 		Store:        controllerStore,
 		Service:      service,
 		Sessions:     sessions,
+		AgentBroker:  NewAgentBroker(domain.ControllerEpoch(epoch), agentConsumers),
+		Reconciler:   reconciler,
 		AdminSession: adminSession,
 		Epoch:        epoch,
 	}, nil
@@ -248,6 +307,42 @@ func (state AgentState) MarshalJSON() ([]byte, error) {
 		NodeID    string `json:"nodeId,omitempty"`
 		Endpoint  string `json:"endpoint,omitempty"`
 	}{Directory: state.Directory, NodeID: state.NodeID, Endpoint: state.Endpoint})
+}
+
+// CredentialReady verifies that the exact durable node identity and enrolled
+// configuration remain loadable through the platform credential store. The
+// in-memory TLS key alone is insufficient admission authority because losing
+// durable identity would make the next service restart unreconcilable.
+func (state *AgentState) CredentialReady(ctx context.Context) error {
+	if state == nil || ctx == nil || state.Directory == "" ||
+		state.NodeID == "" || state.Endpoint == "" || len(state.PrivateKey) == 0 {
+		return ErrAgentCredentialUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return ErrAgentCredentialUnavailable
+	}
+	key, err := enroll.LoadNodePrivateKey(filepath.Join(state.Directory, agentKeyFile))
+	if err != nil {
+		return ErrAgentCredentialUnavailable
+	}
+	defer clear(key)
+	if !key.Equal(state.PrivateKey) {
+		return ErrAgentCredentialUnavailable
+	}
+	encoded, err := enroll.LoadPrivateMaterial(filepath.Join(state.Directory, agentConfigFile))
+	if err != nil {
+		return ErrAgentCredentialUnavailable
+	}
+	defer clear(encoded)
+	config, certificateDER, caDER, err := decodeAgentConfig(encoded)
+	if err != nil ||
+		config.NodeID != state.NodeID ||
+		config.Endpoint != state.Endpoint ||
+		!bytes.Equal(certificateDER, state.CertificateDER) ||
+		!bytes.Equal(caDER, state.CADER) {
+		return ErrAgentCredentialUnavailable
+	}
+	return nil
 }
 
 type agentConfig struct {
@@ -427,7 +522,10 @@ func absoluteStateDirectory(directory string) (string, error) {
 func ensurePrivateStateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
 	if errors.Is(err, os.ErrNotExist) {
-		return os.MkdirAll(directory, 0o700)
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return err
+		}
+		info, err = os.Lstat(directory)
 	}
 	if err != nil {
 		return err
@@ -435,7 +533,7 @@ func ensurePrivateStateDirectory(directory string) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("state directory is unsafe")
 	}
-	return privateStateDirectoryPlatform(info)
+	return privateStateDirectoryPlatform(directory, info)
 }
 
 func randomSecret() ([32]byte, error) {

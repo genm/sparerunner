@@ -10,11 +10,11 @@ bootstrap:
   lefthook install
 
 fmt:
-  gofmt -w cmd internal spec/tewake
+  gofmt -w cmd internal packaging test
   pnpm --dir web format
 
 fmt-check:
-  test -z "$(gofmt -l cmd internal spec/tewake)"
+  test -z "$(gofmt -l cmd internal packaging test)"
   pnpm --dir web format:check
 
 lint:
@@ -33,6 +33,9 @@ test-enrollment-cli-linux:
 test-runner-linux:
   ./scripts/test-runner-linux.sh
 
+test-platform-linux:
+  ./scripts/test-platform-linux.sh
+
 build:
   mkdir -p bin
   go build -trimpath -o bin/tewake ./cmd/tewake
@@ -42,7 +45,7 @@ build:
 build-all:
   ./scripts/cross-build.sh
 
-check: fmt-check lint test build
+check: fmt-check lint test test-platform-linux build
 
 check-quick: fmt-check
   go test ./...

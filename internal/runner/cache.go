@@ -67,6 +67,102 @@ func (prepared *cachedPackage) Close() error {
 	return err
 }
 
+// MaterializeOfficialArchive copies an untrusted cache archive into a
+// destination-owned file, verifies the exact pinned size and SHA-256 there, and
+// extracts only from that immutable-by-caller copy. This is the privileged
+// Supervisor boundary: the Agent may own and replace its cache entry, but it
+// cannot change the bytes after the root-owned copy has been verified.
+func MaterializeOfficialArchive(destination *os.Root, source *os.File, pkg Package) error {
+	if destination == nil || source == nil || !pkg.valid() {
+		return ErrInvalidRequest
+	}
+	const archiveName = ".tewake-official-runner-archive"
+	archive, err := destination.OpenFile(archiveName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o400)
+	if err != nil {
+		return ErrPackageIntegrity
+	}
+	cleaned := false
+	defer func() {
+		if !cleaned {
+			_ = archive.Close()
+			_ = destination.Remove(archiveName)
+		}
+	}()
+	if err := CopyAndVerifyOfficialArchive(archive, source, pkg); err != nil {
+		return err
+	}
+	if err := MaterializePinnedOfficialArchive(destination, archive, pkg); err != nil {
+		return err
+	}
+	if err := archive.Close(); err != nil {
+		return ErrPackageIntegrity
+	}
+	if err := destination.Remove(archiveName); err != nil {
+		return ErrPackageIntegrity
+	}
+	cleaned = true
+	return nil
+}
+
+// CopyAndVerifyOfficialArchive creates the root-side immutable authority from an
+// untrusted Agent cache descriptor. Callers must publish the destination only
+// after this exact-size and SHA-256 verification succeeds.
+func CopyAndVerifyOfficialArchive(destination, source *os.File, pkg Package) error {
+	if destination == nil || source == nil || !pkg.valid() {
+		return ErrInvalidRequest
+	}
+	if _, err := source.Seek(0, io.SeekStart); err != nil {
+		return ErrPackageIntegrity
+	}
+	if _, err := destination.Seek(0, io.SeekStart); err != nil {
+		return ErrPackageIntegrity
+	}
+	hash := newChecksumWriter(destination)
+	bytesCopied, copyErr := io.Copy(hash, io.LimitReader(source, pkg.Size+1))
+	if copyErr != nil || bytesCopied != pkg.Size || !hash.matches(pkg.Checksum) {
+		return ErrPackageIntegrity
+	}
+	if err := destination.Sync(); err != nil {
+		return ErrPackageIntegrity
+	}
+	return nil
+}
+
+// VerifyOfficialArchive performs the one full verification required when a
+// Supervisor first adopts an authority published by an earlier process.
+func VerifyOfficialArchive(archive *os.File, pkg Package) error {
+	if archive == nil || !pkg.valid() {
+		return ErrInvalidRequest
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return ErrPackageIntegrity
+	}
+	hash := newChecksumWriter(io.Discard)
+	bytesRead, readErr := io.Copy(hash, io.LimitReader(archive, pkg.Size+1))
+	if readErr != nil || bytesRead != pkg.Size || !hash.matches(pkg.Checksum) {
+		return ErrPackageIntegrity
+	}
+	return nil
+}
+
+// MaterializePinnedOfficialArchive extracts a previously verified immutable
+// root-side authority. It deliberately avoids hashing a large archive for every
+// execution; the privileged caller must keep and revalidate the authority's
+// descriptor identity before calling this function.
+func MaterializePinnedOfficialArchive(destination *os.Root, archive *os.File, pkg Package) error {
+	if destination == nil || archive == nil || !pkg.valid() {
+		return ErrInvalidRequest
+	}
+	info, err := archive.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() != pkg.Size {
+		return ErrPackageIntegrity
+	}
+	if _, err := archive.Seek(0, io.SeekStart); err != nil {
+		return ErrPackageIntegrity
+	}
+	return extractArchive(destination, archive, pkg.Format)
+}
+
 var cacheGates = struct {
 	sync.Mutex
 	entries map[string]*cacheGate
@@ -75,6 +171,13 @@ var cacheGates = struct {
 type cacheGate struct {
 	token chan struct{}
 	refs  int
+}
+
+// ValidateCacheRoot verifies the same private ownership boundary used by
+// Cache.Ensure without downloading a runner package. Service startup uses it to
+// fail closed before the node can advertise native capacity.
+func ValidateCacheRoot(root string) error {
+	return requirePrivateCacheRoot(root)
 }
 
 // Ensure returns a single-use capability backed by the exact archive file

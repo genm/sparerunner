@@ -28,7 +28,7 @@ type ControllerServeOptions struct {
 }
 
 func ServeController(ctx context.Context, state *ControllerState, options ControllerServeOptions) error {
-	if state == nil || state.Store == nil || options.AgentListener == nil {
+	if state == nil || state.Store == nil || state.AgentBroker == nil || options.AgentListener == nil {
 		return errors.New("controller serve dependencies are incomplete")
 	}
 	if err := ValidateAdminListener(options.AdminListener); err != nil {
@@ -96,6 +96,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 	}
 	go func() {
 		<-serveContext.Done()
+		state.AgentBroker.Close()
 		state.Sessions.CloseAll()
 		_ = agentServer.Close()
 		if adminServer != nil {
@@ -107,6 +108,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 		if err := <-results; err != nil && firstErr == nil {
 			firstErr = err
 			cancel()
+			state.AgentBroker.Close()
 			state.Sessions.CloseAll()
 			_ = agentServer.Close()
 			if adminServer != nil {
@@ -145,7 +147,10 @@ func controllerAgentHandler(state *ControllerState) http.Handler {
 				http.Error(writer, "invalid agent request", http.StatusBadRequest)
 				return
 			}
-			if err := transport.UpgradeAuthenticatedWithSessions(writer, request, state.Store, handleAgentSession, state.Sessions); err != nil {
+			handler := func(ctx context.Context, session *transport.AuthenticatedSession) error {
+				return state.AgentBroker.serveSession(ctx, session)
+			}
+			if err := transport.UpgradeAuthenticatedWithSessions(writer, request, state.Store, handler, state.Sessions); err != nil {
 				if transport.SessionWasUpgraded(err) {
 					return
 				}
@@ -157,67 +162,6 @@ func controllerAgentHandler(state *ControllerState) http.Handler {
 			http.NotFound(writer, request)
 		}
 	})
-}
-
-func handleAgentSession(ctx context.Context, session *transport.AuthenticatedSession) error {
-	for {
-		envelope, err := session.Read(ctx)
-		if err != nil {
-			return err
-		}
-		if err := validateAgentMessage(session, envelope); err != nil {
-			return err
-		}
-		messageID, err := randomMessageID()
-		if err != nil {
-			return err
-		}
-		payload, err := json.Marshal(struct {
-			MessageID string `json:"messageId"`
-		}{MessageID: envelope.MessageID})
-		if err != nil {
-			return err
-		}
-		if err := session.Write(ctx, transport.Envelope{
-			ProtocolVersion: transport.ProtocolVersion,
-			MessageID:       messageID,
-			Type:            transport.MessageAck,
-			Payload:         payload,
-		}); err != nil {
-			return err
-		}
-	}
-}
-
-func validateAgentMessage(session *transport.AuthenticatedSession, envelope transport.Envelope) error {
-	switch envelope.Type {
-	case transport.MessageHello:
-		var payload struct {
-			NodeID string `json:"nodeId"`
-		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID {
-			return errors.New("agent hello identity mismatch")
-		}
-	case transport.MessageSnapshot:
-		var payload struct {
-			NodeID string `json:"nodeId"`
-			OS     string `json:"os"`
-			Arch   string `json:"arch"`
-		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID || payload.OS == "" || payload.Arch == "" {
-			return errors.New("invalid agent snapshot")
-		}
-	case transport.MessageHeartbeat:
-		var payload struct {
-			NodeID string `json:"nodeId"`
-		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID {
-			return errors.New("invalid agent heartbeat")
-		}
-	default:
-		return errors.New("message type is not valid from an agent")
-	}
-	return nil
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {

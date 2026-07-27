@@ -24,8 +24,11 @@ parallelism, and re-registering broken runners.
   release this is the same trust domain as the Administrator.
 - **GitHub**: the external source of job assignments, scale-set state, runner
   registration, and JIT runner configuration.
-- **Agent**: the privileged local supervisor that reports node capacity and owns the
-  runner process lifecycle.
+- **Agent**: the unprivileged outbound network process that reports node capacity
+  and drives the local runner lifecycle.
+- **Platform Supervisor**: the narrow OS-specific privileged boundary that owns
+  process containment, slot-account handoff, and verified cleanup without
+  accepting arbitrary commands from the Agent.
 - **Workflow**: code executed by the official GitHub Actions runner. Native workflows
   are trusted code, but they remain untrusted input to Tewake's protocol and file
   handling.
@@ -86,6 +89,9 @@ parallelism, and re-registering broken runners.
 3. Create a GitHub Target for a private repository or organization scope.
 4. Reject public scopes, unverifiable visibility, unsafe runner-group access, and
    overlapping repository-/organization-level routing.
+5. Create a new Tewake-owned scale set for that Target. Reject attaching a
+   pre-existing/shared scale set, and reject binding one scale set to multiple
+   Targets.
 
 ### Run a job
 
@@ -155,6 +161,15 @@ parallelism, and re-registering broken runners.
   not a first-release requirement.
 - Nodes make outbound WSS connections authenticated with node certificates. mDNS is
   endpoint discovery only and is never an identity or authorization signal.
+- On Linux, the network-facing Agent shall run without root privileges. A separate
+  root Supervisor shall authenticate the Agent over a local Unix socket and accept
+  only fixed operations derived from root-owned configuration; arbitrary command,
+  path, environment, UID, and GID input is forbidden.
+- The Linux Supervisor shall independently verify a root-owned copy of the exact
+  pinned official runner archive, reconstruct the execution tree only from that
+  copy, and descriptor-pin the resulting workspace and executable at launch. An
+  Agent-owned cache entry or prebuilt workspace shall never be privileged
+  execution authority.
 - The controller CA defaults to a ten-year validity. Controller and node leaf
   certificates default to one year and automatically renew at a jittered point
   between 70% and 90% of their lifetime. Expired or superseded leaf credentials fail
@@ -212,6 +227,13 @@ parallelism, and re-registering broken runners.
 - For every execution history, active plus reserved slots shall never exceed either
   `node.maxRunners` or the configured fleet maximum.
 - A free physical slot shall be granted to at most one GitHub Target at a time.
+- Every non-terminal Controller execution shall retain exactly one matching slot
+  reservation and every terminal execution shall retain none. Missing or excess
+  reservation evidence shall put the Controller store into recovery mode rather
+  than advertise the affected capacity as free.
+- A connected node whose native runner backend is unavailable, stale, or not yet
+  reconciled shall advertise zero capacity even when its diagnostic Agent session
+  remains online.
 - Duplicate commands and duplicate scale-set messages shall resolve idempotently and
   shall not create a second runtime.
 - After a successful job, runner registration, workspace, runtime process tree,
@@ -219,6 +241,12 @@ parallelism, and re-registering broken runners.
   materialized from JIT configuration shall be absent.
 - If cleanup verification fails, the execution shall enter `CleanupFailed` and the
   node shall enter `Quarantined` rather than `Idle`.
+- If the Linux Supervisor socket, peer identity, cgroup-v2 contract, or root-owned
+  configuration cannot be verified, native runner admission shall fail without
+  elevating the network-facing Agent.
+- Each Linux execution shall receive a private `HOME`, XDG cache/config roots, and
+  `TMPDIR` below its disposable execution root. Their residue shall be absent before
+  the slot can serve a later job.
 - A warm node shall start the official runner quickly enough to satisfy GitHub's
   60-second job-pickup window; measured startup latency is a release gate rather than
   a hidden runtime timeout.
@@ -247,9 +275,65 @@ parallelism, and re-registering broken runners.
 - If the controller stops after desired-state commit and before GitHub message
   acknowledgement, replay after restart shall not lose the job or start it twice.
 - If an agent disconnects during a running job, the job shall continue locally and
-  cleanup shall be journaled for later reconciliation.
+  cleanup and its typed terminal update shall be journaled for acknowledgement and
+  later reconciliation.
+- If the Agent cannot read or durably update its local runner journal or terminal
+  outbox, the Agent process shall exit for OS-service recovery rather than hide the
+  local authority failure behind a reconnect loop.
 - If GitHub returns a 5xx response, the UI and API shall retain last-known data and
   mark it stale instead of returning an empty healthy collection.
+- A JIT generation or accepted-start ambiguity with no proof that the official
+  runner reached `Running` or `Cleaning` shall remain fenced until the exact
+  provider runner has been queried, removed when present, and then observed absent
+  twice. The two post-removal absence observations shall be separated by the
+  durable confirmation interval and bound to the same Agent snapshot authority.
+- An Agent `Running` update shall prove only local process start. GitHub pickup
+  shall require an exact matching `JobStarted`, or an exact matching
+  `JobCompleted` with a known non-`canceled` result, over scale set, runner ID,
+  and runner name. When GitHub supplies a non-zero runner request ID it shall
+  also match the JIT attempt. A zero runner request ID may fall back only to a
+  provider runner ID and name that identify exactly one durable JIT attempt in
+  that scale set. Availability and assignment events shall always require a
+  non-zero runner request ID. `JobCompleted(result: "canceled")` shall not prove
+  pickup because it is also emitted for an assignment that timed out before
+  runner acquisition.
+- Reconciled provider absence shall never rewind or reuse the old terminal
+  execution. After the exact terminal outbox update, a fresh, non-replayed
+  `JobAvailable` message under current poll authority shall first persist only a
+  zero-capacity cleanup intent and proposed replacement ID. It shall not create
+  the replacement execution, reservation, acquire attempt, or JIT configuration
+  until the old provider runner is removed and observed absent twice. A
+  `JobAvailable` that races ahead of the terminal outbox shall remain
+  unacknowledged and create no durable message or intent. The same transaction
+  rollback shall apply while recovery admission is disabled, the concrete slot is
+  occupied, or the message's poll authority is stale, so a later redelivery
+  remains fresh enough to create or rearm recovery state.
+- A zero-capacity poll shall separate intent acknowledgement from provider
+  deletion and every provider absence step so late exact pickup evidence can be
+  committed first. Late pickup shall discard the proposed replacement and keep
+  the old claim. Final confirmed absence shall atomically create one replacement
+  execution, reservation, and acquire attempt with a durable reconciled marker,
+  then dispatch it without another long poll. After a Controller crash, only a
+  Pending claim carrying that exact marker and validated lineage may resume
+  before the first long poll; an ordinary pre-acknowledgement Pending claim shall
+  remain poll-first.
+- A terminal Agent snapshot alone shall not release a Controller slot or prove
+  that a runner started. The exact durable terminal outbox update owns terminal
+  execution mutation and slot release. An authenticated `CleanupFailed` or
+  `Quarantined` snapshot or tombstone may latch node quarantine earlier so
+  capacity remains zero while the outbox is replayed.
+- A replacement Agent snapshot shall be rejected before durable projection when
+  its capture interval overlaps any command dispatch for the same Node. Snapshot
+  commit and command dispatch shall revalidate one current Agent incarnation under
+  the same per-Node lifecycle boundary. This applies to ordinary Prepare, Start,
+  and Cancel as well as Prepare replay and reconciliation Cancel; recovery replay
+  shall also require the exact current snapshot digest and Controller epoch in
+  durable storage.
+- Snapshot ACK and disconnect persistence shall not hold the per-Node lifecycle
+  lock. A stalled ACK shall remain unavailable for commands but be supersedable
+  by a newer authenticated handshake. Reconnect during unresolved disconnect
+  persistence shall fail closed explicitly and become retryable after commit;
+  Controller shutdown shall cancel the persistence operation.
 - After a controller restart, capacity shall begin at zero and return independently
   for each reconciled online node without waiting for offline nodes.
 

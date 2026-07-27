@@ -48,7 +48,7 @@ jobs:
 
       - name: Check Go formatting
         shell: bash
-        run: test -z "$(gofmt -l cmd internal)"
+        run: test -z "$(gofmt -l cmd internal packaging test)"
 
       - name: Check Go code
         run: go vet ./...
@@ -58,6 +58,9 @@ jobs:
         run: |
           mkdir -p output/test-results
           go test -json ./... > output/test-results/go-test.json
+
+      - name: Test privileged Linux runner boundary
+        run: ./scripts/test-platform-linux.sh
 
       - name: Check Web formatting, lint, and types
         run: |

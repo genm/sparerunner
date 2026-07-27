@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -299,6 +300,33 @@ func BenchmarkCacheHit(b *testing.B) {
 	b.StopTimer()
 	if fetcher.calls != 1 {
 		b.Fatalf("cache hit fetched %d times", fetcher.calls)
+	}
+}
+
+func TestMaterializeOfficialArchiveRejectsForgedCacheBytes(t *testing.T) {
+	pkg, err := OfficialPackage(CurrentPlatform())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sourcePath := filepath.Join(t.TempDir(), "archive")
+	if err := os.WriteFile(sourcePath, []byte("forged runner archive"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	source, err := os.Open(sourcePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	destination, err := os.OpenRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if err := MaterializeOfficialArchive(destination, source, pkg); !errors.Is(err, ErrPackageIntegrity) {
+		t.Fatalf("MaterializeOfficialArchive error=%v", err)
+	}
+	if _, err := destination.Lstat(".tewake-official-runner-archive"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("root-owned verification copy remains: %v", err)
 	}
 }
 

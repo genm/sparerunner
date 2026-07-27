@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"errors"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 
@@ -124,6 +126,36 @@ func TestValidateJITResultRejectsMismatchedRunnerIdentity(t *testing.T) {
 	}
 }
 
+func TestGenerateJITConfigExposesFinalProviderHTTPStatus(t *testing.T) {
+	vendorError := errors.New(
+		"vendor failure https://api.example.test/actions Bearer secret-token")
+	client := &Client{
+		generateJITConfig: func(
+			ctx context.Context,
+			_ *scaleset.RunnerScaleSetJitRunnerSetting,
+			_ int,
+		) (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
+			recordResponseStatus(t, ctx, http.StatusServiceUnavailable)
+			return nil, vendorError
+		},
+	}
+	_, err := client.GenerateJITConfig(context.Background(), JITRequest{
+		ScaleSetID: 7,
+		Name:       "tewake-runner",
+		WorkFolder: "_work",
+	})
+	var statusError *ProviderHTTPStatusError
+	if !errors.As(err, &statusError) ||
+		statusError.StatusCode != http.StatusServiceUnavailable ||
+		!errors.Is(err, vendorError) {
+		t.Fatalf("JIT provider status error = %#v", err)
+	}
+	if strings.Contains(err.Error(), "api.example.test") ||
+		strings.Contains(err.Error(), "secret-token") {
+		t.Fatalf("JIT provider error exposed sensitive vendor text: %q", err)
+	}
+}
+
 func TestAcquireIDValidation(t *testing.T) {
 	if err := validateAcquireIDs([]int64{1, 2}); err != nil {
 		t.Fatal(err)
@@ -165,6 +197,149 @@ func TestMessageSessionOperationsFailClosedWithoutSession(t *testing.T) {
 	}
 	if err := session.Close(context.Background()); !errors.Is(err, ErrInvalidSession) {
 		t.Fatalf("Close() error = %v, want ErrInvalidSession", err)
+	}
+}
+
+func validMessageSession() *MessageSession {
+	return &MessageSession{
+		client:     &scaleset.MessageSessionClient{},
+		scaleSetID: 7,
+		owner:      "example-org",
+		readSession: func() scaleset.RunnerScaleSetSession {
+			return scaleset.RunnerScaleSetSession{OwnerName: "example-org", RunnerScaleSet: &scaleset.RunnerScaleSet{ID: 7}}
+		},
+	}
+}
+
+func TestMessageSessionOperationErrorsExposeFinalProviderHTTPStatus(t *testing.T) {
+	vendorError := errors.New("vendor failure https://queue.example.test/messages Bearer secret-token")
+	testCases := []struct {
+		name       string
+		statusCode int
+		call       func(*MessageSession) error
+	}{
+		{
+			name:       "poll rate limited",
+			statusCode: http.StatusTooManyRequests,
+			call: func(session *MessageSession) error {
+				session.getMessage = func(ctx context.Context, _ int, _ int) (*scaleset.RunnerScaleSetMessage, error) {
+					recordResponseStatus(t, ctx, http.StatusTooManyRequests)
+					return nil, vendorError
+				}
+				_, err := session.Poll(context.Background(), 0, 1)
+				return err
+			},
+		},
+		{
+			name:       "delete unavailable",
+			statusCode: http.StatusInternalServerError,
+			call: func(session *MessageSession) error {
+				session.deleteMessage = func(ctx context.Context, _ int) error {
+					recordResponseStatus(t, ctx, http.StatusInternalServerError)
+					return vendorError
+				}
+				return session.DeleteMessage(context.Background(), 1)
+			},
+		},
+		{
+			name:       "acquire unauthorized",
+			statusCode: http.StatusUnauthorized,
+			call: func(session *MessageSession) error {
+				session.acquireJobs = func(ctx context.Context, _ []int64) ([]int64, error) {
+					recordResponseStatus(t, ctx, http.StatusUnauthorized)
+					return nil, vendorError
+				}
+				_, err := session.AcquireJobs(context.Background(), []int64{1})
+				return err
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			err := testCase.call(validMessageSession())
+			var statusError *ProviderHTTPStatusError
+			if !errors.As(err, &statusError) {
+				t.Fatalf("error = %v, want ProviderHTTPStatusError", err)
+			}
+			if statusError.StatusCode != testCase.statusCode {
+				t.Fatalf("status = %d, want %d", statusError.StatusCode, testCase.statusCode)
+			}
+			if !errors.Is(err, vendorError) {
+				t.Fatalf("error = %v, want original vendor error", err)
+			}
+			if strings.Contains(err.Error(), "queue.example.test") || strings.Contains(err.Error(), "secret-token") {
+				t.Fatalf("provider status error exposed sensitive vendor text: %q", err)
+			}
+		})
+	}
+}
+
+func TestMessageSessionKeepsNetworkErrorsUnwrappedByProviderStatus(t *testing.T) {
+	vendorError := errors.New("network failure")
+	session := validMessageSession()
+	session.getMessage = func(context.Context, int, int) (*scaleset.RunnerScaleSetMessage, error) {
+		return nil, vendorError
+	}
+	_, err := session.Poll(context.Background(), 0, 1)
+	if !errors.Is(err, vendorError) {
+		t.Fatalf("error = %v, want original network error", err)
+	}
+	var statusError *ProviderHTTPStatusError
+	if errors.As(err, &statusError) {
+		t.Fatalf("network error was classified with provider status: %#v", statusError)
+	}
+}
+
+func TestMessageSessionSuccessfulOperationsRemainUnchanged(t *testing.T) {
+	session := validMessageSession()
+	session.getMessage = func(ctx context.Context, _ int, _ int) (*scaleset.RunnerScaleSetMessage, error) {
+		recordResponseStatus(t, ctx, http.StatusAccepted)
+		return nil, nil
+	}
+	if message, err := session.Poll(context.Background(), 0, 1); err != nil || message != nil {
+		t.Fatalf("Poll() = (%#v, %v), want (nil, nil)", message, err)
+	}
+
+	session = validMessageSession()
+	session.deleteMessage = func(ctx context.Context, _ int) error {
+		recordResponseStatus(t, ctx, http.StatusNoContent)
+		return nil
+	}
+	if err := session.DeleteMessage(context.Background(), 1); err != nil {
+		t.Fatalf("DeleteMessage() error = %v", err)
+	}
+
+	session = validMessageSession()
+	session.acquireJobs = func(ctx context.Context, _ []int64) ([]int64, error) {
+		recordResponseStatus(t, ctx, http.StatusOK)
+		return []int64{1}, nil
+	}
+	if ids, err := session.AcquireJobs(context.Background(), []int64{1}); err != nil || len(ids) != 1 || ids[0] != 1 {
+		t.Fatalf("AcquireJobs() = (%v, %v), want ([1], nil)", ids, err)
+	}
+}
+
+func TestMessageSessionUsesFinalResponseStatusAndDoesNotFailSuccessfulOperations(t *testing.T) {
+	session := validMessageSession()
+	session.getMessage = func(ctx context.Context, _ int, _ int) (*scaleset.RunnerScaleSetMessage, error) {
+		recordResponseStatus(t, ctx, http.StatusUnauthorized)
+		recordResponseStatus(t, ctx, http.StatusInternalServerError)
+		return nil, errors.New("vendor failure")
+	}
+	_, err := session.Poll(context.Background(), 0, 1)
+	var statusError *ProviderHTTPStatusError
+	if !errors.As(err, &statusError) || statusError.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("error = %v, want final status %d", err, http.StatusInternalServerError)
+	}
+
+	session = validMessageSession()
+	session.getMessage = func(ctx context.Context, _ int, _ int) (*scaleset.RunnerScaleSetMessage, error) {
+		recordResponseStatus(t, ctx, http.StatusUnauthorized)
+		recordResponseStatus(t, ctx, http.StatusOK)
+		return nil, nil
+	}
+	if _, err := session.Poll(context.Background(), 0, 1); err != nil {
+		t.Fatalf("successful final response error = %v", err)
 	}
 }
 

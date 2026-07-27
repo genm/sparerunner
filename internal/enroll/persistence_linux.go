@@ -9,6 +9,27 @@ import (
 	"syscall"
 )
 
+func persistPrivateMaterial(path string, contents []byte) error {
+	return atomicPrivateFile(path, contents)
+}
+
+func loadPrivateMaterial(path string) ([]byte, error) {
+	if err := requirePrivateRegularFile(path); err != nil {
+		return nil, err
+	}
+	return os.ReadFile(path)
+}
+
+func removePrivateMaterial(path string) error {
+	if err := requirePrivateRegularFile(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	return os.Remove(path)
+}
+
 func requirePrivateDirectory(path string) error {
 	if err := requirePrivateAncestors(path); err != nil {
 		return err

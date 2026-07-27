@@ -266,14 +266,11 @@ func (identity ControllerIdentity) Save(path string) error {
 	contents := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: identity.CA.Raw}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: caKey})...)
 	contents = append(contents, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: identity.Certificate.Raw})...)
 	contents = append(contents, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: key})...)
-	return atomicPrivateFile(path, contents)
+	return persistPrivateMaterial(path, contents)
 }
 
 func LoadControllerIdentity(path string) (ControllerIdentity, error) {
-	if err := requirePrivateRegularFile(path); err != nil {
-		return ControllerIdentity{}, err
-	}
-	contents, err := os.ReadFile(path)
+	contents, err := loadPrivateMaterial(path)
 	if err != nil {
 		return ControllerIdentity{}, err
 	}
@@ -332,14 +329,11 @@ func SaveNodePrivateKey(path string, key ed25519.PrivateKey) error {
 	if err != nil {
 		return err
 	}
-	return atomicPrivateFile(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
+	return persistPrivateMaterial(path, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded}))
 }
 
 func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
-	if err := requirePrivateRegularFile(path); err != nil {
-		return nil, err
-	}
-	contents, err := os.ReadFile(path)
+	contents, err := loadPrivateMaterial(path)
 	if err != nil {
 		return nil, err
 	}
@@ -358,22 +352,22 @@ func LoadNodePrivateKey(path string) (ed25519.PrivateKey, error) {
 	return edKey, nil
 }
 
-// SavePrivateMaterial persists controller- or node-held secret bytes through the
-// platform credential boundary. The first implementation is a Linux
-// service-user-only file; macOS and Windows deliberately fail closed until their
-// Keychain and DPAPI adapters replace it.
+// SavePrivateMaterial persists controller- or node-held secret bytes through
+// the owning platform credential boundary. path names a movable, non-secret
+// locator, not an external credential-store identity: implementations backed by
+// an external store must generate a path-independent random item ID, publish it
+// no-clobber in the locator only after item creation, and delete their own item
+// if locator publication fails. Moving the locator's parent directory must not
+// make the credential unloadable.
 func SavePrivateMaterial(path string, contents []byte) error {
 	if len(contents) == 0 {
 		return errors.New("private material is empty")
 	}
-	return atomicPrivateFile(path, append([]byte(nil), contents...))
+	return persistPrivateMaterial(path, append([]byte(nil), contents...))
 }
 
 func LoadPrivateMaterial(path string) ([]byte, error) {
-	if err := requirePrivateRegularFile(path); err != nil {
-		return nil, err
-	}
-	contents, err := os.ReadFile(path)
+	contents, err := loadPrivateMaterial(path)
 	if err != nil {
 		return nil, err
 	}
@@ -381,6 +375,14 @@ func LoadPrivateMaterial(path string) ([]byte, error) {
 		return nil, errors.New("private material is empty")
 	}
 	return contents, nil
+}
+
+// RemovePrivateMaterial removes the platform credential referenced by path and
+// then its non-secret locator. Credential deletion failure must leave the
+// locator intact; successful and already-absent removal are idempotent so an
+// atomic state-publication rollback can be retried safely.
+func RemovePrivateMaterial(path string) error {
+	return removePrivateMaterial(path)
 }
 
 func atomicPrivateFile(path string, contents []byte) error {

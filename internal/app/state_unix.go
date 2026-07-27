@@ -8,7 +8,7 @@ import (
 	"syscall"
 )
 
-func privateStateDirectoryPlatform(info os.FileInfo) error {
+func privateStateDirectoryPlatform(_ string, info os.FileInfo) error {
 	if info.Mode().Perm() != 0o700 {
 		return errors.New("state directory is not private")
 	}
