@@ -444,7 +444,16 @@ function Page({
           />
         );
       case "targets":
-        return <TargetsPage snapshot={snapshot} />;
+        return (
+          <TargetsPage
+            api={api}
+            csrfToken={csrfToken}
+            snapshot={snapshot}
+            onRefresh={onRefresh}
+            onToast={onToast}
+            mutationsDisabled={mutationsDisabled}
+          />
+        );
       case "runs":
         return <RunsPage snapshot={snapshot} />;
       case "settings":
@@ -494,15 +503,15 @@ function SetupPage({ api, csrfToken, snapshot, onRefresh, onToast, mutationsDisa
               ? "Last-known GitHub authority is degraded."
               : "Connect a user-owned GitHub App before creating a Target."}
           </p>
-          <DisabledAction
+          <ConnectGitHubButton
+            api={api}
+            csrfToken={csrfToken}
             reason={
               snapshot.setup.manifestFlowSupported
                 ? undefined
                 : "GitHub App handoff is not available in this controller build."
             }
-          >
-            Connect GitHub
-          </DisabledAction>
+          />
         </Step>
         <Step complete={snapshot.setup.nodeCount > 0} index="03" title="Nodes">
           <p>{snapshot.setup.nodeCount} enrolled</p>
@@ -662,14 +671,28 @@ function NodesPage({ api, csrfToken, snapshot, onRefresh, onToast, mutationsDisa
   );
 }
 
-function TargetsPage({ snapshot }: { readonly snapshot: Snapshot }) {
+function TargetsPage({
+  api,
+  csrfToken,
+  snapshot,
+  onRefresh,
+  onToast,
+  mutationsDisabled,
+}: PageProps) {
+  const [open, setOpen] = useState(false);
   return (
     <section className="section-block" aria-labelledby="targets-heading">
       <div className="section-heading">
         <h2 id="targets-heading">GitHub Targets</h2>
-        <DisabledAction reason="A verified GitHub installation is required before a Target can be created.">
-          Create target
-        </DisabledAction>
+        {snapshot.setup.githubAppState === "connected" && !mutationsDisabled ? (
+          <button onClick={() => setOpen(true)} type="button">
+            Create target
+          </button>
+        ) : (
+          <DisabledAction reason="A verified GitHub installation is required before a Target can be created.">
+            Create target
+          </DisabledAction>
+        )}
       </div>
       {snapshot.targets.length ? (
         <div className="target-list">
@@ -694,6 +717,16 @@ function TargetsPage({ snapshot }: { readonly snapshot: Snapshot }) {
           detail="Connect a verified GitHub App to create a private repository or organization Target."
         />
       )}
+      {open ? (
+        <TargetDialog
+          api={api}
+          csrfToken={csrfToken}
+          onClose={() => setOpen(false)}
+          onRefresh={onRefresh}
+          onToast={onToast}
+          revision={snapshot.targetsConfigurationRevision}
+        />
+      ) : null}
     </section>
   );
 }
@@ -1250,6 +1283,234 @@ function DisabledAction({
       </button>
       {reason ? <small id={reasonId}>{reason}</small> : null}
     </span>
+  );
+}
+
+function ConnectGitHubButton({
+  api,
+  csrfToken,
+  reason,
+}: {
+  readonly api: ManagementClient;
+  readonly csrfToken: string;
+  readonly reason?: string;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string>();
+  const reasonId = useId();
+  const connect = async () => {
+    if (!api.startGitHubAppManifest) {
+      setMessage("This controller does not expose the GitHub App handoff.");
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      const start = await api.startGitHubAppManifest(undefined, csrfToken);
+      // GitHub's Manifest flow is a browser POST. The state is signed and
+      // one-use, so it is safe to carry in this short-lived form but never
+      // store it in controller configuration or diagnostics.
+      const form = document.createElement("form");
+      form.method = "post";
+      form.action = start.actionUrl;
+      for (const [name, value] of [
+        ["manifest", start.manifest],
+        ["state", start.state],
+      ] as const) {
+        const input = document.createElement("input");
+        input.type = "hidden";
+        input.name = name;
+        input.value = value;
+        form.append(input);
+      }
+      document.body.append(form);
+      form.submit();
+    } catch (error) {
+      setMessage(errorMessage(error));
+      setBusy(false);
+    }
+  };
+  return (
+    <span className="disabled-action">
+      <button
+        aria-describedby={reason || message ? reasonId : undefined}
+        disabled={Boolean(reason) || busy}
+        onClick={() => void connect()}
+        type="button"
+      >
+        {busy ? "Opening GitHub…" : "Connect GitHub"}
+      </button>
+      {reason || message ? <small id={reasonId}>{reason ?? message}</small> : null}
+    </span>
+  );
+}
+
+function TargetDialog({
+  api,
+  csrfToken,
+  onClose,
+  onRefresh,
+  onToast,
+  revision,
+}: {
+  readonly api: ManagementClient;
+  readonly csrfToken: string;
+  readonly onClose: () => void;
+  readonly onRefresh: () => Promise<boolean>;
+  readonly onToast: (toast: Toast) => void;
+  readonly revision: string;
+}) {
+  const [installations, setInstallations] = useState<Schema["GitHubInstallation"][]>([]);
+  const [installationId, setInstallationId] = useState("");
+  const [scopeKind, setScopeKind] = useState<"repository" | "organization">("repository");
+  const [scope, setScope] = useState("");
+  const [scaleSetName, setScaleSetName] = useState("tewake");
+  const [profileId, setProfileId] = useState("profile-tewake");
+  const [busy, setBusy] = useState(true);
+  const [message, setMessage] = useState<string>();
+  useEffect(() => {
+    let active = true;
+    void (async () => {
+      if (!api.listGitHubInstallations) {
+        if (active) {
+          setMessage("This controller does not expose GitHub installations.");
+          setBusy(false);
+        }
+        return;
+      }
+      try {
+        const result = await api.listGitHubInstallations();
+        if (active) {
+          setInstallations(result.installations);
+          setInstallationId(result.installations[0]?.id ?? "");
+          setBusy(false);
+        }
+      } catch (error) {
+        if (active) {
+          setMessage(errorMessage(error));
+          setBusy(false);
+        }
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [api]);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (
+      !api.createGitHubTarget ||
+      !installationId ||
+      !scope.trim() ||
+      !scaleSetName.trim() ||
+      !profileId.trim()
+    ) {
+      setMessage("Choose an installation and complete every Target field.");
+      return;
+    }
+    setBusy(true);
+    setMessage(undefined);
+    try {
+      await api.createGitHubTarget(
+        {
+          installationId,
+          scopeKind,
+          scope: scope.trim(),
+          scaleSetName: scaleSetName.trim(),
+          runnerProfileId: profileId.trim(),
+        },
+        revision,
+        csrfToken,
+      );
+      onToast({ tone: "success", message: "Private GitHub Target created." });
+      await onRefresh();
+      onClose();
+    } catch (error) {
+      setMessage(errorMessage(error));
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section
+        aria-labelledby="target-dialog-heading"
+        aria-modal="true"
+        className="modal"
+        role="dialog"
+      >
+        <div className="section-heading">
+          <h3 id="target-dialog-heading">Create private Target</h3>
+          <button className="button-quiet" onClick={onClose} type="button">
+            Close
+          </button>
+        </div>
+        {busy && !installations.length && !message ? (
+          <p aria-busy="true">Loading GitHub installations…</p>
+        ) : null}
+        {message ? (
+          <p className="inline-problem" role="alert">
+            {message}
+          </p>
+        ) : null}
+        {!installations.length && !busy ? (
+          <EmptyPanel
+            title="No installations"
+            detail="Connect and install the Tewake App in a private account first."
+          />
+        ) : null}
+        {installations.length ? (
+          <form className="form-stack" onSubmit={(event) => void submit(event)}>
+            <label className="field">
+              <span>GitHub account</span>
+              <select
+                onChange={(event) => setInstallationId(event.target.value)}
+                value={installationId}
+              >
+                {installations.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.accountLogin} · {item.accountType}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="field">
+              <span>Scope kind</span>
+              <select
+                onChange={(event) =>
+                  setScopeKind(event.target.value as "repository" | "organization")
+                }
+                value={scopeKind}
+              >
+                <option value="repository">Private repository</option>
+                <option value="organization">Private organization runner group</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Scope</span>
+              <input
+                onChange={(event) => setScope(event.target.value)}
+                placeholder={scopeKind === "repository" ? "owner/repository" : "organization"}
+                value={scope}
+              />
+            </label>
+            <label className="field">
+              <span>Scale set / label</span>
+              <input
+                onChange={(event) => setScaleSetName(event.target.value)}
+                value={scaleSetName}
+              />
+            </label>
+            <label className="field">
+              <span>Runner profile ID</span>
+              <input onChange={(event) => setProfileId(event.target.value)} value={profileId} />
+            </label>
+            <button disabled={busy} type="submit">
+              {busy ? "Verifying…" : "Verify and create"}
+            </button>
+          </form>
+        ) : null}
+      </section>
+    </div>
   );
 }
 function EmptyPanel({ title, detail }: { readonly title: string; readonly detail: string }) {

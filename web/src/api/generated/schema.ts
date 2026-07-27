@@ -91,6 +91,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/github/app/manifest": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Start a signed one-time GitHub App Manifest registration */
+    post: operations["startGitHubAppManifest"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/github/app/callback": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Complete a one-time GitHub App Manifest callback */
+    get: operations["completeGitHubAppManifest"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/github/installations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** List GitHub App installations without credentials */
+    get: operations["listGitHubInstallations"];
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/github/targets": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Verify and persist one private GitHub Target */
+    post: operations["createGitHubTarget"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/overview": {
     parameters: {
       query?: never;
@@ -359,11 +427,46 @@ export interface components {
       controllerInitialized: boolean;
       /** @enum {string} */
       githubAppState: "disconnected" | "connected" | "degraded";
-      /** @description False until signed one-time callback state is implemented. */
+      /** @description Controller exposes the signed one-time GitHub App Manifest callback. */
       manifestFlowSupported: boolean;
       nodeCount: number;
       targetCount: number;
       conditions: components["schemas"]["Condition"][];
+    };
+    GitHubManifestStartRequest: {
+      registrationAccount?: string;
+    };
+    GitHubManifestStart: {
+      /** Format: uri */
+      actionUrl: string;
+      /** @description Unsigned public App Manifest JSON; it contains no credential. */
+      manifest: string;
+      /** @description Signed, one-use callback state. */
+      state: string;
+      /** Format: date-time */
+      expiresAt: string;
+    };
+    GitHubInstallation: {
+      id: string;
+      accountLogin: string;
+      /** @enum {string} */
+      accountType: "User" | "Organization";
+      repositorySelection: string;
+    };
+    GitHubInstallationList: {
+      installations: components["schemas"]["GitHubInstallation"][];
+    };
+    CreateGitHubTargetRequest: {
+      installationId: string;
+      /** @enum {string} */
+      scopeKind: "repository" | "organization";
+      scope: string;
+      scaleSetName: string;
+      runnerProfileId: string;
+    };
+    GitHubTargetMutation: {
+      target: components["schemas"]["Target"];
+      configurationRevision: components["schemas"]["Revision"];
     };
     Overview: {
       version: string;
@@ -889,6 +992,121 @@ export interface operations {
       };
       401: components["responses"]["Unauthorized"];
       421: components["responses"]["Misdirected"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  startGitHubAppManifest: {
+    parameters: {
+      query?: never;
+      header: {
+        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: {
+      content: {
+        "application/json": components["schemas"]["GitHubManifestStartRequest"];
+      };
+    };
+    responses: {
+      /** @description Manifest handoff */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GitHubManifestStart"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      421: components["responses"]["Misdirected"];
+      422: components["responses"]["ValidationFailed"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  completeGitHubAppManifest: {
+    parameters: {
+      query: {
+        code: string;
+        state: string;
+      };
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Return to the local setup screen */
+      302: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components["responses"]["BadRequest"];
+      409: components["responses"]["Conflict"];
+      421: components["responses"]["Misdirected"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  listGitHubInstallations: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody?: never;
+    responses: {
+      /** @description Installed accounts */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GitHubInstallationList"];
+        };
+      };
+      401: components["responses"]["Unauthorized"];
+      421: components["responses"]["Misdirected"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  createGitHubTarget: {
+    parameters: {
+      query?: never;
+      header: {
+        "If-Match": components["parameters"]["IfMatch"];
+        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateGitHubTargetRequest"];
+      };
+    };
+    responses: {
+      /** @description Target created */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["GitHubTargetMutation"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      409: components["responses"]["Conflict"];
+      421: components["responses"]["Misdirected"];
+      422: components["responses"]["ValidationFailed"];
+      428: components["responses"]["PreconditionRequired"];
       503: components["responses"]["Unavailable"];
     };
   };

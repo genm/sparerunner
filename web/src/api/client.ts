@@ -33,6 +33,16 @@ export interface ManagementClient {
   createBrowserHandoff(claimDigest: string): Promise<BrowserHandoffDelivery>;
   claimBrowserHandoff(code: string, claimSecret: string): Promise<BrowserHandoffClaim>;
   getSetup(): Promise<Schema["Setup"]>;
+  readonly startGitHubAppManifest?: (
+    registrationAccount: string | undefined,
+    csrfToken: string,
+  ) => Promise<Schema["GitHubManifestStart"]>;
+  readonly listGitHubInstallations?: () => Promise<Schema["GitHubInstallationList"]>;
+  readonly createGitHubTarget?: (
+    input: Schema["CreateGitHubTargetRequest"],
+    revision: string,
+    csrfToken: string,
+  ) => Promise<Schema["GitHubTargetMutation"]>;
   getOverview(): Promise<Schema["Overview"]>;
   listNodes(): Promise<{
     readonly nodes: Schema["Node"][];
@@ -114,6 +124,24 @@ export function createManagementClient(basePath = "/api/v1"): ManagementClient {
       return { status: "authenticated", session: (await response.json()) as Schema["Session"] };
     },
     getSetup: () => request<Schema["Setup"]>("/setup"),
+    startGitHubAppManifest: (registrationAccount, csrfToken) =>
+      request<Schema["GitHubManifestStart"]>("/github/app/manifest", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Tewake-CSRF": csrfToken },
+        body: JSON.stringify({ registrationAccount }),
+      }),
+    listGitHubInstallations: () =>
+      request<Schema["GitHubInstallationList"]>("/github/installations"),
+    createGitHubTarget: (input, revision, csrfToken) =>
+      request<Schema["GitHubTargetMutation"]>("/github/targets", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "If-Match": `"cfg-${revision}"`,
+          "X-Tewake-CSRF": csrfToken,
+        },
+        body: JSON.stringify(input),
+      }),
     getOverview: () => request<Schema["Overview"]>("/overview"),
     listNodes: () => request<{ nodes: Schema["Node"][]; configurationRevision: string }>("/nodes"),
     listTargets: () =>

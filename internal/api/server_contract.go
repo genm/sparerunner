@@ -201,6 +201,37 @@ func (contract *generatedServerContract) GetSetup(
 	)
 }
 
+func (contract *generatedServerContract) StartGitHubAppManifest(
+	writer http.ResponseWriter,
+	request *http.Request,
+	_ gen.StartGitHubAppManifestParams,
+) {
+	contract.server.startGitHubAppManifest(writer, request, contract.requestID)
+}
+
+func (contract *generatedServerContract) CompleteGitHubAppManifest(
+	writer http.ResponseWriter,
+	request *http.Request,
+	_ gen.CompleteGitHubAppManifestParams,
+) {
+	contract.server.completeGitHubAppManifest(writer, request, contract.requestID)
+}
+
+func (contract *generatedServerContract) ListGitHubInstallations(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	contract.server.listGitHubInstallations(writer, request, contract.requestID)
+}
+
+func (contract *generatedServerContract) CreateGitHubTarget(
+	writer http.ResponseWriter,
+	request *http.Request,
+	_ gen.CreateGitHubTargetParams,
+) {
+	contract.server.createGitHubTarget(writer, request, contract.requestID)
+}
+
 func (contract *generatedServerContract) ListTargets(
 	writer http.ResponseWriter,
 	request *http.Request,

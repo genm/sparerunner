@@ -398,6 +398,7 @@ func TestSessionBootstrapIsExplicitExactOriginAndStaticReadsDoNotIssueCookie(t *
 		"default-src 'self'",
 		"base-uri 'none'",
 		"frame-ancestors 'none'",
+		"form-action 'self' https://github.com",
 		"connect-src 'self'",
 	} {
 		if !strings.Contains(csp, directive) {

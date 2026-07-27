@@ -23,6 +23,7 @@ import (
 	"github.com/genm/tewake/internal/auth"
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/github"
 	"github.com/genm/tewake/internal/reconcile"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
@@ -45,16 +46,17 @@ var (
 )
 
 type ControllerState struct {
-	Directory      string
-	Identity       enroll.ControllerIdentity
-	Store          *store.ControllerStore
-	Service        enroll.Service
-	Sessions       *transport.ActiveSessionRegistry
-	AgentBroker    *AgentBroker
-	Reconciler     *reconcile.Controller
-	TargetVerifier ManagementTargetVerifier
-	AdminSession   [32]byte
-	Epoch          uint64
+	Directory       string
+	Identity        enroll.ControllerIdentity
+	Store           *store.ControllerStore
+	Service         enroll.Service
+	Sessions        *transport.ActiveSessionRegistry
+	AgentBroker     *AgentBroker
+	Reconciler      *reconcile.Controller
+	TargetVerifier  ManagementTargetVerifier
+	GitHubAuthority *github.Authority
+	AdminSession    [32]byte
+	Epoch           uint64
 }
 
 func (state ControllerState) String() string {
@@ -212,6 +214,13 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		}
 		return nil, err
 	}
+	githubAuthority, err := github.NewAuthority(github.AuthorityOptions{
+		CredentialStore: github.FileAppCredentialStore{Path: filepath.Join(directory, "github-app-credential.json")},
+	})
+	if err != nil {
+		_ = controllerStore.Close()
+		return nil, err
+	}
 	var epoch uint64
 	if activate {
 		active, advanceErr := controllerStore.AdvanceEpoch(ctx)
@@ -280,15 +289,17 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		agentConsumers.Snapshot = snapshotConsumer
 	}
 	return &ControllerState{
-		Directory:    directory,
-		Identity:     identity,
-		Store:        controllerStore,
-		Service:      service,
-		Sessions:     sessions,
-		AgentBroker:  NewAgentBroker(domain.ControllerEpoch(epoch), agentConsumers),
-		Reconciler:   reconciler,
-		AdminSession: adminSession,
-		Epoch:        epoch,
+		Directory:       directory,
+		Identity:        identity,
+		Store:           controllerStore,
+		Service:         service,
+		Sessions:        sessions,
+		AgentBroker:     NewAgentBroker(domain.ControllerEpoch(epoch), agentConsumers),
+		Reconciler:      reconciler,
+		GitHubAuthority: githubAuthority,
+		TargetVerifier:  newGitHubTargetVerifier(githubAuthority, controllerStore),
+		AdminSession:    adminSession,
+		Epoch:           epoch,
 	}, nil
 }
 

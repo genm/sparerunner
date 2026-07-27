@@ -137,6 +137,24 @@ func (e ConfigurationSchemaVersion) Valid() bool {
 	}
 }
 
+// Defines values for CreateGitHubTargetRequestScopeKind.
+const (
+	CreateGitHubTargetRequestScopeKindOrganization CreateGitHubTargetRequestScopeKind = "organization"
+	CreateGitHubTargetRequestScopeKindRepository   CreateGitHubTargetRequestScopeKind = "repository"
+)
+
+// Valid indicates whether the value is a known member of the CreateGitHubTargetRequestScopeKind enum.
+func (e CreateGitHubTargetRequestScopeKind) Valid() bool {
+	switch e {
+	case CreateGitHubTargetRequestScopeKindOrganization:
+		return true
+	case CreateGitHubTargetRequestScopeKindRepository:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for FreshnessState.
 const (
 	FreshnessStateFresh   FreshnessState = "fresh"
@@ -152,6 +170,24 @@ func (e FreshnessState) Valid() bool {
 	case FreshnessStateStale:
 		return true
 	case FreshnessStateUnknown:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for GitHubInstallationAccountType.
+const (
+	GitHubInstallationAccountTypeOrganization GitHubInstallationAccountType = "Organization"
+	GitHubInstallationAccountTypeUser         GitHubInstallationAccountType = "User"
+)
+
+// Valid indicates whether the value is a known member of the GitHubInstallationAccountType enum.
+func (e GitHubInstallationAccountType) Valid() bool {
+	switch e {
+	case GitHubInstallationAccountTypeOrganization:
+		return true
+	case GitHubInstallationAccountTypeUser:
 		return true
 	default:
 		return false
@@ -634,6 +670,18 @@ type CreateBrowserHandoffRequest struct {
 	ClaimDigest string `json:"claimDigest"`
 }
 
+// CreateGitHubTargetRequest defines model for CreateGitHubTargetRequest.
+type CreateGitHubTargetRequest struct {
+	InstallationId  string                             `json:"installationId"`
+	RunnerProfileId string                             `json:"runnerProfileId"`
+	ScaleSetName    string                             `json:"scaleSetName"`
+	Scope           string                             `json:"scope"`
+	ScopeKind       CreateGitHubTargetRequestScopeKind `json:"scopeKind"`
+}
+
+// CreateGitHubTargetRequestScopeKind defines model for CreateGitHubTargetRequest.ScopeKind.
+type CreateGitHubTargetRequestScopeKind string
+
 // CreateJoinCodeRequest defines model for CreateJoinCodeRequest.
 type CreateJoinCodeRequest struct {
 	EndpointHints []string `json:"endpointHints"`
@@ -656,6 +704,46 @@ type Freshness struct {
 
 // FreshnessState defines model for Freshness.State.
 type FreshnessState string
+
+// GitHubInstallation defines model for GitHubInstallation.
+type GitHubInstallation struct {
+	AccountLogin        string                        `json:"accountLogin"`
+	AccountType         GitHubInstallationAccountType `json:"accountType"`
+	Id                  string                        `json:"id"`
+	RepositorySelection string                        `json:"repositorySelection"`
+}
+
+// GitHubInstallationAccountType defines model for GitHubInstallation.AccountType.
+type GitHubInstallationAccountType string
+
+// GitHubInstallationList defines model for GitHubInstallationList.
+type GitHubInstallationList struct {
+	Installations []GitHubInstallation `json:"installations"`
+}
+
+// GitHubManifestStart defines model for GitHubManifestStart.
+type GitHubManifestStart struct {
+	ActionUrl string    `json:"actionUrl"`
+	ExpiresAt time.Time `json:"expiresAt"`
+
+	// Manifest Unsigned public App Manifest JSON; it contains no credential.
+	Manifest string `json:"manifest"`
+
+	// State Signed, one-use callback state.
+	State string `json:"state"`
+}
+
+// GitHubManifestStartRequest defines model for GitHubManifestStartRequest.
+type GitHubManifestStartRequest struct {
+	RegistrationAccount *string `json:"registrationAccount,omitempty"`
+}
+
+// GitHubTargetMutation defines model for GitHubTargetMutation.
+type GitHubTargetMutation struct {
+	// ConfigurationRevision Example: 18
+	ConfigurationRevision Revision `json:"configurationRevision"`
+	Target                Target   `json:"target"`
+}
 
 // JoinCodeDelivery defines model for JoinCodeDelivery.
 type JoinCodeDelivery struct {
@@ -801,7 +889,7 @@ type Setup struct {
 	ControllerInitialized bool                `json:"controllerInitialized"`
 	GithubAppState        SetupGithubAppState `json:"githubAppState"`
 
-	// ManifestFlowSupported False until signed one-time callback state is implemented.
+	// ManifestFlowSupported Controller exposes the signed one-time GitHub App Manifest callback.
 	ManifestFlowSupported bool `json:"manifestFlowSupported"`
 	NodeCount             int  `json:"nodeCount"`
 	TargetCount           int  `json:"targetCount"`
@@ -923,6 +1011,23 @@ type StreamEventsParams struct {
 	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
 }
 
+// CompleteGitHubAppManifestParams defines parameters for CompleteGitHubAppManifest.
+type CompleteGitHubAppManifestParams struct {
+	Code  string `form:"code" json:"code"`
+	State string `form:"state" json:"state"`
+}
+
+// StartGitHubAppManifestParams defines parameters for StartGitHubAppManifest.
+type StartGitHubAppManifestParams struct {
+	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
+}
+
+// CreateGitHubTargetParams defines parameters for CreateGitHubTarget.
+type CreateGitHubTargetParams struct {
+	IfMatch     IfMatch   `json:"If-Match"`
+	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
+}
+
 // CreateJoinCodeParams defines parameters for CreateJoinCode.
 type CreateJoinCodeParams struct {
 	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
@@ -973,6 +1078,12 @@ type ClaimBrowserHandoffJSONRequestBody = ClaimBrowserHandoffRequest
 
 // ApplyConfigurationJSONRequestBody defines body for ApplyConfiguration for application/json ContentType.
 type ApplyConfigurationJSONRequestBody = Configuration
+
+// StartGitHubAppManifestJSONRequestBody defines body for StartGitHubAppManifest for application/json ContentType.
+type StartGitHubAppManifestJSONRequestBody = GitHubManifestStartRequest
+
+// CreateGitHubTargetJSONRequestBody defines body for CreateGitHubTarget for application/json ContentType.
+type CreateGitHubTargetJSONRequestBody = CreateGitHubTargetRequest
 
 // CreateJoinCodeJSONRequestBody defines body for CreateJoinCode for application/json ContentType.
 type CreateJoinCodeJSONRequestBody = CreateJoinCodeRequest
@@ -1126,6 +1237,44 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /events (the `StreamEvents` operationId).
 	StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CompleteGitHubAppManifest Complete a one-time GitHub App Manifest callback
+	//
+	// Corresponds with GET /github/app/callback (the `CompleteGitHubAppManifest` operationId).
+	CompleteGitHubAppManifest(ctx context.Context, params *CompleteGitHubAppManifestParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartGitHubAppManifestWithBody Start a signed one-time GitHub App Manifest registration
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+	StartGitHubAppManifestWithBody(ctx context.Context, params *StartGitHubAppManifestParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// StartGitHubAppManifest Start a signed one-time GitHub App Manifest registration
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+	StartGitHubAppManifest(ctx context.Context, params *StartGitHubAppManifestParams, body StartGitHubAppManifestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ListGitHubInstallations List GitHub App installations without credentials
+	//
+	// Corresponds with GET /github/installations (the `ListGitHubInstallations` operationId).
+	ListGitHubInstallations(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateGitHubTargetWithBody Verify and persist one private GitHub Target
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+	CreateGitHubTargetWithBody(ctx context.Context, params *CreateGitHubTargetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateGitHubTarget Verify and persist one private GitHub Target
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+	CreateGitHubTarget(ctx context.Context, params *CreateGitHubTargetParams, body CreateGitHubTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// CreateJoinCodeWithBody Create and deliver a one-time join code
 	//
@@ -1394,6 +1543,104 @@ func (c *Client) ExportConfiguration(ctx context.Context, reqEditors ...RequestE
 // Corresponds with GET /events (the `StreamEvents` operationId).
 func (c *Client) StreamEvents(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewStreamEventsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CompleteGitHubAppManifest Complete a one-time GitHub App Manifest callback
+//
+// Corresponds with GET /github/app/callback (the `CompleteGitHubAppManifest` operationId).
+func (c *Client) CompleteGitHubAppManifest(ctx context.Context, params *CompleteGitHubAppManifestParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCompleteGitHubAppManifestRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// StartGitHubAppManifestWithBody Start a signed one-time GitHub App Manifest registration
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+func (c *Client) StartGitHubAppManifestWithBody(ctx context.Context, params *StartGitHubAppManifestParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartGitHubAppManifestRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// StartGitHubAppManifest Start a signed one-time GitHub App Manifest registration
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+func (c *Client) StartGitHubAppManifest(ctx context.Context, params *StartGitHubAppManifestParams, body StartGitHubAppManifestJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewStartGitHubAppManifestRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ListGitHubInstallations List GitHub App installations without credentials
+//
+// Corresponds with GET /github/installations (the `ListGitHubInstallations` operationId).
+func (c *Client) ListGitHubInstallations(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewListGitHubInstallationsRequest(c.Server)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateGitHubTargetWithBody Verify and persist one private GitHub Target
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+func (c *Client) CreateGitHubTargetWithBody(ctx context.Context, params *CreateGitHubTargetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateGitHubTargetRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateGitHubTarget Verify and persist one private GitHub Target
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+func (c *Client) CreateGitHubTarget(ctx context.Context, params *CreateGitHubTargetParams, body CreateGitHubTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateGitHubTargetRequest(c.Server, params, body)
 	if err != nil {
 		return nil, err
 	}
@@ -2002,6 +2249,206 @@ func NewStreamEventsRequest(server string, params *StreamEventsParams) (*http.Re
 
 			req.Header.Set("Last-Event-ID", headerParam0)
 		}
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "X-Tewake-CSRF", params.XTewakeCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Tewake-CSRF", headerParam1)
+
+	}
+
+	return req, nil
+}
+
+// NewCompleteGitHubAppManifestRequest constructs an http.Request for the CompleteGitHubAppManifest method
+func NewCompleteGitHubAppManifestRequest(server string, params *CompleteGitHubAppManifestParams) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/github/app/callback")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	if params != nil {
+		// queryValues collects non-styled parameters (passthrough, JSON)
+		// that are safe to round-trip through url.Values.Encode().
+		queryValues := queryURL.Query()
+		// rawQueryFragments collects pre-encoded query fragments from
+		// styled parameters, preserving literal commas as delimiters
+		// per the OpenAPI spec (e.g. "color=blue,black,brown").
+		var rawQueryFragments []string
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "code", params.Code, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if queryFrag, err := runtime.StyleParamWithOptions("form", true, "state", params.State, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationQuery, Type: "string", Format: ""}); err != nil {
+			return nil, err
+		} else {
+			for _, qp := range strings.Split(queryFrag, "&") {
+				rawQueryFragments = append(rawQueryFragments, qp)
+			}
+		}
+
+		if encoded := queryValues.Encode(); encoded != "" {
+			rawQueryFragments = append(rawQueryFragments, encoded)
+		}
+		queryURL.RawQuery = strings.Join(rawQueryFragments, "&")
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewStartGitHubAppManifestRequest calls the generic StartGitHubAppManifest builder with application/json body
+func NewStartGitHubAppManifestRequest(server string, params *StartGitHubAppManifestParams, body StartGitHubAppManifestJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewStartGitHubAppManifestRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewStartGitHubAppManifestRequestWithBody constructs an http.Request for the StartGitHubAppManifest method, with any body, and a specified content type
+func NewStartGitHubAppManifestRequestWithBody(server string, params *StartGitHubAppManifestParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/github/app/manifest")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Tewake-CSRF", params.XTewakeCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Tewake-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewListGitHubInstallationsRequest constructs an http.Request for the ListGitHubInstallations method
+func NewListGitHubInstallationsRequest(server string) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/github/installations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodGet, queryURL.String(), nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return req, nil
+}
+
+// NewCreateGitHubTargetRequest calls the generic CreateGitHubTarget builder with application/json body
+func NewCreateGitHubTargetRequest(server string, params *CreateGitHubTargetParams, body CreateGitHubTargetJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateGitHubTargetRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewCreateGitHubTargetRequestWithBody constructs an http.Request for the CreateGitHubTarget method, with any body, and a specified content type
+func NewCreateGitHubTargetRequestWithBody(server string, params *CreateGitHubTargetParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/github/targets")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "If-Match", params.IfMatch, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("If-Match", headerParam0)
 
 		var headerParam1 string
 
@@ -2654,6 +3101,48 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with GET /events (the `StreamEvents` operationId).
 	StreamEventsWithResponse(ctx context.Context, params *StreamEventsParams, reqEditors ...RequestEditorFn) (*StreamEventsResponse, error)
+
+	// CompleteGitHubAppManifestWithResponse Complete a one-time GitHub App Manifest callback
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /github/app/callback (the `CompleteGitHubAppManifest` operationId).
+	CompleteGitHubAppManifestWithResponse(ctx context.Context, params *CompleteGitHubAppManifestParams, reqEditors ...RequestEditorFn) (*CompleteGitHubAppManifestResponse, error)
+
+	// StartGitHubAppManifestWithBodyWithResponse Start a signed one-time GitHub App Manifest registration
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+	StartGitHubAppManifestWithBodyWithResponse(ctx context.Context, params *StartGitHubAppManifestParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartGitHubAppManifestResponse, error)
+
+	// StartGitHubAppManifestWithResponse Start a signed one-time GitHub App Manifest registration
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+	StartGitHubAppManifestWithResponse(ctx context.Context, params *StartGitHubAppManifestParams, body StartGitHubAppManifestJSONRequestBody, reqEditors ...RequestEditorFn) (*StartGitHubAppManifestResponse, error)
+
+	// ListGitHubInstallationsWithResponse List GitHub App installations without credentials
+	//
+	// Returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with GET /github/installations (the `ListGitHubInstallations` operationId).
+	ListGitHubInstallationsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGitHubInstallationsResponse, error)
+
+	// CreateGitHubTargetWithBodyWithResponse Verify and persist one private GitHub Target
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+	CreateGitHubTargetWithBodyWithResponse(ctx context.Context, params *CreateGitHubTargetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateGitHubTargetResponse, error)
+
+	// CreateGitHubTargetWithResponse Verify and persist one private GitHub Target
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+	CreateGitHubTargetWithResponse(ctx context.Context, params *CreateGitHubTargetParams, body CreateGitHubTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateGitHubTargetResponse, error)
 
 	// CreateJoinCodeWithBodyWithResponse Create and deliver a one-time join code
 	//
@@ -3453,6 +3942,310 @@ func (r StreamEventsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r StreamEventsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CompleteGitHubAppManifestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CompleteGitHubAppManifestResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r CompleteGitHubAppManifestResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r CompleteGitHubAppManifestResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CompleteGitHubAppManifestResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CompleteGitHubAppManifestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CompleteGitHubAppManifestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CompleteGitHubAppManifestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CompleteGitHubAppManifestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type StartGitHubAppManifestResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *GitHubManifestStart
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ValidationFailed
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r StartGitHubAppManifestResponse) GetJSON200() *GitHubManifestStart {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON422() *ValidationFailed {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r StartGitHubAppManifestResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r StartGitHubAppManifestResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r StartGitHubAppManifestResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r StartGitHubAppManifestResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r StartGitHubAppManifestResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type ListGitHubInstallationsResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *GitHubInstallationList
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r ListGitHubInstallationsResponse) GetJSON200() *GitHubInstallationList {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ListGitHubInstallationsResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r ListGitHubInstallationsResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r ListGitHubInstallationsResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r ListGitHubInstallationsResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ListGitHubInstallationsResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ListGitHubInstallationsResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ListGitHubInstallationsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateGitHubTargetResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON200 the response for an HTTP 200 `application/json` response
+	JSON200 *GitHubTargetMutation
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ValidationFailed
+	// ApplicationproblemJSON428 the response for an HTTP 428 `application/problem+json` response
+	ApplicationproblemJSON428 *PreconditionRequired
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetJSON200 returns the response for an HTTP 200 `application/json` response
+func (r CreateGitHubTargetResponse) GetJSON200() *GitHubTargetMutation {
+	return r.JSON200
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON422() *ValidationFailed {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON428 returns the response for an HTTP 428 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON428() *PreconditionRequired {
+	return r.ApplicationproblemJSON428
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CreateGitHubTargetResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateGitHubTargetResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateGitHubTargetResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateGitHubTargetResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateGitHubTargetResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -4658,6 +5451,84 @@ func (c *ClientWithResponses) StreamEventsWithResponse(ctx context.Context, para
 	return ParseStreamEventsResponse(rsp)
 }
 
+// CompleteGitHubAppManifestWithResponse Complete a one-time GitHub App Manifest callback
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /github/app/callback (the `CompleteGitHubAppManifest` operationId).
+func (c *ClientWithResponses) CompleteGitHubAppManifestWithResponse(ctx context.Context, params *CompleteGitHubAppManifestParams, reqEditors ...RequestEditorFn) (*CompleteGitHubAppManifestResponse, error) {
+	rsp, err := c.CompleteGitHubAppManifest(ctx, params, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCompleteGitHubAppManifestResponse(rsp)
+}
+
+// StartGitHubAppManifestWithBodyWithResponse Start a signed one-time GitHub App Manifest registration
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+func (c *ClientWithResponses) StartGitHubAppManifestWithBodyWithResponse(ctx context.Context, params *StartGitHubAppManifestParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*StartGitHubAppManifestResponse, error) {
+	rsp, err := c.StartGitHubAppManifestWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartGitHubAppManifestResponse(rsp)
+}
+
+// StartGitHubAppManifestWithResponse Start a signed one-time GitHub App Manifest registration
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /github/app/manifest (the `StartGitHubAppManifest` operationId).
+func (c *ClientWithResponses) StartGitHubAppManifestWithResponse(ctx context.Context, params *StartGitHubAppManifestParams, body StartGitHubAppManifestJSONRequestBody, reqEditors ...RequestEditorFn) (*StartGitHubAppManifestResponse, error) {
+	rsp, err := c.StartGitHubAppManifest(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseStartGitHubAppManifestResponse(rsp)
+}
+
+// ListGitHubInstallationsWithResponse List GitHub App installations without credentials
+//
+// Returns a wrapper object for the known response body format(s).
+//
+// Corresponds with GET /github/installations (the `ListGitHubInstallations` operationId).
+func (c *ClientWithResponses) ListGitHubInstallationsWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*ListGitHubInstallationsResponse, error) {
+	rsp, err := c.ListGitHubInstallations(ctx, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseListGitHubInstallationsResponse(rsp)
+}
+
+// CreateGitHubTargetWithBodyWithResponse Verify and persist one private GitHub Target
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+func (c *ClientWithResponses) CreateGitHubTargetWithBodyWithResponse(ctx context.Context, params *CreateGitHubTargetParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateGitHubTargetResponse, error) {
+	rsp, err := c.CreateGitHubTargetWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateGitHubTargetResponse(rsp)
+}
+
+// CreateGitHubTargetWithResponse Verify and persist one private GitHub Target
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /github/targets (the `CreateGitHubTarget` operationId).
+func (c *ClientWithResponses) CreateGitHubTargetWithResponse(ctx context.Context, params *CreateGitHubTargetParams, body CreateGitHubTargetJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateGitHubTargetResponse, error) {
+	rsp, err := c.CreateGitHubTarget(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateGitHubTargetResponse(rsp)
+}
+
 // CreateJoinCodeWithBodyWithResponse Create and deliver a one-time join code
 //
 // The credential-bearing code appears only in this response. It is not
@@ -5439,6 +6310,253 @@ func ParseStreamEventsResponse(rsp *http.Response) (*StreamEventsResponse, error
 			return nil, err
 		}
 		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCompleteGitHubAppManifestResponse parses an HTTP response from a CompleteGitHubAppManifestWithResponse call
+func ParseCompleteGitHubAppManifestResponse(rsp *http.Response) (*CompleteGitHubAppManifestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CompleteGitHubAppManifestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 302:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseStartGitHubAppManifestResponse parses an HTTP response from a StartGitHubAppManifestWithResponse call
+func ParseStartGitHubAppManifestResponse(rsp *http.Response) (*StartGitHubAppManifestResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &StartGitHubAppManifestResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest GitHubManifestStart
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ValidationFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseListGitHubInstallationsResponse parses an HTTP response from a ListGitHubInstallationsWithResponse call
+func ParseListGitHubInstallationsResponse(rsp *http.Response) (*ListGitHubInstallationsResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ListGitHubInstallationsResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest GitHubInstallationList
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateGitHubTargetResponse parses an HTTP response from a CreateGitHubTargetWithResponse call
+func ParseCreateGitHubTargetResponse(rsp *http.Response) (*CreateGitHubTargetResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateGitHubTargetResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 200:
+		var dest GitHubTargetMutation
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON200 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ValidationFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 428:
+		var dest PreconditionRequired
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON428 = &dest
 
 	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
 		var dest Unavailable
@@ -6352,6 +7470,18 @@ type ServerInterface interface {
 	// StreamEvents Stream level-triggered management invalidations
 	// (GET /events)
 	StreamEvents(w http.ResponseWriter, r *http.Request, params StreamEventsParams)
+	// CompleteGitHubAppManifest Complete a one-time GitHub App Manifest callback
+	// (GET /github/app/callback)
+	CompleteGitHubAppManifest(w http.ResponseWriter, r *http.Request, params CompleteGitHubAppManifestParams)
+	// StartGitHubAppManifest Start a signed one-time GitHub App Manifest registration
+	// (POST /github/app/manifest)
+	StartGitHubAppManifest(w http.ResponseWriter, r *http.Request, params StartGitHubAppManifestParams)
+	// ListGitHubInstallations List GitHub App installations without credentials
+	// (GET /github/installations)
+	ListGitHubInstallations(w http.ResponseWriter, r *http.Request)
+	// CreateGitHubTarget Verify and persist one private GitHub Target
+	// (POST /github/targets)
+	CreateGitHubTarget(w http.ResponseWriter, r *http.Request, params CreateGitHubTargetParams)
 	// CreateJoinCode Create and deliver a one-time join code
 	// (POST /join-codes)
 	CreateJoinCode(w http.ResponseWriter, r *http.Request, params CreateJoinCodeParams)
@@ -6685,6 +7815,179 @@ func (siw *ServerInterfaceWrapper) StreamEvents(w http.ResponseWriter, r *http.R
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.StreamEvents(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CompleteGitHubAppManifest operation middleware
+func (siw *ServerInterfaceWrapper) CompleteGitHubAppManifest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CompleteGitHubAppManifestParams
+
+	// ------------- Required query parameter "code" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "code", r.URL.Query(), &params.Code, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "code"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "code", Err: err})
+		}
+		return
+	}
+
+	// ------------- Required query parameter "state" -------------
+
+	err = runtime.BindQueryParameterWithOptions("form", true, true, "state", r.URL.Query(), &params.State, runtime.BindQueryParameterOptions{Type: "string", Format: ""})
+	if err != nil {
+		var requiredError *runtime.RequiredParameterError
+		if errors.As(err, &requiredError) {
+			siw.ErrorHandlerFunc(w, r, &RequiredParamError{ParamName: "state"})
+		} else {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "state", Err: err})
+		}
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CompleteGitHubAppManifest(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// StartGitHubAppManifest operation middleware
+func (siw *ServerInterfaceWrapper) StartGitHubAppManifest(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params StartGitHubAppManifestParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Tewake-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Tewake-CSRF")]; found {
+		var XTewakeCSRF CSRFToken
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Tewake-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Tewake-CSRF", valueList[0], &XTewakeCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Tewake-CSRF", Err: err})
+			return
+		}
+
+		params.XTewakeCSRF = XTewakeCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Tewake-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Tewake-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.StartGitHubAppManifest(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ListGitHubInstallations operation middleware
+func (siw *ServerInterfaceWrapper) ListGitHubInstallations(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ListGitHubInstallations(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateGitHubTarget operation middleware
+func (siw *ServerInterfaceWrapper) CreateGitHubTarget(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params CreateGitHubTargetParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "If-Match" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("If-Match")]; found {
+		var IfMatch IfMatch
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "If-Match", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "If-Match", valueList[0], &IfMatch, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "If-Match", Err: err})
+			return
+		}
+
+		params.IfMatch = IfMatch
+
+	} else {
+		err := fmt.Errorf("Header parameter If-Match is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "If-Match", Err: err})
+		return
+	}
+
+	// ------------- Required header parameter "X-Tewake-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Tewake-CSRF")]; found {
+		var XTewakeCSRF CSRFToken
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Tewake-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Tewake-CSRF", valueList[0], &XTewakeCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Tewake-CSRF", Err: err})
+			return
+		}
+
+		params.XTewakeCSRF = XTewakeCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Tewake-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Tewake-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateGitHubTarget(w, r, params)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -7325,6 +8628,10 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/browser-handoffs/claim", wrapper.ClaimBrowserHandoff)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/browser-handoff-authorizations", wrapper.AuthorizeBrowserHandoff)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/setup", wrapper.GetSetup)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/github/app/manifest", wrapper.StartGitHubAppManifest)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/github/app/callback", wrapper.CompleteGitHubAppManifest)
+	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/github/installations", wrapper.ListGitHubInstallations)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/github/targets", wrapper.CreateGitHubTarget)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/overview", wrapper.GetOverview)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/nodes", wrapper.ListNodes)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/nodes/{nodeId}/drain", wrapper.DrainNode)
@@ -7348,80 +8655,88 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"5fL/AgAA//8=",
+	"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",
+	"KAxLJmhwFOzilOwu9oPVxer/AwAA//8=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

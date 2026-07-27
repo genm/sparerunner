@@ -1,0 +1,163 @@
+package github
+
+import (
+	"bytes"
+	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func testCredential(t *testing.T) AppCredential {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credential, err := NewAppCredential(123, "Iv1.client", string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: encoded})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
+}
+
+type authorityRoundTripper struct {
+	t             *testing.T
+	private       bool
+	unsafeGroup   bool
+	createdGroup  bool
+	scaleSetCalls int
+}
+
+func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
+	transport.t.Helper()
+	var status int = http.StatusOK
+	var body string
+	path := request.URL.Path
+	switch {
+	case path == "/app/installations" && request.Method == http.MethodGet:
+		body = `{"installations":[{"id":42,"repository_selection":"all","account":{"login":"acme","type":"Organization"}},{"id":43,"repository_selection":"selected","account":{"login":"genm","type":"User"}}]}`
+	case strings.HasSuffix(path, "/access_tokens") && request.Method == http.MethodPost:
+		body = `{"token":"ghs_test_token"}`
+	case path == "/repos/acme/private" && request.Method == http.MethodGet:
+		if transport.private {
+			body = `{"private":true,"visibility":"private"}`
+		} else {
+			body = `{"private":false,"visibility":"public"}`
+		}
+	case strings.HasSuffix(path, "/actions/runner-groups") && request.Method == http.MethodGet:
+		if transport.unsafeGroup {
+			body = `{"runner_groups":[{"id":7,"name":"Default","visibility":"all","allows_public_repositories":true}]}`
+		} else {
+			body = `{"runner_groups":[{"id":7,"name":"Default","visibility":"private","allows_public_repositories":false}]}`
+		}
+	case strings.HasSuffix(path, "/actions/runner-groups") && request.Method == http.MethodPost:
+		transport.createdGroup = true
+		body = `{"id":8,"name":"tewake-target-org","visibility":"private","allows_public_repositories":false}`
+	default:
+		status = http.StatusNotFound
+		body = `{}`
+	}
+	return &http.Response{StatusCode: status, Body: authorityNopCloser{Reader: bytes.NewReader([]byte(body))}, Header: make(http.Header), Request: request}, nil
+}
+
+func TestManifestStateIsSignedOneUseAndCredentialIsRedacted(t *testing.T) {
+	credential := testCredential(t)
+	store := &MemoryAppCredentialStore{}
+	client := &http.Client{Transport: authorityRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, _ := json.Marshal(map[string]any{"id": credential.AppID, "client_id": credential.ClientID, "pem": credential.privateKey})
+		return &http.Response{StatusCode: http.StatusCreated, Body: authorityNopCloser{Reader: bytes.NewReader(body)}, Header: make(http.Header), Request: request}, nil
+	})}
+	manager, err := NewManifestManager(store, nil, nil, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, err := manager.Start("http://127.0.0.1:7443/api/v1/github/app/callback", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(start.Manifest+start.State, credential.privateKey) {
+		t.Fatal("manifest state exposed the private key")
+	}
+	if _, err := manager.Complete(context.Background(), "one-time-code", start.State); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Complete(context.Background(), "one-time-code", start.State); !errors.Is(err, ErrManifestStateConsumed) {
+		t.Fatalf("replay error = %v", err)
+	}
+	tampered := start.State[:len("twm1_")] + "A" + start.State[len("twm1_")+1:]
+	if _, err := manager.Complete(context.Background(), "one-time-code", tampered); !errors.Is(err, ErrManifestStateInvalid) {
+		t.Fatalf("tampered state error = %v", err)
+	}
+	if got := credential.String(); strings.Contains(got, credential.privateKey) || !strings.Contains(got, "redacted") {
+		t.Fatalf("credential redaction = %q", got)
+	}
+}
+
+func TestAuthorityRejectsUnknownAndPublicTargetsBeforeScaleSetCreation(t *testing.T) {
+	credential := testCredential(t)
+	store := &MemoryAppCredentialStore{}
+	if err := store.Save(credential); err != nil {
+		t.Fatal(err)
+	}
+	transport := &authorityRoundTripper{t: t, private: false}
+	scaleSetCalls := 0
+	authority, err := NewAuthority(AuthorityOptions{CredentialStore: store, HTTPClient: &http.Client{Transport: transport}, CreateScaleSet: func(context.Context, AppClientConfig, ScaleSet) (ScaleSet, error) {
+		scaleSetCalls++
+		return ScaleSet{ID: 99, Name: "tewake", RunnerGroupID: 7, Labels: []string{"tewake"}}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := TargetRequest{TargetID: "target-private", InstallationID: "42", ScopeKind: "repository", Scope: "acme/private", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"}
+	if _, err := authority.VerifyAndProvisionTarget(context.Background(), request); !errors.Is(err, ErrGitHubTargetNotPrivate) {
+		t.Fatalf("public target error = %v", err)
+	}
+	if scaleSetCalls != 0 {
+		t.Fatal("public target reached scale-set creation")
+	}
+	request.InstallationID = "404"
+	if _, err := authority.VerifyAndProvisionTarget(context.Background(), request); !errors.Is(err, ErrGitHubInstallation) {
+		t.Fatalf("unknown installation error = %v", err)
+	}
+}
+
+func TestAuthorityCreatesPrivateOrganizationGroupAndScaleSet(t *testing.T) {
+	credential := testCredential(t)
+	store := &MemoryAppCredentialStore{}
+	_ = store.Save(credential)
+	transport := &authorityRoundTripper{t: t, private: true}
+	authority, err := NewAuthority(AuthorityOptions{CredentialStore: store, HTTPClient: &http.Client{Transport: transport}, CreateScaleSet: func(_ context.Context, _ AppClientConfig, requested ScaleSet) (ScaleSet, error) {
+		return ScaleSet{ID: 99, Name: requested.Name, RunnerGroupID: requested.RunnerGroupID, Labels: requested.Labels}, nil
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ScaleSetID != 99 || result.RunnerGroupID != 8 || !transport.createdGroup {
+		t.Fatalf("verified target = %+v groupCreated=%v", result, transport.createdGroup)
+	}
+}
+
+type authorityRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (function authorityRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return function(request)
+}
+
+type authorityNopCloser struct{ *bytes.Reader }
+
+func (authorityNopCloser) Close() error { return nil }
