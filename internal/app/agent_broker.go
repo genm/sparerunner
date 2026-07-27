@@ -26,10 +26,13 @@ var (
 	ErrAgentBrokerClosed               = errors.New("agent broker is closed")
 	ErrAgentCommandConsumerRequired    = errors.New("agent command consumer is required")
 	ErrAgentSnapshotConsumerRequired   = errors.New("agent snapshot consumer is required")
+	ErrAgentReadinessConsumerRequired  = errors.New("agent readiness consumer is required")
 	ErrExecutionUpdateConsumerRequired = errors.New("execution update consumer is required")
 	ErrAgentCommandCommit              = errors.New("agent command commit failed")
 	ErrAgentSnapshotCommit             = errors.New("agent snapshot commit failed")
 	ErrExecutionUpdateCommit           = errors.New("execution update commit failed")
+	ErrAgentDisconnectCommit           = errors.New("agent disconnect commit failed")
+	ErrAgentReconciliationStale        = errors.New("agent reconciliation snapshot changed")
 )
 
 // AgentCommandRecord is the non-secret, durable identity committed before a
@@ -37,10 +40,13 @@ var (
 // encoded payload; the raw payload and JIT configuration never cross this
 // boundary.
 type AgentCommandRecord struct {
-	NodeID        domain.NodeID
-	Kind          transport.MessageType
-	Metadata      transport.CommandMetadata
-	PayloadDigest [sha256.Size]byte
+	NodeID         domain.NodeID
+	Kind           transport.MessageType
+	Metadata       transport.CommandMetadata
+	PayloadDigest  [sha256.Size]byte
+	Reconciliation bool
+	ReplayOnly     bool
+	SnapshotDigest string
 }
 
 type AgentCommandConsumer interface {
@@ -76,6 +82,27 @@ func (consumer AgentSnapshotConsumerFunc) HandleAgentSnapshot(ctx context.Contex
 	return consumer(ctx, snapshot)
 }
 
+// AgentReadinessConsumer owns the durable readiness-only compare-and-swap.
+// Readiness is lease-backed liveness and must not be persisted by replaying an
+// older full Agent journal snapshot.
+type AgentReadinessConsumer interface {
+	HandleAgentReadiness(context.Context, domain.NodeID, string, bool) error
+}
+
+type AgentReadinessConsumerFunc func(context.Context, domain.NodeID, string, bool) error
+
+func (consumer AgentReadinessConsumerFunc) HandleAgentReadiness(
+	ctx context.Context,
+	nodeID domain.NodeID,
+	snapshotDigest string,
+	ready bool,
+) error {
+	if consumer == nil {
+		return ErrAgentReadinessConsumerRequired
+	}
+	return consumer(ctx, nodeID, snapshotDigest, ready)
+}
+
 // ExecutionUpdateConsumer is the scheduler/reconciler-owned durable boundary.
 // The envelope message ID participates in exact deduplication. The broker
 // acknowledges an update only after this callback accepts it. Different node
@@ -101,14 +128,48 @@ func (consumer ExecutionUpdateConsumerFunc) HandleExecutionUpdate(ctx context.Co
 	return consumer(ctx, update)
 }
 
-// AgentConsumers are all mandatory for a work-bearing production session.
-// A nil owner fails closed before its corresponding ACK or command write.
-// Consumers are commit boundaries and must not synchronously call this broker's
-// Send methods; schedule any follow-up only after the callback returns.
+// AgentDisconnectRecord binds an offline transition to the exact full Agent
+// journal that activated the disappearing authenticated session. The digest
+// contains no JIT material or credential.
+type AgentDisconnectRecord struct {
+	NodeID         domain.NodeID
+	SnapshotDigest string
+}
+
+// AgentDisconnectConsumer owns the durable readiness revocation and last-known
+// Controller projection transition after the current authenticated session
+// disappears. It is optional because enrollment-only and test brokers do not
+// advertise scheduler capacity.
+type AgentDisconnectConsumer interface {
+	// HandleAgentDisconnect runs outside the per-node lifecycle lock and must
+	// honor context cancellation. The broker lifetime owns the context so
+	// Controller shutdown can interrupt a stalled local projection.
+	HandleAgentDisconnect(context.Context, AgentDisconnectRecord) error
+}
+
+type AgentDisconnectConsumerFunc func(context.Context, AgentDisconnectRecord) error
+
+func (consumer AgentDisconnectConsumerFunc) HandleAgentDisconnect(
+	ctx context.Context,
+	record AgentDisconnectRecord,
+) error {
+	if consumer == nil {
+		return nil
+	}
+	return consumer(ctx, record)
+}
+
+// Command, snapshot, readiness, and execution-update consumers are mandatory
+// for a work-bearing production session; Disconnects is optional for brokers
+// without a scheduler projection. A nil mandatory owner fails closed before
+// its corresponding ACK or command write. Consumers are commit boundaries and
+// must not synchronously call this broker's Send methods.
 type AgentConsumers struct {
 	Commands         AgentCommandConsumer
 	Snapshot         AgentSnapshotConsumer
+	Readiness        AgentReadinessConsumer
 	ExecutionUpdates ExecutionUpdateConsumer
+	Disconnects      AgentDisconnectConsumer
 }
 
 // AgentSnapshot is the authenticated, non-secret journal evidence used to
@@ -118,18 +179,42 @@ type AgentSnapshot = transport.AgentSnapshot
 // AgentBroker owns one active bidirectional session actor per authenticated
 // node. It never stores command payloads or JIT configuration.
 type AgentBroker struct {
-	mu             sync.RWMutex
-	epoch          domain.ControllerEpoch
-	consumers      AgentConsumers
-	readinessLease time.Duration
-	sessions       map[domain.NodeID]*agentSessionActor
-	offlineChanges map[domain.NodeID]brokerReadinessChange
-	closed         bool
+	mu                    sync.RWMutex
+	lifetimeContext       context.Context
+	cancelLifetime        context.CancelFunc
+	epoch                 domain.ControllerEpoch
+	consumers             AgentConsumers
+	readinessLease        time.Duration
+	sessions              map[domain.NodeID]*agentSessionActor
+	offlineChanges        map[domain.NodeID]brokerReadinessChange
+	disconnectErrors      map[domain.NodeID]error
+	lifecycleLocks        sync.Map
+	commandSequences      map[domain.NodeID]uint64
+	commandsInFlight      map[domain.NodeID]*agentSessionActor
+	snapshotCaptures      map[domain.NodeID]agentSnapshotCapture
+	disconnectProjections map[domain.NodeID]*agentSessionActor
+	// sessionGeneration allocates connection incarnations; projectedGeneration
+	// is the committed high-water mark that prevents a delayed older handshake
+	// from becoming authoritative after a replacement disconnects.
+	sessionGeneration   map[domain.NodeID]uint64
+	projectedGeneration map[domain.NodeID]uint64
+	closed              bool
 }
 
 type brokerReadinessChange struct {
 	context context.Context
 	cancel  context.CancelFunc
+}
+
+// agentSnapshotCapture binds the interval that starts before Hello is
+// acknowledged (and therefore before the Agent builds its snapshot) to the
+// command sequence observed at that point. A snapshot whose capture interval
+// overlaps any command dispatch is rejected before it can replace durable
+// current-journal authority.
+type agentSnapshotCapture struct {
+	actor              *agentSessionActor
+	commandSequence    uint64
+	commandWasInFlight bool
 }
 
 func NewAgentBroker(epoch domain.ControllerEpoch, consumers AgentConsumers) *AgentBroker {
@@ -148,12 +233,22 @@ func NewAgentBrokerWithOptions(
 	if options.ReadinessLease <= 0 {
 		options.ReadinessLease = DefaultAgentReadinessLease
 	}
+	lifetimeContext, cancelLifetime := context.WithCancel(context.Background())
 	return &AgentBroker{
-		epoch:          epoch,
-		consumers:      consumers,
-		readinessLease: options.ReadinessLease,
-		sessions:       make(map[domain.NodeID]*agentSessionActor),
-		offlineChanges: make(map[domain.NodeID]brokerReadinessChange),
+		lifetimeContext:       lifetimeContext,
+		cancelLifetime:        cancelLifetime,
+		epoch:                 epoch,
+		consumers:             consumers,
+		readinessLease:        options.ReadinessLease,
+		sessions:              make(map[domain.NodeID]*agentSessionActor),
+		offlineChanges:        make(map[domain.NodeID]brokerReadinessChange),
+		disconnectErrors:      make(map[domain.NodeID]error),
+		commandSequences:      make(map[domain.NodeID]uint64),
+		commandsInFlight:      make(map[domain.NodeID]*agentSessionActor),
+		snapshotCaptures:      make(map[domain.NodeID]agentSnapshotCapture),
+		disconnectProjections: make(map[domain.NodeID]*agentSessionActor),
+		sessionGeneration:     make(map[domain.NodeID]uint64),
+		projectedGeneration:   make(map[domain.NodeID]uint64),
 	}
 }
 
@@ -175,12 +270,34 @@ func (broker *AgentBroker) ConnectedCount() int {
 	}
 	broker.mu.RLock()
 	defer broker.mu.RUnlock()
-	return len(broker.sessions)
+	connected := 0
+	for _, actor := range broker.sessions {
+		actor.stateMu.Lock()
+		ready := actor.readyAcked && !actor.terminated
+		actor.stateMu.Unlock()
+		if ready {
+			connected++
+		}
+	}
+	return connected
 }
 
 func (broker *AgentBroker) Snapshot(nodeID domain.NodeID) (AgentSnapshot, bool) {
 	snapshot, online, _ := broker.Readiness(nodeID)
 	return snapshot, online
+}
+
+// DisconnectError exposes an optional durable disconnect failure without disguising the
+// session as connected. A later successful disconnect or a replacement session
+// activation clears the retained error.
+func (broker *AgentBroker) DisconnectError(nodeID domain.NodeID) (error, bool) {
+	if broker == nil {
+		return nil, false
+	}
+	broker.mu.RLock()
+	defer broker.mu.RUnlock()
+	err, found := broker.disconnectErrors[nodeID]
+	return err, found
 }
 
 // Readiness returns one atomic view of the current Agent evidence and a
@@ -202,19 +319,25 @@ func (broker *AgentBroker) Readiness(
 		return AgentSnapshot{}, false, changed
 	}
 	actor, ok := broker.sessions[nodeID]
-	if !ok {
-		change, found := broker.offlineChanges[nodeID]
-		if !found {
-			change.context, change.cancel = context.WithCancel(context.Background())
-			broker.offlineChanges[nodeID] = change
+	if ok {
+		actor.stateMu.Lock()
+		ready := actor.readyAcked && !actor.terminated
+		if ready {
+			snapshot := cloneAgentSnapshot(actor.snapshot)
+			changed := actor.readinessContext
+			actor.stateMu.Unlock()
+			broker.mu.Unlock()
+			return snapshot, true, changed
 		}
-		broker.mu.Unlock()
-		return AgentSnapshot{}, false, change.context
+		actor.stateMu.Unlock()
+	}
+	change, found := broker.offlineChanges[nodeID]
+	if !found {
+		change.context, change.cancel = context.WithCancel(context.Background())
+		broker.offlineChanges[nodeID] = change
 	}
 	broker.mu.Unlock()
-	actor.stateMu.Lock()
-	defer actor.stateMu.Unlock()
-	return cloneAgentSnapshot(actor.snapshot), !actor.terminated, actor.readinessContext
+	return AgentSnapshot{}, false, change.context
 }
 
 // SendPrepare asks the Agent to materialize the non-secret runner package and
@@ -322,11 +445,95 @@ func (broker *AgentBroker) SendCancel(
 	})
 }
 
+// ReplayPrepare replays a previously committed secret-free Prepare identity.
+// A prior Controller epoch is accepted only at this broker boundary; the
+// durable command consumer still requires an exact existing record, so this
+// path cannot introduce new old-epoch authority.
+func (broker *AgentBroker) ReplayPrepare(
+	ctx context.Context,
+	nodeID domain.NodeID,
+	metadata transport.CommandMetadata,
+	disableUpdate bool,
+	snapshotDigest string,
+) (transport.ExecutionUpdate, error) {
+	actor, err := broker.recoveryCommandSession(nodeID, metadata)
+	if err != nil {
+		return transport.ExecutionUpdate{}, err
+	}
+	if broker.consumers.Commands == nil {
+		return transport.ExecutionUpdate{}, ErrAgentCommandConsumerRequired
+	}
+	if broker.consumers.ExecutionUpdates == nil {
+		return transport.ExecutionUpdate{}, ErrExecutionUpdateConsumerRequired
+	}
+	return actor.sendReplayCommand(
+		ctx,
+		transport.MessagePrepare,
+		metadata,
+		snapshotDigest,
+		func() (json.RawMessage, error) {
+			return transport.EncodePrepareCommandPayload(
+				metadata,
+				runner.OfficialRunnerVersion,
+				disableUpdate,
+			)
+		},
+	)
+}
+
+// SendReconciliationCancel commits a recovery-only Cancel authority before it
+// reaches the Agent. It is used when desired state is already terminal but a
+// fresh Agent snapshot proves that the exact local runtime still exists.
+func (broker *AgentBroker) SendReconciliationCancel(
+	ctx context.Context,
+	nodeID domain.NodeID,
+	metadata transport.CommandMetadata,
+	snapshotDigest string,
+) (transport.ExecutionUpdate, error) {
+	actor, err := broker.commandSession(nodeID, metadata)
+	if err != nil {
+		return transport.ExecutionUpdate{}, err
+	}
+	if broker.consumers.Commands == nil {
+		return transport.ExecutionUpdate{}, ErrAgentCommandConsumerRequired
+	}
+	if broker.consumers.ExecutionUpdates == nil {
+		return transport.ExecutionUpdate{}, ErrExecutionUpdateConsumerRequired
+	}
+	return actor.sendReconciliationCommand(
+		ctx,
+		transport.MessageCancel,
+		metadata,
+		snapshotDigest,
+		func() (json.RawMessage, error) {
+			return transport.EncodeCancelCommandPayload(metadata)
+		},
+	)
+}
+
 func (broker *AgentBroker) commandSession(nodeID domain.NodeID, metadata transport.CommandMetadata) (*agentSessionActor, error) {
 	if broker == nil {
 		return nil, ErrAgentBrokerClosed
 	}
 	if nodeID == "" || metadata.ControllerEpoch != broker.epoch {
+		return nil, ErrAgentProtocol
+	}
+	actor, ok := broker.session(nodeID)
+	if !ok {
+		return nil, ErrAgentOffline
+	}
+	return actor, nil
+}
+
+func (broker *AgentBroker) recoveryCommandSession(
+	nodeID domain.NodeID,
+	metadata transport.CommandMetadata,
+) (*agentSessionActor, error) {
+	if broker == nil {
+		return nil, ErrAgentBrokerClosed
+	}
+	if nodeID == "" || metadata.ControllerEpoch == 0 ||
+		metadata.ControllerEpoch > broker.epoch {
 		return nil, ErrAgentProtocol
 	}
 	actor, ok := broker.session(nodeID)
@@ -346,7 +553,16 @@ func (broker *AgentBroker) session(nodeID domain.NodeID) (*agentSessionActor, bo
 		return nil, false
 	}
 	actor, ok := broker.sessions[nodeID]
-	return actor, ok
+	if !ok {
+		return nil, false
+	}
+	actor.stateMu.Lock()
+	ready := actor.readyAcked && !actor.terminated
+	actor.stateMu.Unlock()
+	if !ready {
+		return nil, false
+	}
+	return actor, true
 }
 
 func (broker *AgentBroker) activate(actor *agentSessionActor) error {
@@ -355,12 +571,13 @@ func (broker *AgentBroker) activate(actor *agentSessionActor) error {
 		broker.mu.Unlock()
 		return ErrAgentBrokerClosed
 	}
+	if actor.generation == 0 ||
+		broker.projectedGeneration[actor.nodeID] != actor.generation {
+		broker.mu.Unlock()
+		return ErrAgentSessionReplaced
+	}
 	previous := broker.sessions[actor.nodeID]
 	broker.sessions[actor.nodeID] = actor
-	if offline, found := broker.offlineChanges[actor.nodeID]; found {
-		offline.cancel()
-		delete(broker.offlineChanges, actor.nodeID)
-	}
 	broker.mu.Unlock()
 	if previous != nil && previous != actor {
 		previous.terminate(ErrAgentSessionReplaced)
@@ -368,10 +585,48 @@ func (broker *AgentBroker) activate(actor *agentSessionActor) error {
 	return nil
 }
 
+func (broker *AgentBroker) markReady(actor *agentSessionActor) error {
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.closed ||
+		broker.sessions[actor.nodeID] != actor ||
+		broker.projectedGeneration[actor.nodeID] != actor.generation {
+		return ErrAgentSessionReplaced
+	}
+	actor.stateMu.Lock()
+	if actor.terminated {
+		actor.stateMu.Unlock()
+		return actor.terminalError()
+	}
+	actor.readyAcked = true
+	actor.readyOnce.Do(func() { close(actor.ready) })
+	actor.stateMu.Unlock()
+	if offline, found := broker.offlineChanges[actor.nodeID]; found {
+		offline.cancel()
+		delete(broker.offlineChanges, actor.nodeID)
+	}
+	delete(broker.disconnectErrors, actor.nodeID)
+	return nil
+}
+
 func (broker *AgentBroker) deactivate(actor *agentSessionActor) {
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	projectDisconnect := broker.deactivateUnderLifecycle(actor)
+	lifecycle.Unlock()
+	if projectDisconnect {
+		broker.commitDisconnectProjection(actor)
+	}
+}
+
+func (broker *AgentBroker) deactivateUnderLifecycle(
+	actor *agentSessionActor,
+) bool {
+	deactivated := false
 	broker.mu.Lock()
 	if broker.sessions[actor.nodeID] == actor {
 		delete(broker.sessions, actor.nodeID)
+		deactivated = true
 		if !broker.closed {
 			changeContext, cancel := context.WithCancel(context.Background())
 			broker.offlineChanges[actor.nodeID] = brokerReadinessChange{
@@ -379,6 +634,232 @@ func (broker *AgentBroker) deactivate(actor *agentSessionActor) {
 				cancel:  cancel,
 			}
 		}
+	}
+	broker.mu.Unlock()
+	if !deactivated || broker.consumers.Disconnects == nil {
+		return false
+	}
+	return broker.beginDisconnectProjectionUnderLifecycle(actor)
+}
+
+func (broker *AgentBroker) beginDisconnectProjectionUnderLifecycle(
+	actor *agentSessionActor,
+) bool {
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if existing := broker.disconnectProjections[actor.nodeID]; existing != nil {
+		// An overlapping projection would make it impossible to attribute the
+		// completion to one exact journal. Keep the node offline and surface the
+		// invariant failure instead of replacing the pending authority.
+		broker.disconnectErrors[actor.nodeID] = ErrAgentDisconnectCommit
+		return false
+	}
+	broker.disconnectProjections[actor.nodeID] = actor
+	return true
+}
+
+func (broker *AgentBroker) commitDisconnectProjection(
+	actor *agentSessionActor,
+) {
+	actor.stateMu.Lock()
+	snapshot := cloneAgentSnapshot(actor.snapshot)
+	actor.stateMu.Unlock()
+	snapshotDigest, digestErr := transport.AgentSnapshotDigest(snapshot)
+	var commitErr error
+	if digestErr != nil {
+		commitErr = ErrAgentDisconnectCommit
+	} else {
+		commitErr = broker.consumers.Disconnects.HandleAgentDisconnect(
+			broker.lifetimeContext,
+			AgentDisconnectRecord{
+				NodeID:         actor.nodeID,
+				SnapshotDigest: snapshotDigest,
+			},
+		)
+	}
+
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.disconnectProjections[actor.nodeID] != actor {
+		return
+	}
+	delete(broker.disconnectProjections, actor.nodeID)
+	if commitErr != nil {
+		// Consumer errors are not retained verbatim because future diagnostics
+		// must not leak implementation detail or credential-bearing context.
+		broker.disconnectErrors[actor.nodeID] = ErrAgentDisconnectCommit
+	} else {
+		delete(broker.disconnectErrors, actor.nodeID)
+	}
+}
+
+func (broker *AgentBroker) nodeLifecycleLock(nodeID domain.NodeID) *sync.Mutex {
+	candidate := &sync.Mutex{}
+	actual, _ := broker.lifecycleLocks.LoadOrStore(nodeID, candidate)
+	return actual.(*sync.Mutex)
+}
+
+func (broker *AgentBroker) allocateSessionGeneration(
+	nodeID domain.NodeID,
+) (uint64, error) {
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.closed {
+		return 0, ErrAgentBrokerClosed
+	}
+	current := broker.sessionGeneration[nodeID]
+	if current == ^uint64(0) {
+		return 0, ErrAgentProtocol
+	}
+	current++
+	broker.sessionGeneration[nodeID] = current
+	return current, nil
+}
+
+func (broker *AgentBroker) mayProject(actor *agentSessionActor) error {
+	broker.mu.RLock()
+	defer broker.mu.RUnlock()
+	if broker.closed {
+		return ErrAgentBrokerClosed
+	}
+	capture, capturing := broker.snapshotCaptures[actor.nodeID]
+	if !capturing || capture.actor != actor ||
+		capture.commandWasInFlight ||
+		broker.commandsInFlight[actor.nodeID] != nil ||
+		capture.commandSequence != broker.commandSequences[actor.nodeID] ||
+		actor.generation <= broker.projectedGeneration[actor.nodeID] {
+		return ErrAgentSessionReplaced
+	}
+	return nil
+}
+
+func (broker *AgentBroker) recordProjection(actor *agentSessionActor) error {
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.closed {
+		return ErrAgentBrokerClosed
+	}
+	capture, capturing := broker.snapshotCaptures[actor.nodeID]
+	if !capturing || capture.actor != actor ||
+		capture.commandWasInFlight ||
+		broker.commandsInFlight[actor.nodeID] != nil ||
+		capture.commandSequence != broker.commandSequences[actor.nodeID] ||
+		actor.generation <= broker.projectedGeneration[actor.nodeID] {
+		return ErrAgentSessionReplaced
+	}
+	broker.projectedGeneration[actor.nodeID] = actor.generation
+	return nil
+}
+
+func (broker *AgentBroker) currentProjectedActor(actor *agentSessionActor) bool {
+	broker.mu.RLock()
+	defer broker.mu.RUnlock()
+	if broker.closed ||
+		broker.sessions[actor.nodeID] != actor ||
+		broker.projectedGeneration[actor.nodeID] != actor.generation {
+		return false
+	}
+	actor.stateMu.Lock()
+	defer actor.stateMu.Unlock()
+	return actor.readyAcked && !actor.terminated
+}
+
+func (broker *AgentBroker) beginSnapshotCapture(actor *agentSessionActor) error {
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+
+	broker.mu.Lock()
+	if broker.closed {
+		broker.mu.Unlock()
+		return ErrAgentBrokerClosed
+	}
+	if broker.disconnectProjections[actor.nodeID] != nil {
+		broker.mu.Unlock()
+		return ErrAgentDisconnectCommit
+	}
+	if actor.generation <= broker.projectedGeneration[actor.nodeID] {
+		broker.mu.Unlock()
+		return ErrAgentSessionReplaced
+	}
+	previous := broker.snapshotCaptures[actor.nodeID].actor
+	if previous != nil && previous.generation >= actor.generation {
+		broker.mu.Unlock()
+		return ErrAgentSessionReplaced
+	}
+	broker.snapshotCaptures[actor.nodeID] = agentSnapshotCapture{
+		actor:              actor,
+		commandSequence:    broker.commandSequences[actor.nodeID],
+		commandWasInFlight: broker.commandsInFlight[actor.nodeID] != nil,
+	}
+	broker.mu.Unlock()
+
+	if previous != nil && previous != actor {
+		previous.terminate(ErrAgentSessionReplaced)
+	}
+	return nil
+}
+
+func (broker *AgentBroker) endSnapshotCapture(actor *agentSessionActor) {
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+	broker.endSnapshotCaptureUnderLifecycle(actor)
+}
+
+func (broker *AgentBroker) endSnapshotCaptureUnderLifecycle(
+	actor *agentSessionActor,
+) {
+	broker.mu.Lock()
+	if capture, found := broker.snapshotCaptures[actor.nodeID]; found &&
+		capture.actor == actor {
+		delete(broker.snapshotCaptures, actor.nodeID)
+	}
+	broker.mu.Unlock()
+}
+
+func (broker *AgentBroker) beginCommandDispatch(
+	actor *agentSessionActor,
+) error {
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+
+	broker.mu.Lock()
+	defer broker.mu.Unlock()
+	if broker.closed ||
+		broker.sessions[actor.nodeID] != actor ||
+		broker.projectedGeneration[actor.nodeID] != actor.generation {
+		return ErrAgentSessionReplaced
+	}
+	actor.stateMu.Lock()
+	ready := actor.readyAcked && !actor.terminated
+	actor.stateMu.Unlock()
+	if !ready {
+		return ErrAgentSessionReplaced
+	}
+	if broker.commandsInFlight[actor.nodeID] != nil {
+		return ErrAgentProtocol
+	}
+	if broker.commandSequences[actor.nodeID] == ^uint64(0) {
+		return ErrAgentProtocol
+	}
+	broker.commandSequences[actor.nodeID]++
+	broker.commandsInFlight[actor.nodeID] = actor
+	return nil
+}
+
+func (broker *AgentBroker) endCommandDispatch(actor *agentSessionActor) {
+	lifecycle := broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	defer lifecycle.Unlock()
+
+	broker.mu.Lock()
+	if broker.commandsInFlight[actor.nodeID] == actor {
+		delete(broker.commandsInFlight, actor.nodeID)
 	}
 	broker.mu.Unlock()
 }
@@ -393,16 +874,22 @@ func (broker *AgentBroker) Close() {
 		return
 	}
 	broker.closed = true
+	cancelLifetime := broker.cancelLifetime
 	actors := make([]*agentSessionActor, 0, len(broker.sessions))
 	for _, actor := range broker.sessions {
 		actors = append(actors, actor)
 	}
-	clear(broker.sessions)
 	for nodeID, offline := range broker.offlineChanges {
 		offline.cancel()
 		delete(broker.offlineChanges, nodeID)
 	}
+	clear(broker.disconnectErrors)
+	clear(broker.commandsInFlight)
+	clear(broker.snapshotCaptures)
 	broker.mu.Unlock()
+	if cancelLifetime != nil {
+		cancelLifetime()
+	}
 	for _, actor := range actors {
 		actor.terminate(ErrAgentBrokerClosed)
 	}
@@ -422,11 +909,16 @@ func (broker *AgentBroker) serveSession(ctx context.Context, session authenticat
 	if credential.NodeID == "" {
 		return ErrAgentProtocol
 	}
+	generation, err := broker.allocateSessionGeneration(domain.NodeID(credential.NodeID))
+	if err != nil {
+		return err
+	}
 	actorContext, cancel := context.WithCancel(ctx)
 	actor := &agentSessionActor{
 		broker:        broker,
 		session:       session,
 		nodeID:        domain.NodeID(credential.NodeID),
+		generation:    generation,
 		ctx:           actorContext,
 		cancel:        cancel,
 		ready:         make(chan struct{}),
@@ -454,11 +946,12 @@ type agentCommandResult struct {
 }
 
 type agentSessionActor struct {
-	broker  *AgentBroker
-	session authenticatedAgentSession
-	nodeID  domain.NodeID
-	ctx     context.Context
-	cancel  context.CancelFunc
+	broker     *AgentBroker
+	session    authenticatedAgentSession
+	nodeID     domain.NodeID
+	generation uint64
+	ctx        context.Context
+	cancel     context.CancelFunc
 
 	ready       chan struct{}
 	readyOnce   sync.Once
@@ -472,6 +965,7 @@ type agentSessionActor struct {
 
 	stateMu             sync.Mutex
 	terminated          bool
+	readyAcked          bool
 	pending             *pendingAgentCommand
 	knownCommands       map[domain.CommandID]domain.ExecutionID
 	snapshot            AgentSnapshot
@@ -483,21 +977,17 @@ type agentSessionActor struct {
 
 func (actor *agentSessionActor) run() error {
 	defer actor.broker.deactivate(actor)
+	defer actor.broker.endSnapshotCapture(actor)
 	defer actor.terminate(ErrAgentDisconnected)
 
 	if err := actor.readHello(); err != nil {
 		actor.terminate(err)
 		return actor.terminalError()
 	}
-	if err := actor.readSnapshot(); err != nil {
+	if err := actor.readSnapshotAndActivate(); err != nil {
 		actor.terminate(err)
 		return actor.terminalError()
 	}
-	if err := actor.broker.activate(actor); err != nil {
-		actor.terminate(err)
-		return actor.terminalError()
-	}
-	actor.readyOnce.Do(func() { close(actor.ready) })
 
 	for {
 		envelope, err := actor.session.Read(actor.ctx)
@@ -542,10 +1032,16 @@ func (actor *agentSessionActor) readHello() error {
 	if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || domain.NodeID(payload.NodeID) != actor.nodeID {
 		return ErrAgentProtocol
 	}
+	// The Agent builds its snapshot only after this ACK. Record the command
+	// sequence first so a command accepted by the old session during the capture
+	// interval makes the replacement snapshot stale before any durable commit.
+	if err := actor.broker.beginSnapshotCapture(actor); err != nil {
+		return err
+	}
 	return actor.acknowledge(envelope.MessageID)
 }
 
-func (actor *agentSessionActor) readSnapshot() error {
+func (actor *agentSessionActor) readSnapshotAndActivate() error {
 	envelope, err := actor.session.Read(actor.ctx)
 	if err != nil {
 		return ErrAgentDisconnected
@@ -561,7 +1057,14 @@ func (actor *agentSessionActor) readSnapshot() error {
 	if actor.broker.consumers.Snapshot == nil {
 		return ErrAgentSnapshotConsumerRequired
 	}
+	lifecycle := actor.broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	if err := actor.broker.mayProject(actor); err != nil {
+		lifecycle.Unlock()
+		return err
+	}
 	if err := actor.broker.consumers.Snapshot.HandleAgentSnapshot(actor.ctx, cloneAgentSnapshot(snapshot)); err != nil {
+		lifecycle.Unlock()
 		return ErrAgentSnapshotCommit
 	}
 	actor.stateMu.Lock()
@@ -571,7 +1074,44 @@ func (actor *agentSessionActor) readSnapshot() error {
 		actor.knownCommands[command.ID] = command.ExecutionID
 	}
 	actor.stateMu.Unlock()
-	return actor.acknowledge(envelope.MessageID)
+	if err := actor.broker.recordProjection(actor); err != nil {
+		projectDisconnect := false
+		if actor.broker.consumers.Disconnects != nil {
+			projectDisconnect = actor.broker.beginDisconnectProjectionUnderLifecycle(actor)
+		}
+		actor.broker.endSnapshotCaptureUnderLifecycle(actor)
+		lifecycle.Unlock()
+		if projectDisconnect {
+			actor.broker.commitDisconnectProjection(actor)
+		}
+		return err
+	}
+	if err := actor.broker.activate(actor); err != nil {
+		projectDisconnect := false
+		if actor.broker.consumers.Disconnects != nil {
+			projectDisconnect = actor.broker.beginDisconnectProjectionUnderLifecycle(actor)
+		}
+		actor.broker.endSnapshotCaptureUnderLifecycle(actor)
+		lifecycle.Unlock()
+		if projectDisconnect {
+			actor.broker.commitDisconnectProjection(actor)
+		}
+		return err
+	}
+	// Durable projection and replacement activation are the linearization
+	// point. Protocol I/O must not retain the per-node lifecycle lock: a stalled
+	// peer can then be superseded, which cancels this actor's write.
+	actor.broker.endSnapshotCaptureUnderLifecycle(actor)
+	lifecycle.Unlock()
+	if err := actor.acknowledge(envelope.MessageID); err != nil {
+		actor.broker.deactivate(actor)
+		return err
+	}
+	if err := actor.broker.markReady(actor); err != nil {
+		actor.broker.deactivate(actor)
+		return err
+	}
+	return nil
 }
 
 func cloneAgentSnapshot(snapshot AgentSnapshot) AgentSnapshot {
@@ -588,25 +1128,38 @@ func (actor *agentSessionActor) handleHeartbeat(envelope transport.Envelope) err
 		return ErrAgentProtocol
 	}
 
+	lifecycle := actor.broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	if !actor.broker.currentProjectedActor(actor) {
+		lifecycle.Unlock()
+		return ErrAgentSessionReplaced
+	}
 	actor.stateMu.Lock()
 	current := actor.snapshot.NativeRunnerReady
 	if current != heartbeat.NativeRunnerReady {
 		snapshot := cloneAgentSnapshot(actor.snapshot)
-		snapshot.NativeRunnerReady = heartbeat.NativeRunnerReady
-		if actor.broker.consumers.Snapshot == nil {
-			actor.stateMu.Unlock()
-			return ErrAgentSnapshotConsumerRequired
+		actor.stateMu.Unlock()
+		if actor.broker.consumers.Readiness == nil {
+			lifecycle.Unlock()
+			return ErrAgentReadinessConsumerRequired
 		}
-		// This is the same durable reconciliation boundary as activation. An
-		// Agent never receives a readiness ACK before the changed state commits.
-		if err := actor.broker.consumers.Snapshot.HandleAgentSnapshot(
-			actor.ctx,
-			cloneAgentSnapshot(snapshot),
+		snapshotDigest, err := transport.AgentSnapshotDigest(snapshot)
+		if err != nil {
+			lifecycle.Unlock()
+			return ErrAgentProtocol
+		}
+		// A heartbeat can only advance liveness for the exact full journal that
+		// activated this actor. It never replays that journal over newer
+		// execution-update projection state.
+		if err := actor.broker.consumers.Readiness.HandleAgentReadiness(
+			actor.ctx, actor.nodeID, snapshotDigest,
+			heartbeat.NativeRunnerReady,
 		); err != nil {
-			actor.stateMu.Unlock()
+			lifecycle.Unlock()
 			return ErrAgentSnapshotCommit
 		}
-		actor.snapshot = snapshot
+		actor.stateMu.Lock()
+		actor.snapshot.NativeRunnerReady = heartbeat.NativeRunnerReady
 		actor.replaceReadinessStateLocked(heartbeat.NativeRunnerReady, receivedAt)
 	} else if heartbeat.NativeRunnerReady {
 		// A healthy renewal extends only the lease. Keeping the same context
@@ -614,6 +1167,7 @@ func (actor *agentSessionActor) handleHeartbeat(envelope transport.Envelope) err
 		actor.armReadinessLeaseLocked(receivedAt)
 	}
 	actor.stateMu.Unlock()
+	lifecycle.Unlock()
 	return actor.acknowledge(envelope.MessageID)
 }
 
@@ -648,26 +1202,37 @@ func (actor *agentSessionActor) armReadinessLeaseLocked(receivedAt time.Time) {
 }
 
 func (actor *agentSessionActor) expireReadiness(generation uint64) {
+	lifecycle := actor.broker.nodeLifecycleLock(actor.nodeID)
+	lifecycle.Lock()
+	if !actor.broker.currentProjectedActor(actor) {
+		lifecycle.Unlock()
+		return
+	}
 	actor.stateMu.Lock()
 	if actor.terminated || generation != actor.readinessGeneration ||
 		!actor.snapshot.NativeRunnerReady {
 		actor.stateMu.Unlock()
+		lifecycle.Unlock()
 		return
 	}
 	snapshot := cloneAgentSnapshot(actor.snapshot)
-	snapshot.NativeRunnerReady = false
+	snapshotDigest, digestErr := transport.AgentSnapshotDigest(snapshot)
 	// Expiry must revoke advertised capacity at receive time, even when the
 	// durable observer is temporarily slow. The failed commit then terminates
 	// the session so the node cannot silently regain capacity.
-	actor.snapshot = snapshot
+	actor.snapshot.NativeRunnerReady = false
 	actor.replaceReadinessStateLocked(false, time.Now())
-	consumer := actor.broker.consumers.Snapshot
-	if consumer == nil || consumer.HandleAgentSnapshot(actor.ctx, cloneAgentSnapshot(snapshot)) != nil {
-		actor.stateMu.Unlock()
+	consumer := actor.broker.consumers.Readiness
+	actor.stateMu.Unlock()
+	if digestErr != nil || consumer == nil ||
+		consumer.HandleAgentReadiness(
+			actor.ctx, actor.nodeID, snapshotDigest, false,
+		) != nil {
+		lifecycle.Unlock()
 		actor.terminate(ErrAgentSnapshotCommit)
 		return
 	}
-	actor.stateMu.Unlock()
+	lifecycle.Unlock()
 }
 
 func (actor *agentSessionActor) handleCommandAck(envelope transport.Envelope) error {
@@ -783,6 +1348,41 @@ func (actor *agentSessionActor) sendCommand(
 	metadata transport.CommandMetadata,
 	encode func() (json.RawMessage, error),
 ) (transport.ExecutionUpdate, error) {
+	return actor.sendCommandWithAuthority(
+		ctx, messageType, metadata, false, false, "", encode)
+}
+
+func (actor *agentSessionActor) sendReplayCommand(
+	ctx context.Context,
+	messageType transport.MessageType,
+	metadata transport.CommandMetadata,
+	snapshotDigest string,
+	encode func() (json.RawMessage, error),
+) (transport.ExecutionUpdate, error) {
+	return actor.sendCommandWithAuthority(
+		ctx, messageType, metadata, false, true, snapshotDigest, encode)
+}
+
+func (actor *agentSessionActor) sendReconciliationCommand(
+	ctx context.Context,
+	messageType transport.MessageType,
+	metadata transport.CommandMetadata,
+	snapshotDigest string,
+	encode func() (json.RawMessage, error),
+) (transport.ExecutionUpdate, error) {
+	return actor.sendCommandWithAuthority(
+		ctx, messageType, metadata, true, false, snapshotDigest, encode)
+}
+
+func (actor *agentSessionActor) sendCommandWithAuthority(
+	ctx context.Context,
+	messageType transport.MessageType,
+	metadata transport.CommandMetadata,
+	reconciliation bool,
+	replayOnly bool,
+	snapshotDigest string,
+	encode func() (json.RawMessage, error),
+) (transport.ExecutionUpdate, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -802,6 +1402,19 @@ func (actor *agentSessionActor) sendCommand(
 		return transport.ExecutionUpdate{}, actor.terminalError()
 	case <-ctx.Done():
 		return transport.ExecutionUpdate{}, ctx.Err()
+	}
+	if err := actor.broker.beginCommandDispatch(actor); err != nil {
+		return transport.ExecutionUpdate{}, err
+	}
+	defer actor.broker.endCommandDispatch(actor)
+	if snapshotDigest != "" {
+		actor.stateMu.Lock()
+		currentSnapshot := cloneAgentSnapshot(actor.snapshot)
+		actor.stateMu.Unlock()
+		currentDigest, err := transport.AgentSnapshotDigest(currentSnapshot)
+		if err != nil || currentDigest != snapshotDigest {
+			return transport.ExecutionUpdate{}, ErrAgentReconciliationStale
+		}
 	}
 
 	actor.stateMu.Lock()
@@ -843,10 +1456,13 @@ func (actor *agentSessionActor) sendCommand(
 		return transport.ExecutionUpdate{}, ErrAgentCommandConsumerRequired
 	}
 	if err := actor.broker.consumers.Commands.HandleAgentCommand(ctx, AgentCommandRecord{
-		NodeID:        actor.nodeID,
-		Kind:          messageType,
-		Metadata:      metadata,
-		PayloadDigest: digest,
+		NodeID:         actor.nodeID,
+		Kind:           messageType,
+		Metadata:       metadata,
+		PayloadDigest:  digest,
+		Reconciliation: reconciliation,
+		ReplayOnly:     replayOnly,
+		SnapshotDigest: snapshotDigest,
 	}); err != nil {
 		actor.clearPending(pending)
 		return transport.ExecutionUpdate{}, ErrAgentCommandCommit

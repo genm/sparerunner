@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/netip"
 	"net/url"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -23,6 +25,169 @@ func (r fakeResolver) LookupNetIP(context.Context, string, string) ([]netip.Addr
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func recordResponseStatus(t *testing.T, ctx context.Context, statusCode int) {
+	t.Helper()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/test", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := endpointTransport{next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: statusCode, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	})}
+	response, err := transport.RoundTrip(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := response.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestEndpointTransportRecordsFinalResponseStatusPerOperation(t *testing.T) {
+	ctx, recorder := withProviderStatusRecorder(context.Background())
+	recordResponseStatus(t, ctx, http.StatusUnauthorized)
+	recordResponseStatus(t, ctx, http.StatusServiceUnavailable)
+	if statusCode := recorder.responseStatusCode(); statusCode != http.StatusServiceUnavailable {
+		t.Fatalf("recorded status = %d, want %d", statusCode, http.StatusServiceUnavailable)
+	}
+}
+
+func TestEndpointTransportClearsEarlierStatusWhenFinalRequestHasNoResponse(t *testing.T) {
+	ctx, recorder := withProviderStatusRecorder(context.Background())
+	recordResponseStatus(t, ctx, http.StatusOK)
+	transport := endpointTransport{next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		return nil, errors.New("network unavailable")
+	})}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"https://api.github.com/test",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(request); err == nil {
+		t.Fatal("final network failure returned success")
+	}
+	if statusCode := recorder.responseStatusCode(); statusCode != 0 {
+		t.Fatalf(
+			"final network failure retained prior HTTP status %d",
+			statusCode,
+		)
+	}
+}
+
+func TestEndpointTransportClearsEarlierStatusWhenFinalEndpointIsRejected(t *testing.T) {
+	ctx, recorder := withProviderStatusRecorder(context.Background())
+	recordResponseStatus(t, ctx, http.StatusOK)
+	transport := endpointTransport{next: roundTripFunc(func(*http.Request) (*http.Response, error) {
+		t.Fatal("unsafe endpoint reached the network")
+		return nil, nil
+	})}
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodGet,
+		"https://attacker.invalid/test",
+		nil,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(request); !errors.Is(err, ErrUnsafeGitHubEndpoint) {
+		t.Fatalf("unsafe endpoint error = %v", err)
+	}
+	if statusCode := recorder.responseStatusCode(); statusCode != 0 {
+		t.Fatalf(
+			"unsafe final request retained prior HTTP status %d",
+			statusCode,
+		)
+	}
+}
+
+func TestEndpointTransportRecordsResponseStatusConcurrentlyWithoutCrossTalk(t *testing.T) {
+	const requests = 64
+	transport := endpointTransport{next: roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		statusCode, err := strconv.Atoi(request.Header.Get("X-Test-Status"))
+		if err != nil {
+			return nil, err
+		}
+		return &http.Response{StatusCode: statusCode, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+	})}
+	errors := make(chan error, requests)
+	for index := 0; index < requests; index++ {
+		go func(index int) {
+			ctx, recorder := withProviderStatusRecorder(context.Background())
+			wantStatus := http.StatusBadRequest + index
+			request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://api.github.com/test", nil)
+			if err == nil {
+				request.Header.Set("X-Test-Status", strconv.Itoa(wantStatus))
+				response, roundTripErr := transport.RoundTrip(request)
+				if roundTripErr != nil {
+					err = roundTripErr
+				} else {
+					err = response.Body.Close()
+				}
+			}
+			if err == nil && recorder.responseStatusCode() != wantStatus {
+				err = fmt.Errorf("recorded status = %d, want %d", recorder.responseStatusCode(), wantStatus)
+			}
+			errors <- err
+		}(index)
+	}
+	for range requests {
+		if err := <-errors; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestFiniteOperationContextTimesOut(t *testing.T) {
+	ctx, cancel := withFiniteOperationTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	select {
+	case <-ctx.Done():
+		if !errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			t.Fatalf("context error = %v, want deadline exceeded", ctx.Err())
+		}
+	case <-time.After(time.Second):
+		t.Fatal("finite GitHub operation context did not time out")
+	}
+}
+
+func TestFiniteOperationContextUsesDefaultDeadlineAndPreservesNilValidationPath(t *testing.T) {
+	startedAt := time.Now()
+	ctx, cancel := WithFiniteOperationTimeout(context.Background())
+	defer cancel()
+	finishedAt := time.Now()
+	deadline, ok := ctx.Deadline()
+	if !ok ||
+		deadline.Before(startedAt.Add(finiteOperationTimeout)) ||
+		deadline.After(finishedAt.Add(finiteOperationTimeout)) {
+		t.Fatalf("deadline = (%v, %t), want within the finite operation budget", deadline, ok)
+	}
+
+	nilContext, nilCancel := WithFiniteOperationTimeout(nil)
+	defer nilCancel()
+	if nilContext != nil {
+		t.Fatalf("nil context became %#v, want existing caller validation path preserved", nilContext)
+	}
+}
+
+func TestHardenedClientLeavesGlobalTimeoutUnsetForLongPolls(t *testing.T) {
+	client := newHardenedRetryableClientWith(
+		fakeResolver{},
+		func(context.Context, string, string) (net.Conn, error) { return nil, errors.New("not used") },
+		roundTripFunc(func(*http.Request) (*http.Response, error) {
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(bytes.NewReader(nil))}, nil
+		}),
+	)
+	if timeout := client.StandardClient().Timeout; timeout != 0 {
+		t.Fatalf("global HTTP timeout = %s, want zero so GetMessage can long poll", timeout)
+	}
+}
 
 func TestTransportRejectsCredentialEndpointsBeforeRoundTrip(t *testing.T) {
 	called := false

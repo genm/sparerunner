@@ -1461,6 +1461,173 @@ func TestAgentCancelOwnsTerminalOutboxWhenCompletionMonitorWasWaiting(t *testing
 	}
 }
 
+func TestAgentTerminalAcknowledgementPruneCannotDegradeWaitingCompletionMonitor(t *testing.T) {
+	agentStore := openAgentCommandStore(t)
+	defer agentStore.Close()
+	var stateMu sync.Mutex
+	localState := runner.StatePrepared
+	waitEntered := make(chan struct{})
+	runnerExited := make(chan struct{})
+	manager := &fakeRunnerLifecycle{
+		start: func(_ context.Context, request runner.Start) (runner.Snapshot, error) {
+			if err := request.JIT.Deliver(func(string) error { return nil }); err != nil {
+				return runner.Snapshot{}, err
+			}
+			stateMu.Lock()
+			localState = runner.StateRunning
+			stateMu.Unlock()
+			return runner.Snapshot{
+				ExecutionID: request.ExecutionID,
+				State:       runner.StateRunning,
+				Running:     true,
+			}, nil
+		},
+		inspect: func(_ context.Context, executionID string) (runner.Snapshot, error) {
+			stateMu.Lock()
+			defer stateMu.Unlock()
+			return runner.Snapshot{
+				ExecutionID: executionID,
+				State:       localState,
+				Running:     localState == runner.StateRunning,
+			}, nil
+		},
+		wait: func(ctx context.Context, executionID string) (runner.Snapshot, error) {
+			close(waitEntered)
+			select {
+			case <-runnerExited:
+				return runner.Snapshot{
+					ExecutionID: executionID,
+					State:       runner.StateReleased,
+				}, nil
+			case <-ctx.Done():
+				return runner.Snapshot{}, ctx.Err()
+			}
+		},
+		destroy: func(_ context.Context, executionID string) (runner.Snapshot, error) {
+			stateMu.Lock()
+			localState = runner.StateReleased
+			stateMu.Unlock()
+			return runner.Snapshot{ExecutionID: executionID, State: runner.StateReleased}, nil
+		},
+	}
+	commandRuntime, err := NewAgentCommandRuntime(
+		"node-1",
+		agentStore,
+		manager,
+		currentRunnerPackage(t),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lifetime, stop := context.WithCancel(context.Background())
+	defer stop()
+	if err := commandRuntime.Start(lifetime); err != nil {
+		t.Fatal(err)
+	}
+	executionID := domain.ExecutionID("cancel-monitor-ack-execution")
+	startMetadata := transport.CommandMetadata{
+		CommandID:       "cancel-monitor-ack-start",
+		ControllerEpoch: 1,
+		ExecutionID:     executionID,
+		ExpectedState:   domain.ExecutionPreparing,
+	}
+	startPayload, err := transport.EncodeStartCommandPayload(
+		startMetadata,
+		runner.OfficialRunnerVersion,
+		false,
+		"cancel-monitor-ack-canary.example.test",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	start, err := commandRuntime.Accept(lifetime, &transport.Envelope{
+		ProtocolVersion: 1,
+		MessageID:       string(startMetadata.CommandID),
+		Type:            transport.MessageStart,
+		Payload:         startPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := start.Execute(lifetime); err != nil {
+		t.Fatal(err)
+	}
+	<-waitEntered
+
+	cancelMetadata := transport.CommandMetadata{
+		CommandID:       "cancel-monitor-ack-cancel",
+		ControllerEpoch: 1,
+		ExecutionID:     executionID,
+		ExpectedState:   domain.ExecutionRunning,
+	}
+	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancel, err := commandRuntime.Accept(lifetime, &transport.Envelope{
+		ProtocolVersion: 1,
+		MessageID:       string(cancelMetadata.CommandID),
+		Type:            transport.MessageCancel,
+		Payload:         cancelPayload,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cancelUpdate, err := cancel.Execute(lifetime)
+	if err != nil || cancelUpdate.State != domain.ExecutionReleased {
+		t.Fatalf("cancel update = (%#v, %v)", cancelUpdate, err)
+	}
+
+	// Deliver and acknowledge both FIFO updates while the Start monitor is
+	// still blocked in Wait. The terminal ACK prunes the clean local journal.
+	pending, err := commandRuntime.PendingUpdates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 2 ||
+		pending[0].Update.State != domain.ExecutionRunning ||
+		pending[1].Update.State != domain.ExecutionReleased {
+		t.Fatalf("pre-ack outbox = %#v", pending)
+	}
+	for _, item := range pending {
+		if err := commandRuntime.AcknowledgeUpdate(
+			context.Background(),
+			item.MessageID,
+		); err != nil {
+			t.Fatal(err)
+		}
+	}
+	close(runnerExited)
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		commandRuntime.lifetimeMu.Lock()
+		monitorCount := len(commandRuntime.monitors)
+		monitorFailed := commandRuntime.monitorFailed
+		commandRuntime.lifetimeMu.Unlock()
+		if monitorCount == 0 {
+			if monitorFailed {
+				t.Fatal("acknowledged terminal prune degraded the Agent")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("completion monitor did not converge after terminal ACK")
+		}
+		goruntime.Gosched()
+	}
+	pending, err = agentStore.PendingExecutionUpdates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 0 {
+		t.Fatalf("post-ack outbox = %#v", pending)
+	}
+	if manager.destroys != 1 {
+		t.Fatalf("Destroy calls = %d, want 1", manager.destroys)
+	}
+}
+
 func TestAgentCompletionMonitorCleansAndQueuesUpdatesWithoutSession(t *testing.T) {
 	agentStore := openAgentCommandStore(t)
 	defer agentStore.Close()
@@ -2035,7 +2202,7 @@ func TestAgentStartupRecoveryPublishesAcceptedPrepareWithoutRuntimeAsFailed(t *t
 	}
 }
 
-func TestAgentStartupRecoveryRejectsAcceptedStartWithoutRuntime(t *testing.T) {
+func TestAgentStartupRecoveryTreatsAcceptedStartWithoutRuntimeAsJournalCorruption(t *testing.T) {
 	agentStore := openAgentCommandStore(t)
 	defer agentStore.Close()
 	accepted := store.AcceptedAgentCommand{

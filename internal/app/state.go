@@ -22,6 +22,7 @@ import (
 
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/reconcile"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
@@ -49,6 +50,7 @@ type ControllerState struct {
 	Service      enroll.Service
 	Sessions     *transport.ActiveSessionRegistry
 	AgentBroker  *AgentBroker
+	Reconciler   *reconcile.Controller
 	AdminSession [32]byte
 	Epoch        uint64
 }
@@ -227,13 +229,44 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 	}
 	sessions := transport.NewActiveSessionRegistry()
 	controllerStore.SetCredentialRevocationHook(sessions.Revoke)
+	var reconciler *reconcile.Controller
+	if activate {
+		restartSnapshot, snapshotErr := controllerStore.RestartSnapshot(ctx)
+		if snapshotErr != nil {
+			_ = controllerStore.Close()
+			return nil, snapshotErr
+		}
+		reconciler, snapshotErr = reconcile.RestoreRestart(restartSnapshot, timeNow)
+		if snapshotErr != nil {
+			_ = controllerStore.Close()
+			return nil, snapshotErr
+		}
+	}
+	agentConsumers := newStoreBackedAgentConsumers(controllerStore)
+	if reconciler != nil {
+		agentConsumers = newStoreBackedAgentConsumers(controllerStore, reconciler)
+	}
+	if activate {
+		snapshotConsumer, consumerErr := reconcile.NewSnapshotConsumer(
+			controllerStore,
+			reconciler,
+		)
+		if consumerErr != nil {
+			_ = controllerStore.Close()
+			return nil, consumerErr
+		}
+		// Command and execution-update ownership remains store-backed; only the
+		// snapshot owner adds commit-before-projection reconciliation.
+		agentConsumers.Snapshot = snapshotConsumer
+	}
 	return &ControllerState{
 		Directory:    directory,
 		Identity:     identity,
 		Store:        controllerStore,
 		Service:      service,
 		Sessions:     sessions,
-		AgentBroker:  NewAgentBroker(domain.ControllerEpoch(epoch), newStoreBackedAgentConsumers(controllerStore)),
+		AgentBroker:  NewAgentBroker(domain.ControllerEpoch(epoch), agentConsumers),
+		Reconciler:   reconciler,
 		AdminSession: adminSession,
 		Epoch:        epoch,
 	}, nil

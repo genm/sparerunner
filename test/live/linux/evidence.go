@@ -599,26 +599,42 @@ func (events *observedJobEvents) observe(message *github.Message) error {
 	defer events.mu.Unlock()
 	events.messageIDs[message.ID] = struct{}{}
 	for _, job := range message.Jobs {
-		if job.RunnerRequestID <= 0 {
-			return errEvidenceInvalid
-		}
 		switch job.Type {
-		case github.MessageTypeJobAvailable, github.MessageTypeJobAssigned,
-			github.MessageTypeJobStarted, github.MessageTypeJobCompleted:
+		case github.MessageTypeJobAvailable, github.MessageTypeJobAssigned:
+			if job.RunnerRequestID <= 0 {
+				return errEvidenceInvalid
+			}
+		case github.MessageTypeJobStarted, github.MessageTypeJobCompleted:
 		default:
 			return errEvidenceInvalid
 		}
 		if job.Type == github.MessageTypeJobCompleted && job.Result != "succeeded" {
 			return errEvidenceInvalid
 		}
-		if events.byRequest[job.RunnerRequestID] == nil {
-			events.byRequest[job.RunnerRequestID] = make(map[github.MessageType]time.Time)
+		requestID := job.RunnerRequestID
+		if requestID < 0 {
+			return errEvidenceInvalid
+		}
+		if requestID == 0 {
+			// The live gate is deliberately one-job-only. GitHub lifecycle
+			// events can omit runnerRequestId, so correlate them to the sole
+			// positive availability identity and fail closed if that identity
+			// is absent or ambiguous.
+			if len(events.byRequest) != 1 {
+				return errEvidenceInvalid
+			}
+			for existingRequestID := range events.byRequest {
+				requestID = existingRequestID
+			}
+		}
+		if events.byRequest[requestID] == nil {
+			events.byRequest[requestID] = make(map[github.MessageType]time.Time)
 		}
 		// Redelivery never moves the start of the warm-up window forward.
-		if _, exists := events.byRequest[job.RunnerRequestID][job.Type]; !exists {
-			events.byRequest[job.RunnerRequestID][job.Type] = observedAt
+		if _, exists := events.byRequest[requestID][job.Type]; !exists {
+			events.byRequest[requestID][job.Type] = observedAt
 			if job.Type == github.MessageTypeJobStarted && events.onStarted != nil {
-				if err := events.onStarted(job.RunnerRequestID, observedAt); err != nil {
+				if err := events.onStarted(requestID, observedAt); err != nil {
 					return errEvidenceInvalid
 				}
 			}

@@ -44,6 +44,7 @@ type AgentCommandRuntime struct {
 	lifetimeMu    sync.Mutex
 	lifetime      context.Context
 	monitors      map[domain.ExecutionID]struct{}
+	terminalAcks  map[domain.ExecutionID]struct{}
 	monitorFailed bool
 	waitFailures  uint64
 	updateReady   chan struct{}
@@ -63,13 +64,14 @@ func NewAgentCommandRuntime(nodeID string, agentStore *store.AgentStore, manager
 		return nil, runner.ErrUnsupportedPlatform
 	}
 	return &AgentCommandRuntime{
-		nodeID:      domain.NodeID(nodeID),
-		store:       agentStore,
-		manager:     manager,
-		pkg:         pkg,
-		locks:       make(map[domain.ExecutionID]*executionCommandLock),
-		monitors:    make(map[domain.ExecutionID]struct{}),
-		updateReady: make(chan struct{}, 1),
+		nodeID:       domain.NodeID(nodeID),
+		store:        agentStore,
+		manager:      manager,
+		pkg:          pkg,
+		locks:        make(map[domain.ExecutionID]*executionCommandLock),
+		monitors:     make(map[domain.ExecutionID]struct{}),
+		terminalAcks: make(map[domain.ExecutionID]struct{}),
+		updateReady:  make(chan struct{}, 1),
 	}, nil
 }
 
@@ -77,6 +79,16 @@ func NewAgentCommandRuntime(nodeID string, agentStore *store.AgentStore, manager
 // error is classification-only and must never be copied into heartbeat payloads.
 func (runtime *AgentCommandRuntime) Ready(ctx context.Context) bool {
 	return runtime.readinessError(ctx) == nil
+}
+
+// RunnerVersion is the exact audited package identity this Agent can
+// materialize. It is safe to publish in the typed snapshot and lets the
+// Controller reject a stale or mixed-version Agent before reserving a slot.
+func (runtime *AgentCommandRuntime) RunnerVersion() string {
+	if runtime == nil {
+		return ""
+	}
+	return runtime.pkg.Version
 }
 
 func (runtime *AgentCommandRuntime) readinessError(ctx context.Context) error {
@@ -148,8 +160,11 @@ func (runtime *AgentCommandRuntime) recoverStartup(ctx context.Context) error {
 
 	// A crash immediately after accepting a secret-free Prepare can precede
 	// runner journal creation. Publish a terminal classified result so the
-	// Controller releases the slot and GitHub may reassign the job. Start and
-	// Cancel require a pre-existing local runtime and fail closed if it vanished.
+	// Controller releases the slot and GitHub may reassign the job. Accepting a
+	// Start or Cancel first requires Inspect to prove a Prepared/active journal
+	// record while holding the per-execution lock. If that record is absent after
+	// restart, the journal invariant was corrupted rather than interrupted at a
+	// valid command boundary; stay offline instead of asserting runtime absence.
 	for executionID, command := range commandByExecution {
 		if _, found := recordByExecution[executionID]; found {
 			continue
@@ -316,7 +331,36 @@ func (runtime *AgentCommandRuntime) AcknowledgeUpdate(ctx context.Context, messa
 	if runtime == nil {
 		return transport.ErrInvalidCommand
 	}
-	return runtime.store.AcknowledgeExecutionUpdate(ctx, messageID)
+	pending, err := runtime.store.PendingExecutionUpdates(ctx)
+	if err != nil {
+		return err
+	}
+	var update *store.PendingExecutionUpdate
+	for index := range pending {
+		if pending[index].MessageID == messageID {
+			update = &pending[index]
+			break
+		}
+	}
+	if update == nil || !agentTerminalExecutionState(update.Update.State) {
+		return runtime.store.AcknowledgeExecutionUpdate(ctx, messageID)
+	}
+
+	// Serialize terminal ACK/prune with the Start completion monitor. The
+	// durable ACK removes the terminal outbox and clean local journal in one
+	// transaction; without this short-lived marker a waiting monitor could
+	// misread that intentional absence as cleanup failure and degrade the Agent.
+	release := runtime.lockExecution(update.Update.ExecutionID)
+	defer release()
+	if err := runtime.store.AcknowledgeExecutionUpdate(ctx, messageID); err != nil {
+		return err
+	}
+	runtime.lifetimeMu.Lock()
+	if _, monitored := runtime.monitors[update.Update.ExecutionID]; monitored {
+		runtime.terminalAcks[update.Update.ExecutionID] = struct{}{}
+	}
+	runtime.lifetimeMu.Unlock()
+	return nil
 }
 
 type acceptedAgentCommand struct {
@@ -775,6 +819,7 @@ func (runtime *AgentCommandRuntime) monitorCompletion(ctx context.Context, metad
 	defer func() {
 		runtime.lifetimeMu.Lock()
 		delete(runtime.monitors, metadata.ExecutionID)
+		delete(runtime.terminalAcks, metadata.ExecutionID)
 		runtime.lifetimeMu.Unlock()
 	}()
 
@@ -795,6 +840,18 @@ func (runtime *AgentCommandRuntime) monitorCompletion(ctx context.Context, metad
 	release := runtime.lockExecution(metadata.ExecutionID)
 	defer release()
 	if ctx.Err() != nil {
+		return
+	}
+	runtime.lifetimeMu.Lock()
+	_, terminalAcknowledged := runtime.terminalAcks[metadata.ExecutionID]
+	if terminalAcknowledged {
+		delete(runtime.terminalAcks, metadata.ExecutionID)
+	}
+	runtime.lifetimeMu.Unlock()
+	if terminalAcknowledged {
+		// A Cancel (or another terminal owner) completed, its exact outbox row
+		// was acknowledged, and clean journal pruning won the same execution
+		// lock. There is no runtime left for this Start monitor to inspect.
 		return
 	}
 	terminalPending, pendingErr := runtime.terminalUpdatePending(
@@ -879,13 +936,21 @@ func (runtime *AgentCommandRuntime) terminalUpdatePending(
 		if item.Update.ExecutionID != executionID {
 			continue
 		}
-		switch item.Update.State {
-		case domain.ExecutionReleased, domain.ExecutionFailed,
-			domain.ExecutionCleanupFailed, domain.ExecutionQuarantined:
+		if agentTerminalExecutionState(item.Update.State) {
 			return true, nil
 		}
 	}
 	return false, nil
+}
+
+func agentTerminalExecutionState(state domain.ExecutionState) bool {
+	switch state {
+	case domain.ExecutionReleased, domain.ExecutionFailed,
+		domain.ExecutionCleanupFailed, domain.ExecutionQuarantined:
+		return true
+	default:
+		return false
+	}
 }
 
 func (runtime *AgentCommandRuntime) failMonitor() {

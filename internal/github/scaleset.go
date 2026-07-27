@@ -32,6 +32,8 @@ type Client struct {
 	newSessionRetryableClient func() *retryablehttp.Client
 	openMessageSession        func(context.Context, int, string, *retryablehttp.Client) (*scaleset.MessageSessionClient, error)
 	readMessageSession        func(*scaleset.MessageSessionClient) scaleset.RunnerScaleSetSession
+	generateJITConfig         func(context.Context, *scaleset.RunnerScaleSetJitRunnerSetting, int) (*scaleset.RunnerScaleSetJitRunnerConfig, error)
+	getRunner                 func(context.Context, int) (*scaleset.RunnerReference, error)
 	getRunnerByName           func(context.Context, string) (*scaleset.RunnerReference, error)
 	removeRunner              func(context.Context, int64) error
 }
@@ -192,14 +194,28 @@ func (c *Client) GenerateJITConfig(ctx context.Context, request JITRequest) (JIT
 		return JITConfig{}, errors.New("GitHub JIT work folder is required")
 	}
 
+	if c == nil {
+		return JITConfig{}, ErrInvalidPreviewResponse
+	}
+	generate := c.generateJITConfig
+	if generate == nil {
+		if c.client == nil {
+			return JITConfig{}, ErrInvalidPreviewResponse
+		}
+		generate = c.client.GenerateJitRunnerConfig
+	}
+	operationContext, statusRecorder := withProviderStatusRecorder(ctx)
 	result, err := contain(func() (*scaleset.RunnerScaleSetJitRunnerConfig, error) {
-		return c.client.GenerateJitRunnerConfig(ctx, &scaleset.RunnerScaleSetJitRunnerSetting{
+		return generate(operationContext, &scaleset.RunnerScaleSetJitRunnerSetting{
 			Name:       request.Name,
 			WorkFolder: request.WorkFolder,
 		}, int(request.ScaleSetID))
 	})
 	if err != nil {
-		return JITConfig{}, fmt.Errorf("generating GitHub JIT configuration: %w", err)
+		return JITConfig{}, fmt.Errorf(
+			"generating GitHub JIT configuration: %w",
+			providerHTTPStatusError(statusRecorder, err),
+		)
 	}
 	if err := validateJITResult(result, request); err != nil {
 		return JITConfig{}, ErrInvalidPreviewResponse
@@ -225,8 +241,41 @@ type MessageSession struct {
 	scaleSetID    ScaleSetID
 	owner         string
 	readSession   func() scaleset.RunnerScaleSetSession
+	getMessage    func(context.Context, int, int) (*scaleset.RunnerScaleSetMessage, error)
 	deleteMessage func(context.Context, int) error
 	acquireJobs   func(context.Context, []int64) ([]int64, error)
+}
+
+// ProviderHTTPStatusError preserves a provider response status that the
+// official client otherwise flattens into text. Error deliberately excludes
+// Err so URLs, response bodies, and credentials remain out of new log output.
+type ProviderHTTPStatusError struct {
+	StatusCode int
+	Err        error
+}
+
+func (failure *ProviderHTTPStatusError) Error() string {
+	if failure == nil || failure.StatusCode <= 0 {
+		return "GitHub provider request failed"
+	}
+	return fmt.Sprintf("GitHub provider request failed with HTTP status %d", failure.StatusCode)
+}
+
+func (failure *ProviderHTTPStatusError) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
+func providerHTTPStatusError(recorder *providerStatusRecorder, err error) error {
+	if err == nil || recorder == nil {
+		return err
+	}
+	if statusCode := recorder.responseStatusCode(); statusCode > 0 {
+		return &ProviderHTTPStatusError{StatusCode: statusCode, Err: err}
+	}
+	return err
 }
 
 var _ MessageSource = (*MessageSession)(nil)
@@ -308,11 +357,16 @@ func (s *MessageSession) Poll(ctx context.Context, lastAcknowledgedMessageID, ma
 	if err := s.validateBinding(); err != nil {
 		return nil, err
 	}
+	getMessage := s.getMessage
+	if getMessage == nil {
+		getMessage = s.client.GetMessage
+	}
+	operationContext, statusRecorder := withProviderStatusRecorder(ctx)
 	message, err := contain(func() (*scaleset.RunnerScaleSetMessage, error) {
-		return s.client.GetMessage(ctx, lastAcknowledgedMessageID, maxCapacity)
+		return getMessage(operationContext, lastAcknowledgedMessageID, maxCapacity)
 	})
 	if err != nil {
-		return nil, fmt.Errorf("getting GitHub scale-set message: %w", err)
+		return nil, fmt.Errorf("getting GitHub scale-set message: %w", providerHTTPStatusError(statusRecorder, err))
 	}
 	if err := s.validateBinding(); err != nil {
 		return nil, err
@@ -343,9 +397,10 @@ func (s *MessageSession) DeleteMessage(ctx context.Context, messageID int) error
 	if deleteMessage == nil {
 		deleteMessage = s.client.DeleteMessage
 	}
-	_, err := contain(func() (struct{}, error) { return struct{}{}, deleteMessage(ctx, messageID) })
+	operationContext, statusRecorder := withProviderStatusRecorder(ctx)
+	_, err := contain(func() (struct{}, error) { return struct{}{}, deleteMessage(operationContext, messageID) })
 	if err != nil {
-		return fmt.Errorf("deleting GitHub scale-set message: %w", err)
+		return fmt.Errorf("deleting GitHub scale-set message: %w", providerHTTPStatusError(statusRecorder, err))
 	}
 	return s.validateBinding()
 }
@@ -367,9 +422,10 @@ func (s *MessageSession) AcquireJobs(ctx context.Context, requestIDs []int64) ([
 	if acquireJobs == nil {
 		acquireJobs = s.client.AcquireJobs
 	}
-	ids, err := contain(func() ([]int64, error) { return acquireJobs(ctx, requestIDs) })
+	operationContext, statusRecorder := withProviderStatusRecorder(ctx)
+	ids, err := contain(func() ([]int64, error) { return acquireJobs(operationContext, requestIDs) })
 	if err != nil {
-		return nil, fmt.Errorf("acquiring GitHub scale-set jobs: %w", err)
+		return nil, fmt.Errorf("acquiring GitHub scale-set jobs: %w", providerHTTPStatusError(statusRecorder, err))
 	}
 	if err := s.validateBinding(); err != nil {
 		return nil, err

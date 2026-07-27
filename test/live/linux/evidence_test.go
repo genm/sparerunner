@@ -283,8 +283,8 @@ func TestObservedJobEventsEnforcesSixtySecondWarmGateWithMonotonicTimes(t *testi
 		ScaleSetID: 41,
 		ID:         72,
 		Jobs: []github.JobMessage{
-			{Type: github.MessageTypeJobStarted, RunnerRequestID: 91},
-			{Type: github.MessageTypeJobCompleted, RunnerRequestID: 91, Result: "succeeded"},
+			{Type: github.MessageTypeJobStarted, RunnerRequestID: 0},
+			{Type: github.MessageTypeJobCompleted, RunnerRequestID: 0, Result: "succeeded"},
 		},
 	}); err != nil {
 		t.Fatal(err)
@@ -318,10 +318,22 @@ func TestObservedJobEventsEnforcesSixtySecondWarmGateWithMonotonicTimes(t *testi
 		t.Fatalf("61s completedSingleJob() error = %v, want errEvidenceInvalid", err)
 	}
 
+	uncorrelated := newObservedJobEvents()
+	if err := uncorrelated.observe(&github.Message{
+		ScaleSetID: 41,
+		ID:         75,
+		Jobs: []github.JobMessage{{
+			Type:            github.MessageTypeJobStarted,
+			RunnerRequestID: 0,
+		}},
+	}); !errors.Is(err, errEvidenceInvalid) {
+		t.Fatalf("uncorrelated zero-request lifecycle error = %v", err)
+	}
+
 	failedJob := newObservedJobEvents()
 	if err := failedJob.observe(&github.Message{
 		ScaleSetID: 41,
-		ID:         75,
+		ID:         76,
 		Jobs: []github.JobMessage{{
 			Type: github.MessageTypeJobCompleted, RunnerRequestID: 93, Result: "failed",
 		}},

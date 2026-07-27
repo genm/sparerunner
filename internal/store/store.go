@@ -743,16 +743,34 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"node_administrative_states":        {"node_id", "administrative_state"},
 		"enrollment_replays":                {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
 		"agent_commands":                    {"command_id", "node_id", "command_type", "controller_epoch", "execution_id", "expected_state", "payload_digest", "issued_at_unix_nano"},
-		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano"},
+		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano", "runner_version"},
 		"agent_snapshot_commands":           {"node_id", "command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
 		"agent_snapshot_observations":       {"node_id", "execution_id", "state", "agent_observed_at_unix_nano", "received_at_unix_nano"},
 		"agent_snapshot_cleanup_tombstones": {"node_id", "execution_id", "failure_code", "agent_recorded_at_unix_nano", "received_at_unix_nano"},
 		"agent_execution_updates":           {"node_id", "message_id", "command_id", "execution_id", "state", "replayed", "error_code", "payload_digest", "received_at_unix_nano"},
-		"github_session_demand":             {"scale_set_id", "session_id", "total_available_jobs", "total_acquired_jobs", "total_assigned_jobs", "total_running_jobs", "total_registered_runners", "total_busy_runners", "total_idle_runners", "observed_at_unix_nano"},
-		"github_queue_messages":             {"scale_set_id", "message_id", "message_digest", "committed_at_unix_nano"},
-		"github_message_jobs":               {"scale_set_id", "message_id", "event_index", "event_type", "runner_request_id", "runner_id", "runner_name", "result", "repository_name", "owner_name", "job_id", "workflow_run_id"},
-		"github_job_claims":                 {"scale_set_id", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
-		"github_jit_attempts":               {"scale_set_id", "runner_request_id", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
+		"agent_snapshot_authority":          {"node_id", "revision", "snapshot_digest", "accepted_by_controller_epoch", "committed_at_unix_nano"},
+		"agent_current_snapshot_commands":   {"node_id", "command_id", "snapshot_digest"},
+		"agent_current_snapshot_observations": {
+			"node_id", "execution_id", "state", "agent_observed_at_unix_nano",
+			"snapshot_digest",
+		},
+		"agent_current_snapshot_tombstones": {
+			"node_id", "execution_id", "failure_code",
+			"agent_recorded_at_unix_nano", "snapshot_digest",
+		},
+		"reconciliation_agent_commands":   {"command_id", "snapshot_digest"},
+		"github_session_demand":           {"scale_set_id", "session_id", "total_available_jobs", "total_acquired_jobs", "total_assigned_jobs", "total_running_jobs", "total_registered_runners", "total_busy_runners", "total_idle_runners", "observed_at_unix_nano"},
+		"github_queue_messages":           {"scale_set_id", "message_id", "message_digest", "committed_at_unix_nano"},
+		"github_message_jobs":             {"scale_set_id", "message_id", "event_index", "event_type", "runner_request_id", "runner_id", "runner_name", "result", "repository_name", "owner_name", "job_id", "workflow_run_id"},
+		"github_job_claims":               {"scale_set_id", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_attempts":             {"scale_set_id", "runner_request_id", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_acquire_attempts":         {"scale_set_id", "runner_request_id", "attempt", "evidence_message_id", "controller_epoch", "state", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_snapshot_authority":   {"scale_set_id", "runner_request_id", "attempt", "snapshot_digest", "controller_epoch", "decision", "updated_at_unix_nano", "github_session_generation"},
+		"github_unpicked_requeue_intents": {"scale_set_id", "runner_request_id", "jit_attempt", "old_execution_id", "replacement_execution_id", "source_message_id", "source_event_index", "controller_epoch", "created_at_unix_nano", "updated_at_unix_nano"},
+		"runner_profile_update_policies":  {"profile_id", "version_policy", "runner_version", "revision"},
+		"github_target_runtime_bindings":  {"target_id", "scale_set_id", "profile_id"},
+		"github_runner_release_state":     {"singleton", "latest_version", "latest_released_at_unix_nano", "observed_at_unix_nano", "freshness", "failure_class", "failure_at_unix_nano", "generation"},
+		"github_scale_set_session_health": {"scale_set_id", "freshness", "last_success_at_unix_nano", "failure_class", "failure_at_unix_nano", "transition_generation"},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
@@ -762,8 +780,16 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 			"agent_commands", "agent_session_snapshots", "agent_snapshot_commands",
 			"agent_snapshot_observations", "agent_snapshot_cleanup_tombstones",
 			"agent_execution_updates",
+			"agent_snapshot_authority", "agent_current_snapshot_commands",
+			"agent_current_snapshot_observations",
+			"agent_current_snapshot_tombstones",
+			"reconciliation_agent_commands",
 			"github_session_demand", "github_queue_messages", "github_message_jobs",
 			"github_job_claims", "github_jit_attempts",
+			"github_acquire_attempts", "github_jit_snapshot_authority",
+			"github_unpicked_requeue_intents",
+			"runner_profile_update_policies", "github_target_runtime_bindings",
+			"github_runner_release_state", "github_scale_set_session_health",
 		)
 	} else {
 		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones", "runner_journal_records", "execution_update_outbox", "accepted_command_types")
@@ -928,11 +954,11 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 			HAVING (
 				executions.state IN (
 					'reserved', 'preparing', 'running', 'cleaning',
-					'cleanup_failed', 'quarantined'
+					'cleanup_failed'
 				)
 				AND count(slot_reservations.execution_id) != 1
 			) OR (
-				executions.state IN ('released', 'failed')
+				executions.state IN ('released', 'failed', 'quarantined')
 				AND count(slot_reservations.execution_id) != 0
 			)
 		)`).Scan(&invalid)
@@ -941,6 +967,177 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 	}
 	if invalid != 0 {
 		return fmt.Errorf("%w: execution reservation invariant failed", ErrCorruptBackup)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_unpicked_requeue_intents intent
+			JOIN github_job_claims claim
+				ON claim.scale_set_id = intent.scale_set_id
+				AND claim.runner_request_id = intent.runner_request_id
+			JOIN github_jit_attempts attempt
+				ON attempt.scale_set_id = intent.scale_set_id
+				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.attempt = intent.jit_attempt
+			JOIN github_message_jobs source
+				ON source.scale_set_id = intent.scale_set_id
+				AND source.message_id = intent.source_message_id
+				AND source.event_index = intent.source_event_index
+			JOIN executions old_execution
+				ON old_execution.id = intent.old_execution_id
+			WHERE claim.execution_id != intent.old_execution_id
+				OR claim.state != 'reconciliation_required'
+				OR claim.current_jit_attempt != intent.jit_attempt
+				OR attempt.state NOT IN ('started', 'removal_pending')
+				OR source.event_type != 'JobAvailable'
+				OR source.runner_request_id != intent.runner_request_id
+				OR intent.source_message_id = claim.source_message_id
+				OR old_execution.state NOT IN ('released', 'failed')
+				OR EXISTS (
+					SELECT 1 FROM slot_reservations reservation
+					WHERE reservation.execution_id = intent.old_execution_id
+				)
+				OR EXISTS (
+					SELECT 1 FROM executions proposed
+					WHERE proposed.id = intent.replacement_execution_id
+				)
+				OR COALESCE((
+					SELECT acquire.state
+					FROM github_acquire_attempts acquire
+					WHERE acquire.scale_set_id = intent.scale_set_id
+						AND acquire.runner_request_id =
+							intent.runner_request_id
+					ORDER BY acquire.attempt DESC
+					LIMIT 1
+				), '') != 'acquired'
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate unpicked requeue intent invariant: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: unpicked requeue intent invariant failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_unpicked_requeue_intents intent
+			JOIN github_jit_attempts attempt
+				ON attempt.scale_set_id = intent.scale_set_id
+				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.attempt = intent.jit_attempt
+			WHERE (
+				attempt.state = 'started'
+				AND EXISTS (
+					SELECT 1
+					FROM github_jit_snapshot_authority authority
+					WHERE authority.scale_set_id = intent.scale_set_id
+						AND authority.runner_request_id =
+							intent.runner_request_id
+						AND authority.attempt = intent.jit_attempt
+				)
+			) OR (
+				attempt.state = 'removal_pending'
+				AND NOT EXISTS (
+					SELECT 1
+					FROM github_jit_snapshot_authority authority
+					WHERE authority.scale_set_id = intent.scale_set_id
+						AND authority.runner_request_id =
+							intent.runner_request_id
+						AND authority.attempt = intent.jit_attempt
+						AND authority.decision IN (
+							'unpicked_requeue_removal_issued',
+							'unpicked_requeue_absence_pending'
+						)
+						AND authority.github_session_generation > 0
+				)
+			)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate unpicked requeue observation authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: unpicked requeue observation authority failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_acquire_attempts acquire
+			JOIN github_job_claims claim
+				ON claim.scale_set_id = acquire.scale_set_id
+				AND claim.runner_request_id = acquire.runner_request_id
+			JOIN executions execution
+				ON execution.id = claim.execution_id
+			WHERE acquire.state = 'reconciled_pending'
+				AND (
+					acquire.attempt < 2
+					OR acquire.evidence_message_id != claim.source_message_id
+					OR claim.state != 'pending'
+					OR claim.current_jit_attempt < 1
+					OR execution.state != 'reserved'
+					OR acquire.attempt != (
+						SELECT max(latest.attempt)
+						FROM github_acquire_attempts latest
+						WHERE latest.scale_set_id = acquire.scale_set_id
+							AND latest.runner_request_id =
+								acquire.runner_request_id
+					)
+					OR NOT EXISTS (
+						SELECT 1
+						FROM github_jit_attempts jit
+						WHERE jit.scale_set_id = claim.scale_set_id
+							AND jit.runner_request_id =
+								claim.runner_request_id
+							AND jit.attempt = claim.current_jit_attempt
+							AND jit.state = 'reconciled_absent'
+							AND jit.runner_id IS NULL
+							AND jit.jit_digest IS NULL
+							AND jit.start_command_id = ''
+					)
+					OR NOT EXISTS (
+						SELECT 1
+						FROM github_message_jobs source
+						WHERE source.scale_set_id = claim.scale_set_id
+							AND source.message_id =
+								claim.source_message_id
+							AND source.event_type = 'JobAvailable'
+							AND source.runner_request_id =
+								claim.runner_request_id
+					)
+					OR EXISTS (
+						SELECT 1
+						FROM github_unpicked_requeue_intents intent
+						WHERE intent.scale_set_id = claim.scale_set_id
+							AND intent.runner_request_id =
+								claim.runner_request_id
+					)
+				)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate reconciled replacement dispatch authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: reconciled replacement dispatch authority failed",
+			ErrCorruptBackup,
+		)
 	}
 	return nil
 }

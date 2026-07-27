@@ -14,6 +14,7 @@ import (
 	"github.com/genm/tewake/internal/app"
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/github"
+	"github.com/genm/tewake/internal/runner"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
@@ -185,6 +186,17 @@ func runLiveAcceptance(
 	); err != nil {
 		return result, err
 	}
+	runnerProfileID, versionPolicy, err := configureLiveGitHubRuntime(
+		runContext,
+		state.Store,
+		config,
+		targetID,
+		scaleSet.ID,
+		github.NewRunnerReleaseObserver(),
+	)
+	if err != nil {
+		return result, err
+	}
 
 	serverContext, cancelServer := context.WithCancel(context.Background())
 	serverResult := make(chan error, 1)
@@ -257,9 +269,11 @@ func runLiveAcceptance(
 		app.ControllerRunnerConfig{
 			ScaleSetID:      scaleSet.ID,
 			TargetID:        targetID,
+			RunnerProfileID: runnerProfileID,
+			VersionPolicy:   versionPolicy,
 			NodeID:          domain.NodeID(config.NodeID),
 			ControllerEpoch: domain.ControllerEpoch(state.Epoch),
-			DisableUpdate:   config.GitHub.DisableUpdate,
+			Reconciler:      state.Reconciler,
 		},
 		logger,
 	)
@@ -436,6 +450,62 @@ func stableTargetID(config liveConfig, scaleSet github.ScaleSet) domain.TargetID
 	return domain.TargetID("twk-live-" + hex.EncodeToString(digest[:]))
 }
 
+type liveRunnerReleaseObserver interface {
+	Latest(context.Context) (github.RunnerRelease, error)
+}
+
+func configureLiveGitHubRuntime(
+	ctx context.Context,
+	stateStore *store.ControllerStore,
+	config liveConfig,
+	targetID domain.TargetID,
+	scaleSetID github.ScaleSetID,
+	releaseObserver liveRunnerReleaseObserver,
+) (domain.RunnerProfileID, domain.RunnerVersionPolicy, error) {
+	if stateStore == nil || targetID == "" || scaleSetID <= 0 {
+		return "", "", errControllerPreflight
+	}
+	versionPolicy := domain.RunnerVersionAutoUpdate
+	if config.GitHub.DisableUpdate {
+		versionPolicy = domain.RunnerVersionPinned
+	}
+	profileID := domain.RunnerProfileID("profile-" + string(targetID))
+	if _, err := stateStore.ConfigureRunnerProfile(ctx, store.RunnerProfileUpdatePolicy{
+		ProfileID:     profileID,
+		VersionPolicy: versionPolicy,
+		RunnerVersion: runner.OfficialRunnerVersion,
+		Revision:      1,
+	}); err != nil {
+		return "", "", errControllerPreflight
+	}
+	if _, err := stateStore.ConfigureGitHubTargetRuntimeBinding(
+		ctx,
+		store.GitHubTargetRuntimeBinding{
+			TargetID:   targetID,
+			ScaleSetID: store.ScaleSetID(scaleSetID),
+			ProfileID:  profileID,
+		},
+	); err != nil {
+		return "", "", errControllerPreflight
+	}
+	if versionPolicy == domain.RunnerVersionPinned {
+		if releaseObserver == nil {
+			return "", "", errGitHubClientPreflight
+		}
+		if _, err := app.RefreshGitHubRunnerRelease(
+			ctx,
+			stateStore,
+			releaseObserver,
+		); err != nil {
+			if errors.Is(err, app.ErrGitHubRunnerReleaseStore) {
+				return "", "", errControllerPreflight
+			}
+			return "", "", errGitHubClientPreflight
+		}
+	}
+	return profileID, versionPolicy, nil
+}
+
 func validateControllerPreflight(
 	snapshot store.ControllerSnapshot,
 	nodeID domain.NodeID,
@@ -527,6 +597,7 @@ func validateFreshLinuxAgent(
 		snapshot.NodeID != nodeID ||
 		snapshot.OS != domain.OSLinux ||
 		(snapshot.Arch != domain.ArchAMD64 && snapshot.Arch != domain.ArchARM64) ||
+		snapshot.RunnerVersion != runner.OfficialRunnerVersion ||
 		!snapshot.NativeRunnerReady ||
 		snapshot.MaxControllerEpoch > epoch ||
 		len(snapshot.Commands) != 0 ||
@@ -562,6 +633,27 @@ func runPollFirst(
 		if err != nil {
 			if ctx.Err() != nil {
 				return nil
+			}
+			if errors.Is(err, app.ErrGitHubAvailableUnclaimed) {
+				timer := time.NewTimer(liveStatePollDelay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil
+				case <-timer.C:
+				}
+				continue
+			}
+			var providerFailure *github.ProviderFailure
+			if errors.As(err, &providerFailure) {
+				timer := time.NewTimer(liveStatePollDelay)
+				select {
+				case <-ctx.Done():
+					timer.Stop()
+					return nil
+				case <-timer.C:
+				}
+				continue
 			}
 			return errors.Join(errCoordinatorRun, err)
 		}

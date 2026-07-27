@@ -274,9 +274,14 @@ func runAgentSessionWithOptions(
 	}{NodeID: state.NodeID}); err != nil {
 		return err
 	}
+	runnerVersion := runner.OfficialRunnerVersion
+	if commandRuntime != nil {
+		runnerVersion = commandRuntime.RunnerVersion()
+	}
 	snapshot, err := buildAgentSnapshot(
 		ctx,
 		state,
+		runnerVersion,
 		probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout),
 	)
 	if err != nil {
@@ -304,9 +309,11 @@ func probeAgentRuntimeReadiness(
 func buildAgentSnapshot(
 	ctx context.Context,
 	state *AgentState,
+	runnerVersion string,
 	nativeRunnerReady bool,
 ) (transport.AgentSnapshot, error) {
-	if state == nil || state.Store == nil || state.NodeID == "" {
+	if state == nil || state.Store == nil || state.NodeID == "" ||
+		runnerVersion == "" {
 		return transport.AgentSnapshot{}, transport.ErrInvalidCommand
 	}
 	journal, err := state.Store.Snapshot(ctx)
@@ -315,6 +322,7 @@ func buildAgentSnapshot(
 	}
 	snapshot := transport.AgentSnapshot{
 		NodeID:             domain.NodeID(state.NodeID),
+		RunnerVersion:      runnerVersion,
 		NativeRunnerReady:  nativeRunnerReady,
 		MaxControllerEpoch: journal.MaxControllerEpoch,
 		Commands:           journal.Commands,

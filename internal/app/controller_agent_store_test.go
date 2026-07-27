@@ -13,10 +13,15 @@ import (
 )
 
 type recordingControllerAgentStore struct {
-	commands  []store.IssuedAgentCommand
-	snapshots []store.NodeAgentSnapshot
-	updates   []store.AgentExecutionUpdate
-	err       error
+	commands         []store.IssuedAgentCommand
+	snapshots        []store.NodeAgentSnapshot
+	readinessNode    domain.NodeID
+	readinessDigest  string
+	readiness        bool
+	disconnectNode   domain.NodeID
+	disconnectDigest string
+	updates          []store.AgentExecutionUpdate
+	err              error
 }
 
 func (recording *recordingControllerAgentStore) CommitAgentCommand(_ context.Context, command store.IssuedAgentCommand) (bool, error) {
@@ -24,8 +29,55 @@ func (recording *recordingControllerAgentStore) CommitAgentCommand(_ context.Con
 	return false, recording.err
 }
 
+func (recording *recordingControllerAgentStore) ReplayAgentCommand(
+	_ context.Context,
+	command store.IssuedAgentCommand,
+	_ string,
+) (bool, error) {
+	recording.commands = append(recording.commands, command)
+	return true, recording.err
+}
+
+func (recording *recordingControllerAgentStore) CommitAgentReconciliationCommand(
+	_ context.Context,
+	command store.IssuedAgentCommand,
+	_ string,
+) (bool, error) {
+	recording.commands = append(recording.commands, command)
+	return false, recording.err
+}
+
+func (recording *recordingControllerAgentStore) AgentCommandIsReconciliation(
+	context.Context,
+	domain.CommandID,
+) (bool, error) {
+	return false, recording.err
+}
+
 func (recording *recordingControllerAgentStore) RecordAgentSnapshot(_ context.Context, snapshot store.NodeAgentSnapshot) error {
 	recording.snapshots = append(recording.snapshots, snapshot)
+	return recording.err
+}
+
+func (recording *recordingControllerAgentStore) RecordAgentReadiness(
+	_ context.Context,
+	nodeID domain.NodeID,
+	snapshotDigest string,
+	ready bool,
+) error {
+	recording.readinessNode = nodeID
+	recording.readinessDigest = snapshotDigest
+	recording.readiness = ready
+	return recording.err
+}
+
+func (recording *recordingControllerAgentStore) RecordAgentDisconnect(
+	_ context.Context,
+	nodeID domain.NodeID,
+	snapshotDigest string,
+) error {
+	recording.disconnectNode = nodeID
+	recording.disconnectDigest = snapshotDigest
 	return recording.err
 }
 
@@ -106,6 +158,35 @@ func TestStoreBackedAgentConsumersMapOnlyNonSecretDurableFields(t *testing.T) {
 	if gotSnapshot.Journal.Commands[0].PayloadDigest == snapshot.Commands[0].PayloadDigest {
 		t.Fatal("snapshot command slice aliases the broker payload")
 	}
+	readinessDigest := strings.Repeat("a", 64)
+	if err := consumers.Readiness.HandleAgentReadiness(
+		context.Background(), "node-agent", readinessDigest, true,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if recording.readinessNode != "node-agent" ||
+		recording.readinessDigest != readinessDigest || !recording.readiness {
+		t.Fatalf("mapped readiness = (%q, %q, %t)",
+			recording.readinessNode, recording.readinessDigest, recording.readiness)
+	}
+	disconnect := AgentDisconnectRecord{
+		NodeID:         "node-agent",
+		SnapshotDigest: strings.Repeat("b", 64),
+	}
+	if err := consumers.Disconnects.HandleAgentDisconnect(
+		context.Background(),
+		disconnect,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if recording.disconnectNode != disconnect.NodeID ||
+		recording.disconnectDigest != disconnect.SnapshotDigest {
+		t.Fatalf(
+			"mapped disconnect = node:%s digest:%s",
+			recording.disconnectNode,
+			recording.disconnectDigest,
+		)
+	}
 
 	var updateDigest [32]byte
 	updateDigest[0] = 0xab
@@ -159,5 +240,19 @@ func TestStoreBackedAgentConsumersFailClosedOnUnsupportedKindAndStoreFailure(t *
 	nilConsumers := newStoreBackedAgentConsumers(nil)
 	if err := nilConsumers.Snapshot.HandleAgentSnapshot(context.Background(), AgentSnapshot{}); !errors.Is(err, ErrAgentSnapshotConsumerRequired) {
 		t.Fatalf("nil store snapshot = %v", err)
+	}
+	if err := nilConsumers.Readiness.HandleAgentReadiness(
+		context.Background(), "node-agent", strings.Repeat("a", 64), false,
+	); !errors.Is(err, ErrAgentReadinessConsumerRequired) {
+		t.Fatalf("nil store readiness = %v", err)
+	}
+	if err := nilConsumers.Disconnects.HandleAgentDisconnect(
+		context.Background(),
+		AgentDisconnectRecord{
+			NodeID:         "node-agent",
+			SnapshotDigest: strings.Repeat("a", 64),
+		},
+	); !errors.Is(err, ErrAgentReadinessConsumerRequired) {
+		t.Fatalf("nil store disconnect = %v", err)
 	}
 }

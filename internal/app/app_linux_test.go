@@ -80,6 +80,15 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 		})
 	}()
 	eventually(t, func() bool { return controller.Sessions.Count() == 1 })
+	eventually(t, func() bool {
+		if controller.Reconciler == nil {
+			return false
+		}
+		fleet := controller.Reconciler.FleetSnapshot()
+		return len(fleet.Nodes) == 1 &&
+			fleet.Nodes[0].Reconciled &&
+			fleet.Nodes[0].NativeReady
+	})
 	stopAgent()
 	select {
 	case err := <-agentResult:
@@ -90,6 +99,12 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 		t.Fatal("agent did not stop")
 	}
 	eventually(t, func() bool { return controller.Sessions.Count() == 0 })
+	eventually(t, func() bool {
+		fleet := controller.Reconciler.FleetSnapshot()
+		return len(fleet.Nodes) == 1 &&
+			!fleet.Nodes[0].Reconciled &&
+			!fleet.Nodes[0].NativeReady
+	})
 	stopServer()
 	select {
 	case err := <-serverResult:

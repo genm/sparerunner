@@ -6,26 +6,49 @@ import (
 	"errors"
 
 	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/tewake/internal/reconcile"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
 
 type controllerAgentStore interface {
 	CommitAgentCommand(context.Context, store.IssuedAgentCommand) (bool, error)
+	ReplayAgentCommand(context.Context, store.IssuedAgentCommand, string) (bool, error)
+	CommitAgentReconciliationCommand(context.Context, store.IssuedAgentCommand, string) (bool, error)
+	AgentCommandIsReconciliation(context.Context, domain.CommandID) (bool, error)
 	RecordAgentSnapshot(context.Context, store.NodeAgentSnapshot) error
+	RecordAgentReadiness(context.Context, domain.NodeID, string, bool) error
+	RecordAgentDisconnect(context.Context, domain.NodeID, string) error
 	RecordAgentExecutionUpdate(context.Context, store.AgentExecutionUpdate) (bool, error)
 }
 
 type storeBackedAgentConsumers struct {
-	store controllerAgentStore
+	store      controllerAgentStore
+	projection controllerAgentProjection
 }
 
-func newStoreBackedAgentConsumers(agentStore controllerAgentStore) AgentConsumers {
+type controllerAgentProjection interface {
+	ApplyIssuedCommand(reconcile.IssuedCommand) error
+	ApplyAgentReadiness(domain.NodeID, bool) error
+	ApplyExecutionUpdate(transport.ExecutionUpdate) error
+	ApplyReconciliationExecutionUpdate(transport.ExecutionUpdate) error
+	HandleAgentDisconnect(context.Context, domain.NodeID) error
+}
+
+func newStoreBackedAgentConsumers(
+	agentStore controllerAgentStore,
+	projections ...controllerAgentProjection,
+) AgentConsumers {
 	consumers := storeBackedAgentConsumers{store: agentStore}
+	if len(projections) > 0 {
+		consumers.projection = projections[0]
+	}
 	return AgentConsumers{
 		Commands:         consumers,
 		Snapshot:         consumers,
+		Readiness:        consumers,
 		ExecutionUpdates: consumers,
+		Disconnects:      consumers,
 	}
 }
 
@@ -37,7 +60,7 @@ func (consumers storeBackedAgentConsumers) HandleAgentCommand(ctx context.Contex
 	if err != nil {
 		return err
 	}
-	_, err = consumers.store.CommitAgentCommand(ctx, store.IssuedAgentCommand{
+	issued := store.IssuedAgentCommand{
 		NodeID: record.NodeID,
 		Type:   commandType,
 		Command: domain.Command{
@@ -47,8 +70,40 @@ func (consumers storeBackedAgentConsumers) HandleAgentCommand(ctx context.Contex
 			ExpectedState:   record.Metadata.ExpectedState,
 			PayloadDigest:   hex.EncodeToString(record.PayloadDigest[:]),
 		},
+	}
+	if record.Reconciliation && record.ReplayOnly {
+		return errors.New("Agent command authority modes are mutually exclusive")
+	}
+	var commitErr error
+	if record.Reconciliation {
+		if commandType != domain.CommandCancel {
+			return errors.New("only Cancel may use reconciliation command authority")
+		}
+		_, commitErr = consumers.store.CommitAgentReconciliationCommand(
+			ctx, issued, record.SnapshotDigest)
+	} else if record.ReplayOnly {
+		if commandType != domain.CommandPrepare {
+			return errors.New("only Prepare may use prior-epoch replay authority")
+		}
+		_, commitErr = consumers.store.ReplayAgentCommand(
+			ctx, issued, record.SnapshotDigest)
+	} else {
+		if record.SnapshotDigest != "" {
+			return errors.New("ordinary Agent command cannot carry reconciliation snapshot authority")
+		}
+		_, commitErr = consumers.store.CommitAgentCommand(ctx, issued)
+	}
+	if commitErr != nil {
+		return commitErr
+	}
+	if consumers.projection == nil {
+		return nil
+	}
+	return consumers.projection.ApplyIssuedCommand(reconcile.IssuedCommand{
+		NodeID:  issued.NodeID,
+		Type:    issued.Type,
+		Command: issued.Command,
 	})
-	return err
 }
 
 func (consumers storeBackedAgentConsumers) HandleAgentSnapshot(ctx context.Context, snapshot AgentSnapshot) error {
@@ -77,9 +132,49 @@ func (consumers storeBackedAgentConsumers) HandleAgentSnapshot(ctx context.Conte
 		NodeID:            snapshot.NodeID,
 		OS:                domain.OperatingSystem(snapshot.OS),
 		Architecture:      domain.Architecture(snapshot.Arch),
+		RunnerVersion:     snapshot.RunnerVersion,
 		NativeRunnerReady: snapshot.NativeRunnerReady,
 		Journal:           journal,
 	})
+}
+
+func (consumers storeBackedAgentConsumers) HandleAgentReadiness(
+	ctx context.Context,
+	nodeID domain.NodeID,
+	snapshotDigest string,
+	ready bool,
+) error {
+	if consumers.store == nil {
+		return ErrAgentReadinessConsumerRequired
+	}
+	if err := consumers.store.RecordAgentReadiness(
+		ctx, nodeID, snapshotDigest, ready); err != nil {
+		return err
+	}
+	if consumers.projection == nil {
+		return nil
+	}
+	return consumers.projection.ApplyAgentReadiness(nodeID, ready)
+}
+
+func (consumers storeBackedAgentConsumers) HandleAgentDisconnect(
+	ctx context.Context,
+	record AgentDisconnectRecord,
+) error {
+	if consumers.store == nil {
+		return ErrAgentReadinessConsumerRequired
+	}
+	if err := consumers.store.RecordAgentDisconnect(
+		ctx,
+		record.NodeID,
+		record.SnapshotDigest,
+	); err != nil {
+		return err
+	}
+	if consumers.projection == nil {
+		return nil
+	}
+	return consumers.projection.HandleAgentDisconnect(ctx, record.NodeID)
 }
 
 func (consumers storeBackedAgentConsumers) HandleExecutionUpdate(ctx context.Context, record AgentExecutionUpdateRecord) error {
@@ -96,7 +191,19 @@ func (consumers storeBackedAgentConsumers) HandleExecutionUpdate(ctx context.Con
 		ErrorCode:     record.Update.ErrorCode,
 		PayloadDigest: hex.EncodeToString(record.PayloadDigest[:]),
 	})
-	return err
+	if err != nil || consumers.projection == nil {
+		return err
+	}
+	reconciliation, err := consumers.store.AgentCommandIsReconciliation(
+		ctx, record.Update.CommandID)
+	if err != nil {
+		return err
+	}
+	if reconciliation {
+		return consumers.projection.ApplyReconciliationExecutionUpdate(
+			record.Update)
+	}
+	return consumers.projection.ApplyExecutionUpdate(record.Update)
 }
 
 func domainCommandType(messageType transport.MessageType) (domain.CommandType, error) {

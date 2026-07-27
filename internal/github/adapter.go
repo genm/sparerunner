@@ -20,6 +20,7 @@ var (
 	ErrInvalidMessageID  = errors.New("github message ID must be positive")
 	ErrInvalidCapacity   = errors.New("github max capacity must not be negative")
 	ErrInvalidStatistics = errors.New("github scale-set statistics are missing or inconsistent")
+	ErrInvalidJobMessage = errors.New("github job message identity or state is invalid")
 	ErrInvalidSession    = errors.New("github message session is invalid")
 	ErrNilMessageSource  = errors.New("github message source is required")
 	ErrNilMessageHandler = errors.New("github durable message handler is required")
@@ -58,6 +59,15 @@ const (
 	MessageTypeJobAssigned  MessageType = "JobAssigned"
 	MessageTypeJobStarted   MessageType = "JobStarted"
 	MessageTypeJobCompleted MessageType = "JobCompleted"
+)
+
+const (
+	// JobCompleted result values are part of the pinned public-preview
+	// contract. Unknown or non-canonical values fail closed at the adapter
+	// boundary instead of being guessed into pickup authority.
+	JobResultSucceeded = "succeeded"
+	JobResultFailed    = "failed"
+	JobResultCanceled  = "canceled"
 )
 
 // JobMessage is GitHub job metadata. It deliberately contains no credentials
@@ -101,6 +111,53 @@ type MessageSource interface {
 type DurableMessageHandler interface {
 	CommitMessage(ctx context.Context, message Message) error
 	CommitSessionDemand(ctx context.Context, snapshot SessionSnapshot) error
+	// CommitSessionHealthy is called only after Poll and the refreshed session
+	// snapshot both succeed. It is deliberately separate from demand because
+	// unchanged statistics are deduplicated while freshness must still advance.
+	CommitSessionHealthy(ctx context.Context, snapshot SessionSnapshot) error
+}
+
+type ProviderOperation string
+
+const (
+	ProviderReadSession      ProviderOperation = "read_session"
+	ProviderPollMessages     ProviderOperation = "poll_messages"
+	ProviderRefreshSession   ProviderOperation = "refresh_session"
+	ProviderValidateResponse ProviderOperation = "validate_response"
+	ProviderAcknowledge      ProviderOperation = "acknowledge_message"
+	ProviderAcquireJobs      ProviderOperation = "acquire_jobs"
+	ProviderGenerateJIT      ProviderOperation = "generate_jit"
+	ProviderQueryRunner      ProviderOperation = "query_runner"
+	ProviderRemoveRunner     ProviderOperation = "remove_runner"
+)
+
+// ProviderFailure identifies the provider-owned stage without copying raw
+// response content into durable state. Err remains available to the immediate
+// caller for diagnostics and standard errors.Is/As handling.
+type ProviderFailure struct {
+	Operation ProviderOperation
+	Err       error
+}
+
+func (failure *ProviderFailure) Error() string {
+	if failure == nil {
+		return "GitHub provider operation failed"
+	}
+	// The dependency error may contain provider URLs, response fragments, or
+	// request identifiers. Keep it available through Unwrap without making an
+	// accidental top-level log disclosure the default.
+	return fmt.Sprintf("GitHub provider operation %s failed", failure.Operation)
+}
+
+func (failure *ProviderFailure) Unwrap() error {
+	if failure == nil {
+		return nil
+	}
+	return failure.Err
+}
+
+func providerFailure(operation ProviderOperation, err error) error {
+	return &ProviderFailure{Operation: operation, Err: err}
 }
 
 // Poller processes a single message session serially. lastAcknowledgedMessageID
@@ -160,10 +217,13 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 
 	snapshot, err := p.source.Snapshot()
 	if err != nil {
-		return nil, fmt.Errorf("reading GitHub message session snapshot: %w", err)
+		return nil, providerFailure(
+			ProviderReadSession,
+			fmt.Errorf("reading GitHub message session snapshot: %w", err),
+		)
 	}
 	if err := validateSessionSnapshot(snapshot); err != nil {
-		return nil, err
+		return nil, providerFailure(ProviderValidateResponse, err)
 	}
 	if err := p.commitSessionDemand(ctx, snapshot); err != nil {
 		return nil, err
@@ -172,38 +232,54 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 	message, err := p.source.Poll(ctx, p.lastAcknowledgedMessageID, maxCapacity)
 	if err != nil {
 		p.logger.Warn("github_message_poll_failed", slog.String("component", "github"))
-		return nil, fmt.Errorf("polling GitHub scale-set message: %w", err)
+		return nil, providerFailure(
+			ProviderPollMessages,
+			fmt.Errorf("polling GitHub scale-set message: %w", err),
+		)
 	}
 	// GetMessage may refresh the upstream session token before returning a
 	// message. Re-read its snapshot before the message can be committed or acked.
 	refreshed, err := p.source.Snapshot()
 	if err != nil {
-		return nil, fmt.Errorf("reading refreshed GitHub message session snapshot: %w", err)
+		return nil, providerFailure(
+			ProviderRefreshSession,
+			fmt.Errorf("reading refreshed GitHub message session snapshot: %w", err),
+		)
 	}
 	if err := validateSessionSnapshot(refreshed); err != nil {
-		return nil, err
+		return nil, providerFailure(ProviderValidateResponse, err)
 	}
 	if err := p.commitSessionDemand(ctx, refreshed); err != nil {
 		return nil, err
 	}
 	if message == nil {
+		if err := p.handler.CommitSessionHealthy(ctx, refreshed); err != nil {
+			return nil, fmt.Errorf("durably committing GitHub session health: %w", err)
+		}
 		p.logger.Debug("github_message_empty", slog.String("component", "github"))
 		return nil, nil
 	}
 	if message.ScaleSetID != p.boundScaleSetID {
-		return nil, ErrInvalidSession
+		return nil, providerFailure(ProviderValidateResponse, ErrInvalidSession)
 	}
 	if message.ScaleSetID <= 0 {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "scale_set_id"))
-		return nil, ErrInvalidScaleSetID
+		return nil, providerFailure(ProviderValidateResponse, ErrInvalidScaleSetID)
 	}
 	if message.ID <= 0 {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "message_id"))
-		return nil, ErrInvalidMessageID
+		return nil, providerFailure(ProviderValidateResponse, ErrInvalidMessageID)
 	}
 	if err := validateStatistics(message.Statistics); err != nil {
 		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "statistics"))
-		return nil, err
+		return nil, providerFailure(ProviderValidateResponse, err)
+	}
+	if err := validateJobMessages(message.Jobs); err != nil {
+		p.logger.Warn("github_message_invalid", slog.String("component", "github"), slog.String("reason", "job_identity"))
+		return nil, providerFailure(ProviderValidateResponse, err)
+	}
+	if err := p.handler.CommitSessionHealthy(ctx, refreshed); err != nil {
+		return nil, fmt.Errorf("durably committing GitHub session health: %w", err)
 	}
 
 	if err := p.handler.CommitMessage(ctx, *message); err != nil {
@@ -222,14 +298,19 @@ func (p *Poller) PollOnce(ctx context.Context, maxCapacity int) (*Message, error
 		slog.Int("message_id", message.ID),
 	)
 
-	if err := p.source.DeleteMessage(ctx, message.ID); err != nil {
+	ackContext, cancelAck := WithFiniteOperationTimeout(ctx)
+	defer cancelAck()
+	if err := p.source.DeleteMessage(ackContext, message.ID); err != nil {
 		p.logger.Warn(
 			"github_message_ack_failed",
 			slog.String("component", "github"),
 			slog.Int("scale_set_id", int(message.ScaleSetID)),
 			slog.Int("message_id", message.ID),
 		)
-		return nil, fmt.Errorf("acknowledging GitHub scale-set message: %w", err)
+		return nil, providerFailure(
+			ProviderAcknowledge,
+			fmt.Errorf("acknowledging GitHub scale-set message: %w", err),
+		)
 	}
 	p.lastAcknowledgedMessageID = message.ID
 	p.logger.Info(
@@ -265,4 +346,46 @@ func validateSessionSnapshot(snapshot SessionSnapshot) error {
 		return ErrInvalidSession
 	}
 	return validateStatistics(snapshot.Statistics)
+}
+
+// Keep this boundary aligned with the durable store contract: provider
+// freshness must not advance for a message the store will reject later.
+func validateJobMessages(jobs []JobMessage) error {
+	for _, job := range jobs {
+		if job.RunnerRequestID < 0 || job.WorkflowRunID < 0 {
+			return ErrInvalidJobMessage
+		}
+		switch job.Type {
+		case MessageTypeJobAvailable, MessageTypeJobAssigned:
+			// AcquireJobs requires RunnerRequestID. Lifecycle events can
+			// legitimately omit it and are instead correlated by the exact
+			// provider runner ID and name.
+			if job.RunnerRequestID == 0 ||
+				job.RunnerID != 0 || job.RunnerName != "" || job.Result != "" {
+				return ErrInvalidJobMessage
+			}
+		case MessageTypeJobStarted:
+			if job.RunnerID <= 0 || job.RunnerName == "" ||
+				job.Result != "" {
+				return ErrInvalidJobMessage
+			}
+		case MessageTypeJobCompleted:
+			if job.RunnerID <= 0 || job.RunnerName == "" ||
+				!validJobCompletionResult(job.Result) {
+				return ErrInvalidJobMessage
+			}
+		default:
+			return ErrInvalidJobMessage
+		}
+	}
+	return nil
+}
+
+func validJobCompletionResult(result string) bool {
+	switch result {
+	case JobResultSucceeded, JobResultFailed, JobResultCanceled:
+		return true
+	default:
+		return false
+	}
 }

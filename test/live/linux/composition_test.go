@@ -11,6 +11,7 @@ import (
 
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/github"
+	"github.com/genm/tewake/internal/runner"
 	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
@@ -117,6 +118,7 @@ func TestValidateFreshLinuxAgentRequiresNativeReadyEmptyJournal(t *testing.T) {
 		NodeID:            nodeID,
 		OS:                domain.OSLinux,
 		Arch:              domain.ArchARM64,
+		RunnerVersion:     runner.OfficialRunnerVersion,
 		NativeRunnerReady: true,
 	}
 	if err := validateFreshLinuxAgent(valid, nodeID, 2); err != nil {
@@ -127,6 +129,7 @@ func TestValidateFreshLinuxAgentRequiresNativeReadyEmptyJournal(t *testing.T) {
 		mutate func(*transport.AgentSnapshot)
 	}{
 		{name: "wrong OS", mutate: func(snapshot *transport.AgentSnapshot) { snapshot.OS = domain.OSMacOS }},
+		{name: "runner version mismatch", mutate: func(snapshot *transport.AgentSnapshot) { snapshot.RunnerVersion = "2.335.0" }},
 		{name: "runtime unavailable", mutate: func(snapshot *transport.AgentSnapshot) { snapshot.NativeRunnerReady = false }},
 		{name: "future epoch", mutate: func(snapshot *transport.AgentSnapshot) { snapshot.MaxControllerEpoch = 3 }},
 		{name: "existing journal", mutate: func(snapshot *transport.AgentSnapshot) {

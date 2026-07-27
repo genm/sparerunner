@@ -156,12 +156,92 @@ type recordingSnapshotConsumer struct {
 	release   <-chan struct{}
 }
 
+type recordingDisconnectConsumer struct {
+	mu      sync.Mutex
+	records []AgentDisconnectRecord
+	err     error
+	entered chan struct{}
+	release <-chan struct{}
+}
+
+func (consumer *recordingDisconnectConsumer) HandleAgentDisconnect(
+	ctx context.Context,
+	record AgentDisconnectRecord,
+) error {
+	consumer.mu.Lock()
+	consumer.records = append(consumer.records, record)
+	err := consumer.err
+	entered := consumer.entered
+	release := consumer.release
+	consumer.mu.Unlock()
+	if entered != nil {
+		select {
+		case entered <- struct{}{}:
+		default:
+		}
+	}
+	if release != nil {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return err
+}
+
+func (consumer *recordingDisconnectConsumer) count() int {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return len(consumer.records)
+}
+
+func (consumer *recordingDisconnectConsumer) record(index int) AgentDisconnectRecord {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return consumer.records[index]
+}
+
 func (consumer *recordingSnapshotConsumer) HandleAgentSnapshot(
 	ctx context.Context,
 	snapshot AgentSnapshot,
 ) error {
 	consumer.mu.Lock()
 	consumer.snapshots = append(consumer.snapshots, cloneAgentSnapshot(snapshot))
+	call := len(consumer.snapshots)
+	block := call == consumer.blockCall
+	entered := consumer.entered
+	release := consumer.release
+	consumer.mu.Unlock()
+	if entered != nil {
+		select {
+		case entered <- call:
+		default:
+		}
+	}
+	if block {
+		select {
+		case <-release:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	return nil
+}
+
+func (consumer *recordingSnapshotConsumer) HandleAgentReadiness(
+	ctx context.Context,
+	_ domain.NodeID,
+	_ string,
+	ready bool,
+) error {
+	consumer.mu.Lock()
+	snapshot := AgentSnapshot{}
+	if len(consumer.snapshots) > 0 {
+		snapshot = cloneAgentSnapshot(consumer.snapshots[len(consumer.snapshots)-1])
+	}
+	snapshot.NativeRunnerReady = ready
+	consumer.snapshots = append(consumer.snapshots, snapshot)
 	call := len(consumer.snapshots)
 	block := call == consumer.blockCall
 	entered := consumer.entered
@@ -190,6 +270,12 @@ func (consumer *recordingSnapshotConsumer) last() AgentSnapshot {
 		return AgentSnapshot{}
 	}
 	return cloneAgentSnapshot(consumer.snapshots[len(consumer.snapshots)-1])
+}
+
+func (consumer *recordingSnapshotConsumer) count() int {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return len(consumer.snapshots)
 }
 
 type exactDedupUpdateConsumer struct {
@@ -228,6 +314,12 @@ func (consumer *recordingCommandConsumer) record(index int) AgentCommandRecord {
 	return consumer.records[index]
 }
 
+func (consumer *recordingCommandConsumer) recordCount() int {
+	consumer.mu.Lock()
+	defer consumer.mu.Unlock()
+	return len(consumer.records)
+}
+
 func newRecordingUpdateConsumer() *recordingUpdateConsumer {
 	return &recordingUpdateConsumer{signal: make(chan transport.ExecutionUpdate, 32)}
 }
@@ -259,6 +351,11 @@ func acceptingAgentConsumers(updateConsumer ExecutionUpdateConsumer) AgentConsum
 		Snapshot: AgentSnapshotConsumerFunc(func(context.Context, AgentSnapshot) error {
 			return nil
 		}),
+		Readiness: AgentReadinessConsumerFunc(func(
+			context.Context, domain.NodeID, string, bool,
+		) error {
+			return nil
+		}),
 		ExecutionUpdates: updateConsumer,
 	}
 }
@@ -271,6 +368,12 @@ func (consumer *recordingUpdateConsumer) count() int {
 
 func brokerEnvelope(t *testing.T, messageID string, messageType transport.MessageType, body any) transport.Envelope {
 	t.Helper()
+	if messageType == transport.MessageSnapshot {
+		if snapshot, ok := body.(AgentSnapshot); ok && snapshot.RunnerVersion == "" {
+			snapshot.RunnerVersion = runner.OfficialRunnerVersion
+			body = snapshot
+		}
+	}
 	payload, err := json.Marshal(body)
 	if err != nil {
 		t.Fatal(err)
@@ -1003,8 +1106,14 @@ func TestAgentBrokerCommitsCommandDigestBeforeWriteAndFailsClosed(t *testing.T) 
 	if rendered := fmt.Sprintf("%#v\n%#v", broker, record); bytes.Contains([]byte(rendered), []byte(canary)) {
 		t.Fatalf("failed command commit retained JIT: %q", rendered)
 	}
-	session.disconnect()
-	_ = <-serveResult
+	replacement, replacementResult := startReadyBrokerSession(t, broker, "node-1")
+	if err := <-serveResult; !errors.Is(err, ErrAgentSessionReplaced) {
+		t.Fatalf("session result after fresh snapshot = %v", err)
+	}
+	replacement.disconnect()
+	if err := <-replacementResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("replacement session result = %v", err)
+	}
 }
 
 func TestAgentBrokerRequiresDurableSnapshotBeforeAckAndActivation(t *testing.T) {
@@ -1132,6 +1241,15 @@ func TestAgentBrokerDisconnectAndContextTimeoutFailPendingCommands(t *testing.T)
 			t.Fatalf("serve result = %v", err)
 		}
 		eventuallyBroker(t, func() bool { return broker.ConnectedCount() == 0 })
+		replacement, replacementResult := startReadyBrokerSession(
+			t,
+			broker,
+			"node-1",
+		)
+		replacement.disconnect()
+		if err := <-replacementResult; !errors.Is(err, ErrAgentDisconnected) {
+			t.Fatalf("replacement session result = %v", err)
+		}
 	})
 }
 
@@ -1203,6 +1321,7 @@ func TestAgentBrokerCommitsReadinessChangeBeforeHeartbeatAck(t *testing.T) {
 	}
 	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
 	consumers.Snapshot = snapshots
+	consumers.Readiness = snapshots
 	broker := NewAgentBrokerWithOptions(1, consumers, AgentBrokerOptions{
 		ReadinessLease: time.Second,
 	})
@@ -1251,10 +1370,110 @@ func TestAgentBrokerCommitsReadinessChangeBeforeHeartbeatAck(t *testing.T) {
 	}
 }
 
+func TestAgentBrokerHeartbeatNeverReplaysAnOlderFullJournal(t *testing.T) {
+	fullSnapshots := make(chan AgentSnapshot, 2)
+	type readinessRecord struct {
+		nodeID domain.NodeID
+		digest string
+		ready  bool
+	}
+	readinessChanges := make(chan readinessRecord, 1)
+	updates := newRecordingUpdateConsumer()
+	consumers := acceptingAgentConsumers(updates)
+	consumers.Snapshot = AgentSnapshotConsumerFunc(func(
+		_ context.Context,
+		snapshot AgentSnapshot,
+	) error {
+		fullSnapshots <- cloneAgentSnapshot(snapshot)
+		return nil
+	})
+	consumers.Readiness = AgentReadinessConsumerFunc(func(
+		_ context.Context,
+		nodeID domain.NodeID,
+		digest string,
+		ready bool,
+	) error {
+		readinessChanges <- readinessRecord{
+			nodeID: nodeID,
+			digest: digest,
+			ready:  ready,
+		}
+		return nil
+	})
+	broker := NewAgentBrokerWithOptions(1, consumers, AgentBrokerOptions{
+		ReadinessLease: time.Second,
+	})
+	command := domain.Command{
+		ID:              "start-readiness-journal",
+		ControllerEpoch: 1,
+		ExecutionID:     "execution-readiness-journal",
+		ExpectedState:   domain.ExecutionPreparing,
+		PayloadDigest:   domain.PayloadDigest([]byte("start-readiness-journal")),
+	}
+	initial := AgentSnapshot{
+		NodeID:             "node-1",
+		OS:                 domain.OSLinux,
+		Arch:               domain.ArchAMD64,
+		RunnerVersion:      runner.OfficialRunnerVersion,
+		NativeRunnerReady:  true,
+		MaxControllerEpoch: 1,
+		Commands:           []domain.Command{command},
+	}
+	session, serveResult := startReadyBrokerSessionWithSnapshot(t, broker, initial)
+	select {
+	case accepted := <-fullSnapshots:
+		if accepted.NativeRunnerReady != initial.NativeRunnerReady ||
+			len(accepted.Commands) != 1 || accepted.Commands[0] != command {
+			t.Fatalf("accepted full snapshot = %#v", accepted)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("initial full snapshot was not committed")
+	}
+
+	sendExecutionUpdate(t, session, "running-readiness-journal", transport.ExecutionUpdate{
+		NodeID:      initial.NodeID,
+		CommandID:   command.ID,
+		ExecutionID: command.ExecutionID,
+		State:       domain.ExecutionRunning,
+	})
+	assertBrokerAck(t, session, "running-readiness-journal")
+	eventuallyBroker(t, func() bool { return updates.count() == 1 })
+
+	session.send(brokerEnvelope(t, "heartbeat-readiness-journal", transport.MessageHeartbeat, transport.AgentHeartbeat{
+		NodeID:            initial.NodeID,
+		NativeRunnerReady: false,
+	}))
+	assertBrokerAck(t, session, "heartbeat-readiness-journal")
+	expectedDigest, err := transport.AgentSnapshotDigest(initial)
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case change := <-readinessChanges:
+		if change.nodeID != initial.NodeID || change.digest != expectedDigest ||
+			change.ready {
+			t.Fatalf("readiness-only authority = %#v", change)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("readiness-only change was not committed")
+	}
+	select {
+	case replayed := <-fullSnapshots:
+		t.Fatalf("heartbeat replayed stale full journal: %#v", replayed)
+	default:
+	}
+
+	session.disconnect()
+	if err := <-serveResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("serve result = %v", err)
+	}
+}
+
 func TestAgentBrokerReadinessLeaseExpiresWithoutDroppingOnlineSnapshot(t *testing.T) {
 	snapshots := &recordingSnapshotConsumer{}
 	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
 	consumers.Snapshot = snapshots
+	consumers.Readiness = snapshots
 	broker := NewAgentBrokerWithOptions(1, consumers, AgentBrokerOptions{
 		ReadinessLease: 30 * time.Millisecond,
 	})
@@ -1356,15 +1575,20 @@ func TestAgentBrokerOfflineReadinessContextWakesOnReconnectWithoutBusyCancellati
 	}
 }
 
-func TestAgentBrokerReplacesOnlyFullyReadySameNodeSession(t *testing.T) {
+func TestAgentBrokerRejectsStaleReplacementSnapshotCapturedAcrossCommand(t *testing.T) {
 	broker := NewAgentBroker(1, acceptingAgentConsumers(newRecordingUpdateConsumer()))
 	first, firstResult := startReadyBrokerSession(t, broker, "node-1")
+	cancelMetadata := brokerCancelMetadata("command-replaced", "execution-1")
 	commandResult := make(chan error, 1)
 	go func() {
-		_, err := broker.SendCancel(context.Background(), "node-1", brokerCancelMetadata("command-replaced", "execution-1"))
+		_, err := broker.SendCancel(context.Background(), "node-1", cancelMetadata)
 		commandResult <- err
 	}()
-	_ = receiveBrokerWrite(t, first)
+	cancelCommand := receiveBrokerWrite(t, first)
+	if cancelCommand.Type != transport.MessageCancel ||
+		cancelCommand.MessageID != string(cancelMetadata.CommandID) {
+		t.Fatalf("cancel command = %#v", cancelCommand)
+	}
 
 	partial := newFakeAgentSession("node-1")
 	partialResult := make(chan error, 1)
@@ -1389,21 +1613,861 @@ func TestAgentBrokerReplacesOnlyFullyReadySameNodeSession(t *testing.T) {
 		OS:     "linux",
 		Arch:   "amd64",
 	}))
-	assertBrokerAck(t, second, "second-snapshot")
-	if err := <-commandResult; !errors.Is(err, ErrAgentSessionReplaced) {
-		t.Fatalf("pending command result = %v", err)
+	select {
+	case envelope := <-second.writes:
+		t.Fatalf("stale replacement snapshot was acknowledged: %#v", envelope)
+	case err := <-secondResult:
+		if !errors.Is(err, ErrAgentSessionReplaced) {
+			t.Fatalf("stale replacement result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("stale replacement snapshot was not rejected")
 	}
+	if broker.ConnectedCount() != 1 {
+		t.Fatalf("stale replacement changed connected count: %d", broker.ConnectedCount())
+	}
+
+	sendCommandAck(t, first, "cancel-ack", string(cancelMetadata.CommandID))
+	sendExecutionUpdate(t, first, "cancel-cleaning", transport.ExecutionUpdate{
+		NodeID:      "node-1",
+		CommandID:   cancelMetadata.CommandID,
+		ExecutionID: cancelMetadata.ExecutionID,
+		State:       domain.ExecutionCleaning,
+	})
+	assertBrokerAck(t, first, "cancel-cleaning")
+	if err := <-commandResult; err != nil {
+		t.Fatalf("old-session command result = %v", err)
+	}
+
+	third, thirdResult := startReadyBrokerSession(t, broker, "node-1")
 	if err := <-firstResult; !errors.Is(err, ErrAgentSessionReplaced) {
 		t.Fatalf("first session result = %v", err)
+	}
+	if err := <-partialResult; !errors.Is(err, ErrAgentSessionReplaced) {
+		t.Fatalf("partial session result = %v", err)
 	}
 	if snapshot, ok := broker.Snapshot("node-1"); !ok || snapshot.Arch != "amd64" {
 		t.Fatalf("active snapshot = %#v, %t", snapshot, ok)
 	}
 
-	partial.disconnect()
-	_ = <-partialResult
+	third.disconnect()
+	if err := <-thirdResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("third session result = %v", err)
+	}
+}
+
+func TestAgentBrokerRejectsReplacementCaptureOverlappingEveryCommandAuthority(
+	t *testing.T,
+) {
+	type commandOutcome struct {
+		update transport.ExecutionUpdate
+		err    error
+	}
+	tests := []struct {
+		name      string
+		kind      transport.MessageType
+		metadata  transport.CommandMetadata
+		wantState domain.ExecutionState
+		send      func(
+			context.Context,
+			*AgentBroker,
+			transport.CommandMetadata,
+			string,
+		) (transport.ExecutionUpdate, error)
+	}{
+		{
+			name:      "prepare",
+			kind:      transport.MessagePrepare,
+			metadata:  brokerMetadata("command-1", "execution-1"),
+			wantState: domain.ExecutionPreparing,
+			send: func(
+				ctx context.Context,
+				broker *AgentBroker,
+				metadata transport.CommandMetadata,
+				_ string,
+			) (transport.ExecutionUpdate, error) {
+				return broker.SendPrepare(ctx, "node-1", metadata, true)
+			},
+		},
+		{
+			name:      "start",
+			kind:      transport.MessageStart,
+			metadata:  brokerStartMetadata("command-1", "execution-1"),
+			wantState: domain.ExecutionRunning,
+			send: func(
+				ctx context.Context,
+				broker *AgentBroker,
+				metadata transport.CommandMetadata,
+				_ string,
+			) (transport.ExecutionUpdate, error) {
+				return broker.SendStart(
+					ctx,
+					"node-1",
+					metadata,
+					true,
+					brokerJITConfig("jit-overlap.example.test"),
+				)
+			},
+		},
+		{
+			name:      "cancel",
+			kind:      transport.MessageCancel,
+			metadata:  brokerCancelMetadata("command-1", "execution-1"),
+			wantState: domain.ExecutionCleaning,
+			send: func(
+				ctx context.Context,
+				broker *AgentBroker,
+				metadata transport.CommandMetadata,
+				_ string,
+			) (transport.ExecutionUpdate, error) {
+				return broker.SendCancel(ctx, "node-1", metadata)
+			},
+		},
+		{
+			name:      "replay prepare",
+			kind:      transport.MessagePrepare,
+			metadata:  brokerMetadata("command-1", "execution-1"),
+			wantState: domain.ExecutionPreparing,
+			send: func(
+				ctx context.Context,
+				broker *AgentBroker,
+				metadata transport.CommandMetadata,
+				snapshotDigest string,
+			) (transport.ExecutionUpdate, error) {
+				return broker.ReplayPrepare(
+					ctx,
+					"node-1",
+					metadata,
+					true,
+					snapshotDigest,
+				)
+			},
+		},
+		{
+			name:      "reconciliation cancel",
+			kind:      transport.MessageCancel,
+			metadata:  brokerCancelMetadata("command-1", "execution-1"),
+			wantState: domain.ExecutionCleaning,
+			send: func(
+				ctx context.Context,
+				broker *AgentBroker,
+				metadata transport.CommandMetadata,
+				snapshotDigest string,
+			) (transport.ExecutionUpdate, error) {
+				return broker.SendReconciliationCancel(
+					ctx,
+					"node-1",
+					metadata,
+					snapshotDigest,
+				)
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			snapshots := &recordingSnapshotConsumer{}
+			consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+			consumers.Snapshot = snapshots
+			broker := NewAgentBroker(1, consumers)
+			capturedSnapshot := AgentSnapshot{
+				NodeID:            "node-1",
+				OS:                domain.OSLinux,
+				Arch:              domain.ArchAMD64,
+				RunnerVersion:     runner.OfficialRunnerVersion,
+				NativeRunnerReady: true,
+			}
+			snapshotDigest, err := transport.AgentSnapshotDigest(capturedSnapshot)
+			if err != nil {
+				t.Fatal(err)
+			}
+			first, firstResult := startReadyBrokerSessionWithSnapshot(
+				t,
+				broker,
+				capturedSnapshot,
+			)
+			if snapshots.count() != 1 {
+				t.Fatalf("initial snapshot commits = %d, want 1", snapshots.count())
+			}
+
+			replacement := newFakeAgentSession("node-1")
+			replacementResult := make(chan error, 1)
+			go func() {
+				replacementResult <- broker.serveSession(
+					context.Background(),
+					replacement,
+				)
+			}()
+			replacement.send(brokerEnvelope(
+				t,
+				"replacement-hello",
+				transport.MessageHello,
+				struct {
+					NodeID string `json:"nodeId"`
+				}{NodeID: "node-1"},
+			))
+			assertBrokerAck(t, replacement, "replacement-hello")
+
+			commandResult := make(chan commandOutcome, 1)
+			go func() {
+				update, sendErr := test.send(
+					context.Background(),
+					broker,
+					test.metadata,
+					snapshotDigest,
+				)
+				commandResult <- commandOutcome{update: update, err: sendErr}
+			}()
+			command := receiveBrokerWrite(t, first)
+			if command.Type != test.kind ||
+				command.MessageID != string(test.metadata.CommandID) {
+				t.Fatalf("command = %#v, want %s/%s",
+					command, test.kind, test.metadata.CommandID)
+			}
+
+			// The replacement built this snapshot from the Hello ACK baseline,
+			// before the old actor accepted the command above.
+			replacement.send(brokerEnvelope(
+				t,
+				"replacement-snapshot",
+				transport.MessageSnapshot,
+				capturedSnapshot,
+			))
+			select {
+			case envelope := <-replacement.writes:
+				t.Fatalf("stale replacement snapshot was acknowledged: %#v", envelope)
+			case serveErr := <-replacementResult:
+				if !errors.Is(serveErr, ErrAgentSessionReplaced) {
+					t.Fatalf("replacement result = %v", serveErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("replacement snapshot was not rejected")
+			}
+			if snapshots.count() != 1 {
+				t.Fatalf(
+					"stale snapshot crossed durable consumer: commits = %d",
+					snapshots.count(),
+				)
+			}
+			if broker.ConnectedCount() != 1 {
+				t.Fatalf(
+					"stale replacement changed connected count: %d",
+					broker.ConnectedCount(),
+				)
+			}
+
+			sendCommandAck(
+				t,
+				first,
+				"command-ack",
+				string(test.metadata.CommandID),
+			)
+			sendExecutionUpdate(
+				t,
+				first,
+				"command-update",
+				transport.ExecutionUpdate{
+					NodeID:      "node-1",
+					CommandID:   test.metadata.CommandID,
+					ExecutionID: test.metadata.ExecutionID,
+					State:       test.wantState,
+				},
+			)
+			assertBrokerAck(t, first, "command-update")
+			outcome := <-commandResult
+			if outcome.err != nil || outcome.update.State != test.wantState {
+				t.Fatalf(
+					"command outcome = (%#v, %v), want state %s",
+					outcome.update,
+					outcome.err,
+					test.wantState,
+				)
+			}
+
+			first.disconnect()
+			if serveErr := <-firstResult; !errors.Is(serveErr, ErrAgentDisconnected) {
+				t.Fatalf("first session result = %v", serveErr)
+			}
+		})
+	}
+}
+
+func TestAgentBrokerSnapshotCommitLinearizesBeforeOldActorCommandDispatch(
+	t *testing.T,
+) {
+	releaseSnapshot := make(chan struct{})
+	snapshots := &recordingSnapshotConsumer{
+		entered:   make(chan int, 4),
+		blockCall: 2,
+		release:   releaseSnapshot,
+	}
+	commands := &recordingCommandConsumer{}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Snapshot = snapshots
+	consumers.Commands = commands
+	broker := NewAgentBroker(1, consumers)
+	first, firstResult := startReadyBrokerSession(t, broker, "node-1")
+	if call := <-snapshots.entered; call != 1 {
+		t.Fatalf("initial snapshot call = %d, want 1", call)
+	}
+	firstActor, ok := broker.session("node-1")
+	if !ok {
+		t.Fatal("first actor is not ready")
+	}
+
+	replacement := newFakeAgentSession("node-1")
+	replacementResult := make(chan error, 1)
+	go func() {
+		replacementResult <- broker.serveSession(context.Background(), replacement)
+	}()
+	replacement.send(brokerEnvelope(t, "replacement-hello", transport.MessageHello, struct {
+		NodeID string `json:"nodeId"`
+	}{NodeID: "node-1"}))
+	assertBrokerAck(t, replacement, "replacement-hello")
+	replacement.send(brokerEnvelope(t, "replacement-snapshot", transport.MessageSnapshot, AgentSnapshot{
+		NodeID: "node-1",
+		OS:     domain.OSLinux,
+		Arch:   domain.ArchAMD64,
+	}))
+	if call := <-snapshots.entered; call != 2 {
+		t.Fatalf("replacement snapshot call = %d, want 2", call)
+	}
+
+	metadata := brokerStartMetadata("old-start", "execution-1")
+	commandResult := make(chan error, 1)
+	go func() {
+		_, sendErr := firstActor.sendCommand(
+			context.Background(),
+			transport.MessageStart,
+			metadata,
+			func() (json.RawMessage, error) {
+				return transport.EncodeStartCommandPayload(
+					metadata,
+					runner.OfficialRunnerVersion,
+					true,
+					"jit-linearization.example.test",
+				)
+			},
+		)
+		commandResult <- sendErr
+	}()
+	// Holding commandGate proves this call passed the actor ready/done checks.
+	// The replacement snapshot already owns the lifecycle lock, so activation
+	// deterministically linearizes before command authority can be committed.
+	eventuallyBroker(t, func() bool { return len(firstActor.commandGate) == 0 })
+	select {
+	case envelope := <-first.writes:
+		t.Fatalf("old actor command crossed blocked snapshot commit: %#v", envelope)
+	case sendErr := <-commandResult:
+		t.Fatalf("old actor command returned before snapshot commit: %v", sendErr)
+	default:
+	}
+
+	close(releaseSnapshot)
+	assertBrokerAck(t, replacement, "replacement-snapshot")
+	if sendErr := <-commandResult; !errors.Is(sendErr, ErrAgentSessionReplaced) {
+		t.Fatalf("old actor command result = %v", sendErr)
+	}
+	if commands.recordCount() != 0 {
+		t.Fatalf("old actor command crossed durable consumer: %d records", commands.recordCount())
+	}
+	if serveErr := <-firstResult; !errors.Is(serveErr, ErrAgentSessionReplaced) {
+		t.Fatalf("first session result = %v", serveErr)
+	}
+
+	replacement.disconnect()
+	if serveErr := <-replacementResult; !errors.Is(serveErr, ErrAgentDisconnected) {
+		t.Fatalf("replacement session result = %v", serveErr)
+	}
+}
+
+func TestAgentBrokerDisconnectConsumerRunsOnlyForRemovedCurrentSession(t *testing.T) {
+	disconnects := &recordingDisconnectConsumer{}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Disconnects = disconnects
+	broker := NewAgentBroker(1, consumers)
+
+	first, firstResult := startReadyBrokerSession(t, broker, "node-1")
+	second, secondResult := startReadyBrokerSession(t, broker, "node-1")
+	if err := <-firstResult; !errors.Is(err, ErrAgentSessionReplaced) {
+		t.Fatalf("replaced session result = %v", err)
+	}
+	if disconnects.count() != 0 {
+		t.Fatal("replacement actor termination emitted an offline transition")
+	}
+	first.disconnect()
+	if disconnects.count() != 0 {
+		t.Fatal("already replaced actor emitted a later offline transition")
+	}
+
 	second.disconnect()
-	_ = <-secondResult
+	if err := <-secondResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("current session result = %v", err)
+	}
+	if disconnects.count() != 1 {
+		t.Fatalf("disconnect calls = %d, want 1", disconnects.count())
+	}
+	wantDigest, err := transport.AgentSnapshotDigest(AgentSnapshot{
+		NodeID:        "node-1",
+		OS:            domain.OSLinux,
+		Arch:          domain.ArchAMD64,
+		RunnerVersion: runner.OfficialRunnerVersion,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if record := disconnects.record(0); record.NodeID != "node-1" ||
+		record.SnapshotDigest != wantDigest {
+		t.Fatalf("disconnect authority = %#v, want node-1/%s", record, wantDigest)
+	}
+	if err, found := broker.DisconnectError("node-1"); found || err != nil {
+		t.Fatalf("successful disconnect retained error = (%v, %t)", err, found)
+	}
+}
+
+func TestAgentBrokerDisconnectBeforeSnapshotActivationHasNoDurableAuthorityToRevoke(
+	t *testing.T,
+) {
+	disconnects := &recordingDisconnectConsumer{}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Disconnects = disconnects
+	broker := NewAgentBroker(1, consumers)
+	session := newFakeAgentSession("node-1")
+	result := make(chan error, 1)
+	go func() { result <- broker.serveSession(context.Background(), session) }()
+
+	session.send(brokerEnvelope(t, "pre-snapshot-hello", transport.MessageHello, struct {
+		NodeID string `json:"nodeId"`
+	}{NodeID: "node-1"}))
+	assertBrokerAck(t, session, "pre-snapshot-hello")
+	session.disconnect()
+	if err := <-result; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("pre-snapshot session result = %v", err)
+	}
+	if disconnects.count() != 0 {
+		t.Fatalf(
+			"pre-snapshot session revoked %d durable authorities",
+			disconnects.count(),
+		)
+	}
+}
+
+func TestAgentBrokerDisconnectConsumerFailureIsObservableAndDoesNotRestoreSession(t *testing.T) {
+	want := errors.New("offline projection unavailable")
+	disconnects := &recordingDisconnectConsumer{err: want}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Disconnects = disconnects
+	broker := NewAgentBroker(1, consumers)
+
+	session, serveResult := startReadyBrokerSession(t, broker, "node-1")
+	session.disconnect()
+	if err := <-serveResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("session result = %v", err)
+	}
+	if broker.ConnectedCount() != 0 {
+		t.Fatal("disconnect consumer failure rolled back session cleanup")
+	}
+	if _, online := broker.Snapshot("node-1"); online {
+		t.Fatal("disconnect consumer failure synthesized an online session")
+	}
+	if err, found := broker.DisconnectError("node-1"); !found || !errors.Is(err, ErrAgentDisconnectCommit) {
+		t.Fatalf("observable disconnect error = (%v, %t)", err, found)
+	}
+}
+
+func TestAgentBrokerRejectsReconnectWhileOfflineProjectionIsPending(t *testing.T) {
+	release := make(chan struct{})
+	disconnects := &recordingDisconnectConsumer{
+		entered: make(chan struct{}, 1),
+		release: release,
+	}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Disconnects = disconnects
+	broker := NewAgentBroker(1, consumers)
+
+	first, firstResult := startReadyBrokerSession(t, broker, "node-1")
+	first.disconnect()
+	select {
+	case <-disconnects.entered:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect projection did not start")
+	}
+
+	second := newFakeAgentSession("node-1")
+	secondResult := make(chan error, 1)
+	go func() { secondResult <- broker.serveSession(context.Background(), second) }()
+	second.send(brokerEnvelope(t, "reconnect-hello", transport.MessageHello, struct {
+		NodeID string `json:"nodeId"`
+	}{NodeID: "node-1"}))
+	select {
+	case envelope := <-second.writes:
+		t.Fatalf("reconnect handshake advanced before offline projection: %#v", envelope)
+	case err := <-secondResult:
+		if !errors.Is(err, ErrAgentDisconnectCommit) {
+			t.Fatalf("pending-projection reconnect result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("pending offline projection blocked reconnect instead of failing closed")
+	}
+
+	close(release)
+	if err := <-firstResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("first session result = %v", err)
+	}
+	if disconnects.count() != 1 {
+		t.Fatalf("offline projections = %d, want 1", disconnects.count())
+	}
+
+	third, thirdResult := startReadyBrokerSession(t, broker, "node-1")
+	if err, found := broker.DisconnectError("node-1"); found || err != nil {
+		t.Fatalf("successful retry retained disconnect error = (%v, %t)", err, found)
+	}
+	third.disconnect()
+	if err := <-thirdResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("third session result = %v", err)
+	}
+}
+
+func TestAgentBrokerCloseCancelsPendingOfflineProjection(t *testing.T) {
+	disconnects := &recordingDisconnectConsumer{
+		entered: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Disconnects = disconnects
+	broker := NewAgentBroker(1, consumers)
+
+	session, serveResult := startReadyBrokerSession(t, broker, "node-1")
+	session.disconnect()
+	select {
+	case <-disconnects.entered:
+	case <-time.After(time.Second):
+		t.Fatal("disconnect projection did not start")
+	}
+
+	broker.Close()
+	select {
+	case err := <-serveResult:
+		if !errors.Is(err, ErrAgentDisconnected) {
+			t.Fatalf("serve result = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("broker close did not cancel the pending disconnect projection")
+	}
+	if err, found := broker.DisconnectError("node-1"); !found ||
+		!errors.Is(err, ErrAgentDisconnectCommit) {
+		t.Fatalf("canceled disconnect projection = (%v, %t)", err, found)
+	}
+}
+
+func TestAgentBrokerSnapshotActivationIsInvisibleUntilAckAndRollsBackOnAckFailure(t *testing.T) {
+	t.Run("command and readiness remain unavailable while snapshot ACK is blocked", func(t *testing.T) {
+		releaseACK := make(chan struct{})
+		snapshots := &recordingSnapshotConsumer{
+			entered: make(chan int, 4),
+		}
+		consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+		consumers.Snapshot = snapshots
+		broker := NewAgentBroker(1, consumers)
+		session := newFakeAgentSession("node-1")
+		result := make(chan error, 1)
+		go func() { result <- broker.serveSession(context.Background(), session) }()
+
+		session.send(brokerEnvelope(t, "blocked-ack-hello", transport.MessageHello, struct {
+			NodeID string `json:"nodeId"`
+		}{NodeID: "node-1"}))
+		assertBrokerAck(t, session, "blocked-ack-hello")
+		for {
+			select {
+			case <-session.writeEntered:
+			default:
+				goto writesDrained
+			}
+		}
+	writesDrained:
+		session.setWriteBlock(releaseACK)
+		session.send(brokerEnvelope(t, "blocked-ack-snapshot", transport.MessageSnapshot, AgentSnapshot{
+			NodeID:            "node-1",
+			OS:                domain.OSLinux,
+			Arch:              domain.ArchAMD64,
+			NativeRunnerReady: true,
+		}))
+		select {
+		case call := <-snapshots.entered:
+			if call != 1 {
+				t.Fatalf("snapshot commit call = %d", call)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("snapshot did not reach commit boundary")
+		}
+		select {
+		case <-session.writeEntered:
+		case <-time.After(time.Second):
+			t.Fatal("snapshot ACK did not reach blocked write")
+		}
+
+		if broker.ConnectedCount() != 0 {
+			t.Fatal("snapshot session became connected before its ACK completed")
+		}
+		if _, online := broker.Snapshot("node-1"); online {
+			t.Fatal("snapshot readiness became visible before its ACK completed")
+		}
+		if _, err := broker.commandSession("node-1", brokerCancelMetadata("before-ack", "execution-1")); !errors.Is(err, ErrAgentOffline) {
+			t.Fatalf("command session before snapshot ACK = %v", err)
+		}
+
+		close(releaseACK)
+		assertBrokerAck(t, session, "blocked-ack-snapshot")
+		eventuallyBroker(t, func() bool { return broker.ConnectedCount() == 1 })
+		session.disconnect()
+		if err := <-result; !errors.Is(err, ErrAgentDisconnected) {
+			t.Fatalf("session result = %v", err)
+		}
+	})
+
+	t.Run("failed snapshot ACK projects the committed session offline", func(t *testing.T) {
+		snapshots := &recordingSnapshotConsumer{}
+		disconnects := &recordingDisconnectConsumer{}
+		consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+		consumers.Snapshot = snapshots
+		consumers.Disconnects = disconnects
+		broker := NewAgentBroker(1, consumers)
+		session := newFakeAgentSession("node-1")
+		result := make(chan error, 1)
+		go func() { result <- broker.serveSession(context.Background(), session) }()
+
+		session.send(brokerEnvelope(t, "failed-ack-hello", transport.MessageHello, struct {
+			NodeID string `json:"nodeId"`
+		}{NodeID: "node-1"}))
+		assertBrokerAck(t, session, "failed-ack-hello")
+		session.failNextWrite(errors.New("snapshot ACK write failed"))
+		session.send(brokerEnvelope(t, "failed-ack-snapshot", transport.MessageSnapshot, AgentSnapshot{
+			NodeID:            "node-1",
+			OS:                domain.OSLinux,
+			Arch:              domain.ArchAMD64,
+			NativeRunnerReady: true,
+		}))
+
+		if err := <-result; !errors.Is(err, ErrAgentDisconnected) {
+			t.Fatalf("session result = %v", err)
+		}
+		if snapshots.count() != 1 || !snapshots.last().NativeRunnerReady {
+			t.Fatalf("committed snapshots = %#v", snapshots.snapshots)
+		}
+		if disconnects.count() != 1 {
+			t.Fatalf("offline projections = %d, want 1", disconnects.count())
+		}
+		if broker.ConnectedCount() != 0 {
+			t.Fatal("failed snapshot ACK retained a connected session")
+		}
+		if _, online := broker.Snapshot("node-1"); online {
+			t.Fatal("failed snapshot ACK retained online readiness")
+		}
+	})
+
+	t.Run("stalled snapshot ACK can be superseded without blocking the node", func(t *testing.T) {
+		releaseACK := make(chan struct{})
+		snapshots := &recordingSnapshotConsumer{
+			entered: make(chan int, 8),
+		}
+		consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+		consumers.Snapshot = snapshots
+		broker := NewAgentBroker(1, consumers)
+		_, firstResult := startReadyBrokerSession(t, broker, "node-1")
+		if call := <-snapshots.entered; call != 1 {
+			t.Fatalf("initial snapshot call = %d, want 1", call)
+		}
+
+		second := newFakeAgentSession("node-1")
+		secondResult := make(chan error, 1)
+		go func() {
+			secondResult <- broker.serveSession(context.Background(), second)
+		}()
+		second.send(brokerEnvelope(t, "stalled-ack-hello", transport.MessageHello, struct {
+			NodeID string `json:"nodeId"`
+		}{NodeID: "node-1"}))
+		assertBrokerAck(t, second, "stalled-ack-hello")
+		for {
+			select {
+			case <-second.writeEntered:
+			default:
+				goto secondWritesDrained
+			}
+		}
+	secondWritesDrained:
+		second.setWriteBlock(releaseACK)
+		second.send(brokerEnvelope(t, "stalled-ack-snapshot", transport.MessageSnapshot, AgentSnapshot{
+			NodeID: "node-1",
+			OS:     domain.OSLinux,
+			Arch:   domain.ArchAMD64,
+		}))
+		if call := <-snapshots.entered; call != 2 {
+			t.Fatalf("stalled snapshot call = %d, want 2", call)
+		}
+		select {
+		case <-second.writeEntered:
+		case <-time.After(time.Second):
+			t.Fatal("snapshot ACK did not reach the stalled write")
+		}
+
+		third, thirdResult := startReadyBrokerSession(t, broker, "node-1")
+		if err := <-firstResult; !errors.Is(err, ErrAgentSessionReplaced) {
+			t.Fatalf("first session result = %v", err)
+		}
+		if err := <-secondResult; !errors.Is(err, ErrAgentSessionReplaced) {
+			t.Fatalf("stalled session result = %v", err)
+		}
+		if snapshots.count() != 3 {
+			t.Fatalf("snapshot commits = %d, want 3", snapshots.count())
+		}
+		close(releaseACK)
+
+		third.disconnect()
+		if err := <-thirdResult; !errors.Is(err, ErrAgentDisconnected) {
+			t.Fatalf("third session result = %v", err)
+		}
+	})
+}
+
+func TestAgentBrokerReplacementGenerationRejectsOldHeartbeatProjection(t *testing.T) {
+	releaseReplacement := make(chan struct{})
+	snapshots := &recordingSnapshotConsumer{
+		entered:   make(chan int, 8),
+		blockCall: 2,
+		release:   releaseReplacement,
+	}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Snapshot = snapshots
+	consumers.Readiness = snapshots
+	broker := NewAgentBroker(1, consumers)
+	first, firstResult := startReadyBrokerSessionWithSnapshot(t, broker, AgentSnapshot{
+		NodeID:            "node-1",
+		OS:                domain.OSLinux,
+		Arch:              domain.ArchAMD64,
+		NativeRunnerReady: true,
+	})
+	if call := <-snapshots.entered; call != 1 {
+		t.Fatalf("first snapshot call = %d", call)
+	}
+
+	second := newFakeAgentSession("node-1")
+	secondResult := make(chan error, 1)
+	go func() { secondResult <- broker.serveSession(context.Background(), second) }()
+	second.send(brokerEnvelope(t, "replacement-heartbeat-hello", transport.MessageHello, struct {
+		NodeID string `json:"nodeId"`
+	}{NodeID: "node-1"}))
+	assertBrokerAck(t, second, "replacement-heartbeat-hello")
+	second.send(brokerEnvelope(t, "replacement-heartbeat-snapshot", transport.MessageSnapshot, AgentSnapshot{
+		NodeID:            "node-1",
+		OS:                domain.OSLinux,
+		Arch:              domain.ArchAMD64,
+		NativeRunnerReady: true,
+	}))
+	if call := <-snapshots.entered; call != 2 {
+		t.Fatalf("replacement snapshot call = %d", call)
+	}
+
+	first.send(brokerEnvelope(t, "old-heartbeat", transport.MessageHeartbeat, transport.AgentHeartbeat{
+		NodeID:            "node-1",
+		NativeRunnerReady: false,
+	}))
+	select {
+	case call := <-snapshots.entered:
+		t.Fatalf("old heartbeat crossed replacement lifecycle boundary as call %d", call)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseReplacement)
+	assertBrokerAck(t, second, "replacement-heartbeat-snapshot")
+	if err := <-firstResult; !errors.Is(err, ErrAgentSessionReplaced) {
+		t.Fatalf("first session result = %v", err)
+	}
+	eventuallyBroker(t, func() bool { return snapshots.count() == 2 })
+	if !snapshots.last().NativeRunnerReady {
+		t.Fatal("old heartbeat overwrote replacement readiness")
+	}
+
+	second.disconnect()
+	if err := <-secondResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("second session result = %v", err)
+	}
+}
+
+func TestAgentBrokerReplacementGenerationRejectsOldLeaseExpiryProjection(t *testing.T) {
+	releaseReplacement := make(chan struct{})
+	snapshots := &recordingSnapshotConsumer{
+		entered:   make(chan int, 8),
+		blockCall: 2,
+		release:   releaseReplacement,
+	}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.Snapshot = snapshots
+	consumers.Readiness = snapshots
+	broker := NewAgentBroker(1, consumers)
+	_, firstResult := startReadyBrokerSessionWithSnapshot(t, broker, AgentSnapshot{
+		NodeID:            "node-1",
+		OS:                domain.OSLinux,
+		Arch:              domain.ArchAMD64,
+		NativeRunnerReady: true,
+	})
+	if call := <-snapshots.entered; call != 1 {
+		t.Fatalf("first snapshot call = %d", call)
+	}
+	broker.mu.RLock()
+	firstActor := broker.sessions["node-1"]
+	broker.mu.RUnlock()
+	if firstActor == nil {
+		t.Fatal("first actor was not active")
+	}
+	firstActor.stateMu.Lock()
+	expiringGeneration := firstActor.readinessGeneration
+	firstActor.stateMu.Unlock()
+
+	second := newFakeAgentSession("node-1")
+	secondResult := make(chan error, 1)
+	go func() { secondResult <- broker.serveSession(context.Background(), second) }()
+	second.send(brokerEnvelope(t, "replacement-expiry-hello", transport.MessageHello, struct {
+		NodeID string `json:"nodeId"`
+	}{NodeID: "node-1"}))
+	assertBrokerAck(t, second, "replacement-expiry-hello")
+	second.send(brokerEnvelope(t, "replacement-expiry-snapshot", transport.MessageSnapshot, AgentSnapshot{
+		NodeID:            "node-1",
+		OS:                domain.OSLinux,
+		Arch:              domain.ArchAMD64,
+		NativeRunnerReady: true,
+	}))
+	if call := <-snapshots.entered; call != 2 {
+		t.Fatalf("replacement snapshot call = %d", call)
+	}
+
+	expired := make(chan struct{})
+	go func() {
+		firstActor.expireReadiness(expiringGeneration)
+		close(expired)
+	}()
+	select {
+	case call := <-snapshots.entered:
+		t.Fatalf("old lease expiry crossed replacement lifecycle boundary as call %d", call)
+	case <-time.After(30 * time.Millisecond):
+	}
+	close(releaseReplacement)
+	assertBrokerAck(t, second, "replacement-expiry-snapshot")
+	select {
+	case <-expired:
+	case <-time.After(time.Second):
+		t.Fatal("old lease expiry did not leave lifecycle boundary")
+	}
+	if err := <-firstResult; !errors.Is(err, ErrAgentSessionReplaced) {
+		t.Fatalf("first session result = %v", err)
+	}
+	eventuallyBroker(t, func() bool { return snapshots.count() == 2 })
+	if !snapshots.last().NativeRunnerReady {
+		t.Fatal("old lease expiry overwrote replacement readiness")
+	}
+
+	second.disconnect()
+	if err := <-secondResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("second session result = %v", err)
+	}
 }
 
 func TestAgentBrokerRejectsHelloThatDoesNotMatchCredential(t *testing.T) {
