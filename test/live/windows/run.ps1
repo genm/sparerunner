@@ -4,7 +4,7 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true, Position = 0)]
-    [ValidateSet("unit", "service-preflight", "service-recovery", "reboot-before", "reboot-after")]
+    [ValidateSet("unit", "service-preflight", "dpapi-identity", "service-recovery", "reboot-before", "reboot-after")]
     [string] $Scenario,
 
     [Parameter(Mandatory = $true, Position = 1)]
@@ -63,18 +63,49 @@ function Get-ServiceEvidence {
     if ($null -eq $Agent -or $null -eq $Runner) {
         throw "The packaged Tewake services are not installed."
     }
-    if ($Agent.State -cne "Running" -or
+    $AgentArguments = @(
+        "windows-service",
+        "--role",
+        "agent",
+        "--service-name",
+        "TewakeAgent",
+        "--state-dir",
+        [string] $Settings.agentStateDirectory,
+        "--cache-root",
+        [string] $Settings.cacheRoot,
+        "--runtime-root",
+        [string] $Settings.runtimeRoot,
+        "--runner-identity-service",
+        "TewakeRunnerIdentity",
+        "--require-native-runner"
+    )
+    $RunnerArguments = @(
+        "windows-service",
+        "--role",
+        "runner-identity",
+        "--service-name",
+        "TewakeRunnerIdentity"
+    )
+    [void] (Assert-TewakeServiceCommandLine `
+        -CommandLine ([string] $Agent.PathName) `
+        -ExpectedExecutable ([string] $Settings.installedAgent) `
+        -ExpectedArguments $AgentArguments `
+        -PathArgumentIndexes @(6, 8, 10))
+    [void] (Assert-TewakeServiceCommandLine `
+        -CommandLine ([string] $Runner.PathName) `
+        -ExpectedExecutable ([string] $Settings.installedAgent) `
+        -ExpectedArguments $RunnerArguments)
+    if ($Agent.Name -cne "TewakeAgent" -or
+        $Agent.State -cne "Running" -or
         $Agent.StartName -notin @("LocalSystem", "NT AUTHORITY\LocalSystem") -or
-        $Agent.ProcessId -le 0 -or
-        $Agent.PathName -notmatch "windows-service --role agent" -or
-        $Agent.PathName -notmatch "--require-native-runner") {
+        $Agent.ProcessId -le 0) {
         throw "TewakeAgent effective SCM state does not match the package contract."
     }
-    if ($Runner.State -cne "Running" -or
+    if ($Runner.Name -cne "TewakeRunnerIdentity" -or
+        $Runner.State -cne "Running" -or
         $Runner.StartName -cne "NT SERVICE\TewakeRunnerIdentity" -or
         $Runner.ProcessId -le 0 -or
-        $Runner.ProcessId -eq $Agent.ProcessId -or
-        $Runner.PathName -notmatch "windows-service --role runner-identity") {
+        $Runner.ProcessId -eq $Agent.ProcessId) {
         throw "TewakeRunnerIdentity effective SCM state does not match the package contract."
     }
     return [ordered]@{
@@ -143,10 +174,6 @@ foreach ($Path in @(
 )) {
     Assert-NoReparsePath -Path $Path
 }
-[void] [System.IO.Directory]::CreateDirectory($Settings.evidenceDirectory)
-$EvidenceAcl = Get-Acl -LiteralPath $Settings.evidenceDirectory
-$EvidenceAcl.SetAccessRuleProtection($true, $false)
-Set-Acl -LiteralPath $Settings.evidenceDirectory -AclObject $EvidenceAcl
 
 $RepositoryRoot = [System.IO.Path]::GetFullPath(
     (Join-Path $PSScriptRoot "..\..\..")
@@ -159,10 +186,72 @@ $Dirty = & git -C $RepositoryRoot status --porcelain=v1 --untracked-files=all
 if ($LASTEXITCODE -ne 0 -or $Dirty) {
     throw "The live checkout is not clean."
 }
+. (Join-Path $RepositoryRoot "packaging\windows\safe-tree.ps1")
+. (Join-Path $RepositoryRoot "packaging\windows\ownership.ps1")
+. (Join-Path $RepositoryRoot "test\live\windows\live-support.ps1")
+$EvidenceOwner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+if ($null -eq $EvidenceOwner) {
+    throw "The live-evidence owner SID is unavailable."
+}
 $AgentHash = (Get-FileHash -LiteralPath $Settings.installedAgent -Algorithm SHA256).Hash.ToLowerInvariant()
 if ($AgentHash -cne $Settings.expectedAgentSha256) {
     throw "The installed Agent digest does not match the live config."
 }
+$InstallRoot = [System.IO.Path]::GetDirectoryName(
+    [System.IO.Path]::GetFullPath($Settings.installedAgent)
+)
+$DataRoot = [System.IO.Path]::GetDirectoryName(
+    [System.IO.Path]::GetFullPath($Settings.agentStateDirectory)
+)
+if (-not [string]::Equals(
+        $DataRoot,
+        [System.IO.Path]::GetDirectoryName(
+            [System.IO.Path]::GetFullPath($Settings.cacheRoot)
+        ),
+        [System.StringComparison]::OrdinalIgnoreCase
+    ) -or
+    -not [string]::Equals(
+        $DataRoot,
+        [System.IO.Path]::GetDirectoryName(
+            [System.IO.Path]::GetFullPath($Settings.runtimeRoot)
+        ),
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+    throw "The live config paths do not share one data root."
+}
+$SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
+$InstallAuthority = Assert-TewakeOwnershipMarker `
+    -ActualRoot $InstallRoot `
+    -ExpectedBoundRoot $InstallRoot `
+    -ExpectedRole "install" `
+    -OwnerSid $SystemSid
+$DataAuthority = Assert-TewakeOwnershipMarker `
+    -ActualRoot $DataRoot `
+    -ExpectedBoundRoot $DataRoot `
+    -ExpectedRole "data" `
+    -OwnerSid $SystemSid
+if ($InstallAuthority.InstallationId -cne $DataAuthority.InstallationId) {
+    throw "The installed roots have different ownership identities."
+}
+$EvidenceAuthority = Initialize-TewakeLiveEvidenceRoot `
+    -EvidenceDirectory ([string] $Settings.evidenceDirectory) `
+    -ProtectedPaths @(
+        $RepositoryRoot,
+        $InstallRoot,
+        $DataRoot,
+        [string] $Settings.agentStateDirectory,
+        [string] $Settings.cacheRoot,
+        [string] $Settings.runtimeRoot
+    ) `
+    -RepositoryRoot $RepositoryRoot `
+    -ExpectedCommitSha ([string] $Settings.expectedCommitSha) `
+    -ExpectedAgentSha256 ([string] $Settings.expectedAgentSha256) `
+    -InstalledAgent ([string] $Settings.installedAgent) `
+    -AgentStateDirectory ([string] $Settings.agentStateDirectory) `
+    -CacheRoot ([string] $Settings.cacheRoot) `
+    -RuntimeRoot ([string] $Settings.runtimeRoot) `
+    -OwnerSid $EvidenceOwner
+$Settings.evidenceDirectory = $EvidenceAuthority.Root
 
 switch ($Scenario) {
     "unit" {
@@ -173,7 +262,10 @@ switch ($Scenario) {
         Push-Location $RepositoryRoot
         try {
             & mise exec -- go test -json `
+                ./internal/app `
+                ./internal/enroll `
                 ./internal/platform/windows `
+                ./internal/runner `
                 ./cmd/tewake `
                 ./cmd/tewake-agent `
                 ./packaging/windows 2>&1 |
@@ -188,8 +280,11 @@ switch ($Scenario) {
     }
     "service-preflight" {
         $Services = Get-ServiceEvidence
+        Assert-TewakePrivateAcl `
+            -Path $Settings.agentStateDirectory `
+            -OwnerSid $SystemSid `
+            -Directory
         foreach ($Path in @(
-            $Settings.agentStateDirectory,
             $Settings.cacheRoot,
             $Settings.runtimeRoot
         )) {
@@ -204,7 +299,90 @@ switch ($Scenario) {
             commitSha = $Head
             agentSha256 = $AgentHash
             bootTime = [string] (Get-CimInstance Win32_OperatingSystem).LastBootUpTime.ToUniversalTime().ToString("O")
+            ownership = [ordered]@{
+                installationId = [string] $InstallAuthority.InstallationId
+                installRole = [string] $InstallAuthority.Role
+                dataRole = [string] $DataAuthority.Role
+            }
             services = $Services
+        })
+    }
+    "dpapi-identity" {
+        $Services = Get-ServiceEvidence
+        $InteractiveSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+        if ($null -eq $InteractiveSid -or
+            $InteractiveSid.Value -ceq $SystemSid.Value) {
+            throw "DPAPI cross-identity evidence must run outside LocalSystem."
+        }
+        $Locator = Join-Path $Settings.agentStateDirectory "node-private-key.pem"
+        Assert-TewakePrivateAcl `
+            -Path $Locator `
+            -OwnerSid $SystemSid
+        $Envelope = [System.IO.File]::ReadAllBytes($Locator)
+        $Magic = [byte[]] @(
+            [byte] [char] "T",
+            [byte] [char] "W",
+            [byte] [char] "K",
+            [byte] [char] "D",
+            [byte] [char] "P",
+            [byte] [char] "A",
+            [byte] [char] "P",
+            [byte] [char] "I",
+            1
+        )
+        if ($Envelope.Length -le $Magic.Length) {
+            throw "The node-key locator is not a DPAPI envelope."
+        }
+        for ($Index = 0; $Index -lt $Magic.Length; $Index++) {
+            if ($Envelope[$Index] -ne $Magic[$Index]) {
+                throw "The node-key locator is not a DPAPI envelope."
+            }
+        }
+        $Ciphertext = [byte[]]::new($Envelope.Length - $Magic.Length)
+        [Array]::Copy(
+            $Envelope,
+            $Magic.Length,
+            $Ciphertext,
+            0,
+            $Ciphertext.Length
+        )
+        $Entropy = [System.Text.Encoding]::UTF8.GetBytes(
+            "tewake/private-material/windows/v1"
+        )
+        $Rejected = $false
+        $UnexpectedPlaintext = $null
+        try {
+            $UnexpectedPlaintext = [System.Security.Cryptography.ProtectedData]::Unprotect(
+                $Ciphertext,
+                $Entropy,
+                [System.Security.Cryptography.DataProtectionScope]::CurrentUser
+            )
+        }
+        catch [System.Security.Cryptography.CryptographicException] {
+            $Rejected = $true
+        }
+        finally {
+            if ($null -ne $UnexpectedPlaintext) {
+                [Array]::Clear(
+                    $UnexpectedPlaintext,
+                    0,
+                    $UnexpectedPlaintext.Length
+                )
+            }
+            [Array]::Clear($Ciphertext, 0, $Ciphertext.Length)
+            [Array]::Clear($Envelope, 0, $Envelope.Length)
+            [Array]::Clear($Entropy, 0, $Entropy.Length)
+        }
+        if (-not $Rejected) {
+            throw "A non-LocalSystem identity decrypted Agent DPAPI material."
+        }
+        Write-Evidence -Name "dpapi-identity.json" -Value ([ordered]@{
+            version = 1
+            scenario = "dpapi-identity"
+            interactiveSid = [string] $InteractiveSid.Value
+            agentServiceStartName = [string] $Services.agent.startName
+            locatorAclOwner = [string] $SystemSid.Value
+            crossIdentityRejected = $true
         })
     }
     "service-recovery" {

@@ -118,6 +118,43 @@ func TestSubmitBootstrapJoinTimesOutWithoutService(t *testing.T) {
 	}
 }
 
+func TestSubmitBootstrapJoinTimesOutWhenServiceDoesNotAck(t *testing.T) {
+	options := validBootstrapJoinOptions(t)
+	options.ConnectionTimeout = 100 * time.Millisecond
+	server := make(chan error, 1)
+	go func() {
+		request, err := receiveBootstrapRequest(context.Background(), false)
+		if err != nil {
+			server <- err
+			return
+		}
+		select {
+		case <-request.Disconnected():
+			server <- request.Complete(
+				"0123456789abcdef0123456789abcdef",
+				nil,
+			)
+		case <-time.After(5 * time.Second):
+			server <- errors.New("client did not disconnect after its deadline")
+		}
+	}()
+	if _, err := submitBootstrapJoin(
+		context.Background(),
+		options,
+		false,
+	); !errors.Is(err, ErrBootstrapUnavailable) {
+		t.Fatalf("missing bootstrap acknowledgement error = %v", err)
+	}
+	select {
+	case err := <-server:
+		if !errors.Is(err, ErrBootstrapUnavailable) {
+			t.Fatalf("server completion after disconnect = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not observe timed-out client")
+	}
+}
+
 func TestBootstrapJoinCannotReplayAfterOnePipeInstance(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
 	const nodeID = "abcdef0123456789abcdef0123456789"
@@ -179,6 +216,11 @@ func TestBootstrapRequestDetectsClientDisconnectBeforeAck(t *testing.T) {
 	case err := <-serverErr:
 		t.Fatal(err)
 	case request := <-server:
+		select {
+		case <-request.Disconnected():
+		case <-time.After(5 * time.Second):
+			t.Fatal("server did not observe client disconnect")
+		}
 		if err := request.Complete(
 			"0123456789abcdef0123456789abcdef",
 			nil,

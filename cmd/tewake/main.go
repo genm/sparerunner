@@ -167,7 +167,7 @@ func newJoinCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			fmt.Fprintf(command.OutOrStdout(), "Start it with: tewake-agent serve --state-dir %s\n", directory)
+			printPlatformJoinNextStep(command.OutOrStdout(), directory)
 			return nil
 		},
 	}

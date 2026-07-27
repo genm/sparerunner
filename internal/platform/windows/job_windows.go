@@ -12,6 +12,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -19,6 +20,7 @@ import (
 	"unsafe"
 
 	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/tewake/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -352,7 +354,17 @@ func (runtime *JobRuntime) Launch(
 	defer syswindows.CloseHandle(handle)
 
 	listener := filepath.Join(spec.Directory, "bin", "Runner.Listener.exe")
-	if !safeWindowsExecutable(listener) {
+	if !noReparseTree(spec.Directory) || !safeWindowsExecutable(listener) {
+		return 0, runner.ErrStartFailed
+	}
+	environment, err := disposableRunnerEnvironment(token, spec.Directory)
+	if err != nil {
+		return 0, runner.ErrStartFailed
+	}
+	defer clear(environment)
+	// Recheck after creating the disposable profile so a raced-in reparse
+	// point never reaches CreateProcessAsUser.
+	if !noReparseTree(spec.Directory) {
 		return 0, runner.ErrStartFailed
 	}
 	arguments := []string{listener, "run"}
@@ -373,11 +385,6 @@ func (runtime *JobRuntime) Launch(
 	if err != nil {
 		return 0, runner.ErrStartFailed
 	}
-	var environment *uint16
-	if err := syswindows.CreateEnvironmentBlock(&environment, token, false); err != nil {
-		return 0, runner.ErrStartFailed
-	}
-	defer syswindows.DestroyEnvironmentBlock(environment)
 	startup := syswindows.StartupInfo{
 		Cb:         uint32(unsafe.Sizeof(syswindows.StartupInfo{})),
 		Flags:      syswindows.STARTF_USESHOWWINDOW,
@@ -397,7 +404,7 @@ func (runtime *JobRuntime) Launch(
 		nil,
 		false,
 		flags,
-		environment,
+		&environment[0],
 		directory,
 		&startup,
 		&process,
@@ -421,6 +428,77 @@ func (runtime *JobRuntime) Launch(
 	}
 	resumed = true
 	return int(process.ProcessId), nil
+}
+
+func disposableRunnerEnvironment(
+	token syswindows.Token,
+	executionRoot string,
+) ([]uint16, error) {
+	home := filepath.Join(executionRoot, "_tewake-home")
+	temporary := filepath.Join(executionRoot, "_tewake-tmp")
+	appData := filepath.Join(home, "AppData", "Roaming")
+	localAppData := filepath.Join(home, "AppData", "Local")
+	for _, directory := range []string{home, temporary, appData, localAppData} {
+		if err := os.MkdirAll(directory, 0o700); err != nil {
+			return nil, runner.ErrStartFailed
+		}
+	}
+	environment, err := token.Environ(false)
+	if err != nil {
+		return nil, runner.ErrStartFailed
+	}
+	values := make(map[string]string, len(environment)+10)
+	names := make(map[string]string, len(environment)+10)
+	for _, entry := range environment {
+		index := strings.IndexByte(entry, '=')
+		if index <= 0 || strings.IndexByte(entry, 0) >= 0 {
+			continue
+		}
+		name := entry[:index]
+		key := strings.ToUpper(name)
+		names[key] = name
+		values[key] = entry[index+1:]
+	}
+	overrides := map[string]string{
+		"APPDATA":         appData,
+		"HOME":            home,
+		"LOCALAPPDATA":    localAppData,
+		"RUNNER_TEMP":     temporary,
+		"TEMP":            temporary,
+		"TMP":             temporary,
+		"USERPROFILE":     home,
+		"XDG_CACHE_HOME":  filepath.Join(home, ".cache"),
+		"XDG_CONFIG_HOME": filepath.Join(home, ".config"),
+	}
+	if volume := filepath.VolumeName(home); volume != "" {
+		overrides["HOMEDRIVE"] = volume
+		overrides["HOMEPATH"] = strings.TrimPrefix(home, volume)
+	}
+	for name, value := range overrides {
+		names[name] = name
+		values[name] = value
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	var block []uint16
+	for _, key := range keys {
+		entry, err := syswindows.UTF16FromString(names[key] + "=" + values[key])
+		if err != nil {
+			clear(block)
+			return nil, runner.ErrStartFailed
+		}
+		block = append(block, entry...)
+		clear(entry)
+	}
+	block = append(block, 0)
+	if len(block) < 2 {
+		clear(block)
+		return nil, runner.ErrStartFailed
+	}
+	return block, nil
 }
 
 func (runtime *JobRuntime) TerminateAndWait(
@@ -812,13 +890,16 @@ func lockFileFence(
 	runtimeRoot string,
 	ref runner.ContainmentRef,
 ) (*diskFence, error) {
-	directory := filepath.Join(runtimeRoot, ".tewake-fences", ref.OwnerID)
-	if err := os.MkdirAll(directory, 0o700); err != nil ||
-		!safeWindowsDirectory(directory) {
+	fenceRoot := filepath.Join(runtimeRoot, ".tewake-fences")
+	if err := ensurePrivateFenceDirectory(fenceRoot); err != nil {
+		return nil, runner.ErrCleanupFailed
+	}
+	directory := filepath.Join(fenceRoot, ref.OwnerID)
+	if err := ensurePrivateFenceDirectory(directory); err != nil {
 		return nil, runner.ErrCleanupFailed
 	}
 	path := filepath.Join(directory, ref.FenceToken+".fence")
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	file, err := openPrivateFenceFile(path)
 	if err != nil {
 		return nil, runner.ErrCleanupFailed
 	}
@@ -870,6 +951,64 @@ func lockFileFence(
 		fence.state = state
 	}
 	return fence, nil
+}
+
+func ensurePrivateFenceDirectory(path string) error {
+	if err := os.Mkdir(path, 0o700); err == nil {
+		if err := winacl.SecureEmptyPrivateDirectory(path); err != nil {
+			_ = os.Remove(path)
+			return err
+		}
+		return nil
+	} else if !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return winacl.ValidatePrivateDirectory(path)
+}
+
+func openPrivateFenceFile(path string) (*os.File, error) {
+	pointer, err := syswindows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	handle, err := syswindows.CreateFile(
+		pointer,
+		syswindows.GENERIC_READ|syswindows.GENERIC_WRITE,
+		syswindows.FILE_SHARE_READ|syswindows.FILE_SHARE_WRITE|syswindows.FILE_SHARE_DELETE,
+		nil,
+		syswindows.CREATE_NEW,
+		syswindows.FILE_ATTRIBUTE_NORMAL|syswindows.FILE_FLAG_WRITE_THROUGH,
+		0,
+	)
+	if err == nil {
+		file := os.NewFile(uintptr(handle), path)
+		if file == nil {
+			syswindows.CloseHandle(handle)
+			return nil, runner.ErrCleanupFailed
+		}
+		if err := winacl.SecurePrivateFile(path); err != nil {
+			_ = file.Close()
+			_ = os.Remove(path)
+			return nil, err
+		}
+		return file, nil
+	}
+	if !errors.Is(err, syswindows.ERROR_FILE_EXISTS) &&
+		!errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
+		return nil, err
+	}
+	if err := winacl.ValidatePrivateFile(path); err != nil {
+		return nil, err
+	}
+	file, openErr := os.OpenFile(path, os.O_RDWR, 0)
+	if openErr != nil {
+		return nil, openErr
+	}
+	if err := winacl.ValidatePrivateFile(path); err != nil {
+		_ = file.Close()
+		return nil, err
+	}
+	return file, nil
 }
 
 func (fence *diskFence) Revoked() (bool, error) {
@@ -1014,21 +1153,6 @@ func removeFinalizedFence(
 		return runner.ErrCleanupFailed
 	}
 	return nil
-}
-
-func safeWindowsDirectory(path string) bool {
-	pointer, err := syswindows.UTF16PtrFromString(path)
-	if err != nil {
-		return false
-	}
-	attributes, err := syswindows.GetFileAttributes(pointer)
-	if err != nil ||
-		attributes&syswindows.FILE_ATTRIBUTE_DIRECTORY == 0 ||
-		attributes&syswindows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return false
-	}
-	info, err := os.Lstat(path)
-	return err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0
 }
 
 var _ Runtime = (*JobRuntime)(nil)

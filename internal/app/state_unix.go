@@ -18,3 +18,10 @@ func privateStateDirectoryPlatform(_ string, info os.FileInfo) error {
 	}
 	return nil
 }
+
+func initializePrivateStateDirectoryPlatform(
+	path string,
+	info os.FileInfo,
+) error {
+	return privateStateDirectoryPlatform(path, info)
+}

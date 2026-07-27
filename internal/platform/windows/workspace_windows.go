@@ -167,7 +167,7 @@ func (workspace *OSWorkspace) observePath(path string) (runner.WorkspaceRef, err
 		workspace.runnerSID,
 		workspace.allowedSIDs(),
 		"",
-		false,
+		true,
 	); err != nil {
 		return runner.WorkspaceRef{}, runner.ErrStrongOwnershipUnavailable
 	}
@@ -299,7 +299,7 @@ func validateProtectedHandle(
 	expectedOwner string,
 	allowed map[string]struct{},
 	readOnlySID string,
-	_ bool,
+	directory bool,
 ) error {
 	descriptor, err := syswindows.GetSecurityInfo(
 		handle,
@@ -336,6 +336,14 @@ func validateProtectedHandle(
 		if ace.Header.AceType != syswindows.ACCESS_ALLOWED_ACE_TYPE {
 			return runner.ErrStrongOwnershipUnavailable
 		}
+		expectedFlags := byte(0)
+		if directory {
+			expectedFlags = syswindows.OBJECT_INHERIT_ACE |
+				syswindows.CONTAINER_INHERIT_ACE
+		}
+		if ace.Header.AceFlags != expectedFlags {
+			return runner.ErrStrongOwnershipUnavailable
+		}
 		sid := (*syswindows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid == nil || !sid.IsValid() {
 			return runner.ErrStrongOwnershipUnavailable
@@ -352,12 +360,10 @@ func validateProtectedHandle(
 			seenOwner = true
 		}
 		if readOnlySID != "" && strings.EqualFold(sidText, readOnlySID) {
-			if ace.Mask&runnerRootWriteMask != 0 ||
-				ace.Mask&syswindows.FILE_GENERIC_READ != syswindows.FILE_GENERIC_READ ||
-				ace.Mask&syswindows.FILE_GENERIC_EXECUTE != syswindows.FILE_GENERIC_EXECUTE {
+			if ace.Mask != runnerRootReadExecuteMask {
 				return runner.ErrStrongOwnershipUnavailable
 			}
-		} else if ace.Mask&windowsFileFullControl != windowsFileFullControl {
+		} else if ace.Mask != windowsFileFullControl {
 			return runner.ErrStrongOwnershipUnavailable
 		}
 	}
@@ -369,16 +375,8 @@ func validateProtectedHandle(
 
 const windowsFileFullControl = 0x001f01ff
 
-const runnerRootWriteMask = syswindows.FILE_WRITE_DATA |
-	syswindows.FILE_APPEND_DATA |
-	syswindows.FILE_WRITE_EA |
-	syswindows.FILE_WRITE_ATTRIBUTES |
-	fileDeleteChild |
-	syswindows.DELETE |
-	syswindows.WRITE_DAC |
-	syswindows.WRITE_OWNER
-
-const fileDeleteChild = 0x00000040
+const runnerRootReadExecuteMask = syswindows.FILE_GENERIC_READ |
+	syswindows.FILE_GENERIC_EXECUTE
 
 func noReparseComponents(path string) bool {
 	clean := filepath.Clean(path)

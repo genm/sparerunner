@@ -91,6 +91,18 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 		_ = os.RemoveAll(staging)
 		return "", err
 	}
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return "", err
+	}
+	if err := initializePrivateStateDirectoryPlatform(
+		staging,
+		stagingInfo,
+	); err != nil {
+		_ = os.RemoveAll(staging)
+		return "", err
+	}
 	published := false
 	privateMaterial := []string{
 		filepath.Join(staging, controllerIdentityFile),
@@ -180,6 +192,9 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 	directory, err := absoluteStateDirectory(directory)
 	if err != nil {
 		return nil, err
+	}
+	if err := validatePrivateStateDirectory(directory); err != nil {
+		return nil, fmt.Errorf("%w: controller state directory: %v", ErrNotInitialized, err)
 	}
 	identity, err := enroll.LoadControllerIdentity(filepath.Join(directory, controllerIdentityFile))
 	if err != nil {
@@ -324,6 +339,9 @@ func OpenAgent(ctx context.Context, directory string) (*AgentState, error) {
 	directory, err := absoluteStateDirectory(directory)
 	if err != nil {
 		return nil, err
+	}
+	if err := validatePrivateStateDirectory(directory); err != nil {
+		return nil, fmt.Errorf("%w: agent state directory: %v", ErrNotInitialized, err)
 	}
 	key, err := enroll.LoadNodePrivateKey(filepath.Join(directory, agentKeyFile))
 	if err != nil {
@@ -488,15 +506,35 @@ func absoluteStateDirectory(directory string) (string, error) {
 
 func ensurePrivateStateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
+	created := false
 	if errors.Is(err, os.ErrNotExist) {
 		if err := os.MkdirAll(directory, 0o700); err != nil {
 			return err
 		}
+		created = true
 		info, err = os.Lstat(directory)
 	}
 	if err != nil {
 		return err
 	}
+	if created {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("state directory is unsafe")
+		}
+		return initializePrivateStateDirectoryPlatform(directory, info)
+	}
+	return validatePrivateStateDirectoryInfo(directory, info)
+}
+
+func validatePrivateStateDirectory(directory string) error {
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	return validatePrivateStateDirectoryInfo(directory, info)
+}
+
+func validatePrivateStateDirectoryInfo(directory string, info os.FileInfo) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("state directory is unsafe")
 	}
@@ -535,15 +573,6 @@ func requireJSONEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
 
 var timeNow = time.Now
