@@ -20,6 +20,12 @@ type ExecutionLifecycleCommit struct {
 	CleanupTombstone *CleanupTombstone
 	MessageID        string
 	Update           ExecutionUpdateRecord
+	// Target attributes this execution to the GitHub scope that produced it. It
+	// travels in the same transaction as the observation so a crash can never
+	// leave a locally visible execution whose owner-facing scope is unknown
+	// while its observation already exists. It is set only by the commands that
+	// carry target identity; a nil value leaves any existing attribution intact.
+	Target *ExecutionTarget
 }
 
 func (commit ExecutionLifecycleCommit) validate() error {
@@ -50,6 +56,14 @@ func (commit ExecutionLifecycleCommit) validate() error {
 		}
 		if commit.CleanupTombstone.ExecutionID != commit.Update.ExecutionID {
 			return errors.New("cleanup tombstone execution identity does not match lifecycle update")
+		}
+	}
+	if commit.Target != nil {
+		if err := commit.Target.validate(); err != nil {
+			return err
+		}
+		if commit.Target.ExecutionID != commit.Update.ExecutionID {
+			return errors.New("execution target identity does not match lifecycle update")
 		}
 	}
 	return nil
@@ -149,6 +163,23 @@ func applyExecutionLifecycle(
 		found,
 	); err != nil {
 		return PendingExecutionUpdate{}, false, err
+	}
+	if commit.Target != nil {
+		// Attribution is immutable for the life of one execution: the first
+		// command that carried it wins, so a later replay cannot silently
+		// re-attribute work already shown to the owner.
+		if _, err := tx.ExecContext(
+			ctx,
+			`INSERT INTO execution_targets (execution_id, target_id, scope, scope_kind)
+			 VALUES (?, ?, ?, ?)
+			 ON CONFLICT(execution_id) DO NOTHING`,
+			string(commit.Target.ExecutionID),
+			string(commit.Target.TargetID),
+			commit.Target.Scope,
+			string(commit.Target.ScopeKind),
+		); err != nil {
+			return PendingExecutionUpdate{}, false, err
+		}
 	}
 	if commit.CleanupTombstone != nil {
 		if _, err := recordCleanupTombstoneTx(

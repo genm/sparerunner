@@ -16,6 +16,13 @@ import (
 
 var errAgentCommandExpectedState = errors.New("agent command expected state mismatch")
 
+// errTargetExcluded is the node owner's own refusal, classified as
+// target_excluded. It is deliberately an execution failure rather than a
+// transport rejection: a rejected command would be redelivered forever, while a
+// durable classified failure releases the Controller slot and lets GitHub
+// reassign the job to a node whose owner still serves that Target.
+var errTargetExcluded = errors.New("agent target is excluded by the node owner")
+
 type runnerLifecycle interface {
 	Ready(context.Context) error
 	EnsurePrepared(context.Context, runner.Preparation) (runner.Snapshot, error)
@@ -187,7 +194,7 @@ func (runtime *AgentCommandRuntime) recoverStartup(ctx context.Context) error {
 		if _, err := runtime.persistLifecycleUpdate(ctx, runner.Snapshot{
 			ExecutionID: string(executionID),
 			State:       runner.StateFailed,
-		}, update); err != nil {
+		}, update, nil); err != nil {
 			return err
 		}
 	}
@@ -246,7 +253,7 @@ func (runtime *AgentCommandRuntime) recoverStartup(ctx context.Context) error {
 			return runner.ErrReconciliationRequired
 		}
 		if !pendingContainsRecoveryUpdate(pendingByExecution[executionID], update) {
-			if _, err := runtime.persistLifecycleUpdate(ctx, snapshot, update); err != nil {
+			if _, err := runtime.persistLifecycleUpdate(ctx, snapshot, update, nil); err != nil {
 				return err
 			}
 		}
@@ -527,6 +534,19 @@ func (accepted *acceptedAgentCommand) Execute(ctx context.Context) (transport.Ex
 	switch accepted.message {
 	case transport.MessagePrepare:
 		metadata = accepted.prepare.Metadata()
+		// Admission-time refusal is the cheap half of the backstop: it avoids
+		// materializing a runner package for a Target this owner does not serve.
+		// It is not the authoritative check — the start path re-reads the durable
+		// set even when this one passed, because an owner may exclude a Target in
+		// the window between prepare and start.
+		if runErr = accepted.runtime.requireTargetAdmitted(ctx, metadata.Target); runErr != nil {
+			// Nothing was prepared, so there is no root or process to clean.
+			snapshot = runner.Snapshot{
+				ExecutionID: string(metadata.ExecutionID),
+				State:       runner.StateFailed,
+			}
+			break
+		}
 		snapshot, runErr = accepted.runtime.manager.EnsurePrepared(ctx, runner.Preparation{
 			ExecutionID:   string(metadata.ExecutionID),
 			Package:       accepted.runtime.pkg,
@@ -534,6 +554,23 @@ func (accepted *acceptedAgentCommand) Execute(ctx context.Context) (transport.Ex
 		})
 	case transport.MessageStart:
 		metadata = accepted.start.Metadata()
+		// The exec boundary. This is the last agent-owned decision point before
+		// the one-shot JIT crosses into the runner, and it reads the durable
+		// exclusion set fresh rather than any copy captured at accept time, so a
+		// stale controller dispatch for a since-excluded Target is refused even
+		// when the controller's adopted view has not caught up.
+		if admitErr := accepted.runtime.requireTargetAdmitted(ctx, metadata.Target); admitErr != nil {
+			// The JIT value is destroyed rather than delivered: no process may
+			// start for a Target this computer's owner has withdrawn.
+			accepted.start.Discard()
+			runErr = admitErr
+			var cleanupDegraded bool
+			snapshot, cleanupDegraded = accepted.runtime.cleanupAfterFailedStart(ctx, metadata.ExecutionID)
+			if cleanupDegraded {
+				runErr = runner.ErrQuarantined
+			}
+			break
+		}
 		snapshot, runErr = accepted.runtime.manager.EnsureRunning(ctx, runner.Start{
 			Preparation: runner.Preparation{
 				ExecutionID:   string(metadata.ExecutionID),
@@ -594,7 +631,8 @@ func (accepted *acceptedAgentCommand) Execute(ctx context.Context) (transport.Ex
 	if accepted.message == transport.MessageStart && snapshot.State == runner.StateRunning && runErr == nil {
 		accepted.runtime.startCompletionMonitor(metadata, accepted.replayed)
 	}
-	persisted, err := accepted.runtime.persistLifecycleUpdate(ctx, snapshot, update)
+	persisted, err := accepted.runtime.persistLifecycleUpdate(
+		ctx, snapshot, update, executionTargetFor(accepted.message, metadata))
 	if err != nil {
 		accepted.runtime.failMonitor()
 		update.ErrorCode = transport.ExecutionErrorJournal
@@ -602,6 +640,50 @@ func (accepted *acceptedAgentCommand) Execute(ctx context.Context) (transport.Ex
 	}
 	update = persisted
 	return update, runErr
+}
+
+// requireTargetAdmitted reads the durable exclusion set and refuses work for a
+// Target the node owner has withdrawn. An unreadable store is refused too: the
+// agent cannot prove admission, and inventing one would let a node serve a
+// Target its owner already excluded.
+func (runtime *AgentCommandRuntime) requireTargetAdmitted(
+	ctx context.Context,
+	target transport.CommandTarget,
+) error {
+	if target.Validate() != nil {
+		// Decode already rejects a command without usable target identity, so
+		// this is defense in depth rather than a reachable path. Without the
+		// enforcement key there is nothing to check against, so it fails closed.
+		return errTargetExcluded
+	}
+	excluded, err := runtime.store.ListExclusions(ctx)
+	if err != nil {
+		return runner.ErrJournal
+	}
+	for _, targetID := range excluded {
+		if targetID == target.TargetID {
+			return errTargetExcluded
+		}
+	}
+	return nil
+}
+
+func executionTargetFor(
+	message transport.MessageType,
+	metadata transport.CommandMetadata,
+) *store.ExecutionTarget {
+	if message != transport.MessagePrepare && message != transport.MessageStart {
+		return nil
+	}
+	if metadata.Target.Validate() != nil {
+		return nil
+	}
+	return &store.ExecutionTarget{
+		ExecutionID: metadata.ExecutionID,
+		TargetID:    metadata.Target.TargetID,
+		Scope:       metadata.Target.Scope,
+		ScopeKind:   metadata.Target.ScopeKind,
+	}
 }
 
 func (runtime *AgentCommandRuntime) cleanupAfterFailedStart(
@@ -749,10 +831,15 @@ func (runtime *AgentCommandRuntime) validateExpectedState(ctx context.Context, m
 	}
 }
 
+// persistLifecycleUpdate commits the observation, optional cleanup tombstone,
+// optional target attribution, and outbox row in one transaction. target is nil
+// for every path that does not carry command target identity (recovery, cancel,
+// completion monitoring); attribution recorded by an earlier command survives.
 func (runtime *AgentCommandRuntime) persistLifecycleUpdate(
 	ctx context.Context,
 	snapshot runner.Snapshot,
 	update transport.ExecutionUpdate,
+	target *store.ExecutionTarget,
 ) (transport.ExecutionUpdate, error) {
 	if snapshot.ExecutionID == "" || domain.ExecutionID(snapshot.ExecutionID) != update.ExecutionID {
 		return update, runner.ErrJournal
@@ -771,6 +858,7 @@ func (runtime *AgentCommandRuntime) persistLifecycleUpdate(
 		},
 		MessageID: messageID,
 		Update:    storeExecutionUpdate(update),
+		Target:    target,
 	}
 	if snapshot.State == runner.StateCleanupFailed ||
 		update.State == domain.ExecutionCleanupFailed ||
@@ -895,7 +983,7 @@ func (runtime *AgentCommandRuntime) monitorCompletion(ctx context.Context, metad
 				update.ErrorCode = transport.ExecutionErrorReconciliation
 			}
 		}
-		if _, err := runtime.persistLifecycleUpdate(ctx, observed, update); err != nil {
+		if _, err := runtime.persistLifecycleUpdate(ctx, observed, update, nil); err != nil {
 			runtime.failMonitor()
 		}
 		return
@@ -919,7 +1007,7 @@ func (runtime *AgentCommandRuntime) monitorCompletion(ctx context.Context, metad
 		Replayed:    replayed,
 		ErrorCode:   classifyRunnerError(destroyErr),
 	}
-	if _, err := runtime.persistLifecycleUpdate(ctx, terminal, update); err != nil {
+	if _, err := runtime.persistLifecycleUpdate(ctx, terminal, update, nil); err != nil {
 		runtime.failMonitor()
 	}
 }
@@ -1017,6 +1105,8 @@ func classifyRunnerError(err error) transport.ExecutionErrorCode {
 		return transport.ExecutionErrorCleanup
 	case errors.Is(err, runner.ErrStrongOwnershipUnavailable), errors.Is(err, runner.ErrUnsupportedPlatform):
 		return transport.ExecutionErrorPlatform
+	case errors.Is(err, errTargetExcluded):
+		return transport.ExecutionErrorTargetExcluded
 	case errors.Is(err, runner.ErrJournal):
 		return transport.ExecutionErrorJournal
 	default:

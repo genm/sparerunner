@@ -146,6 +146,13 @@ func runLiveAcceptance(
 		return result, err
 	}
 	targetID := stableTargetID(config, *scaleSet)
+	// Commands carry the target's scope so a node owner's desktop surface can
+	// name the repository a running job belongs to. The live rig is always
+	// repository-scoped, and its config URL is already validated as such.
+	targetScope, err := repositoryFromConfigURL(config.GitHub.ConfigURL)
+	if err != nil {
+		return result, err
+	}
 	result.TargetID = string(targetID)
 	result.ScaleSetID = int(scaleSet.ID)
 
@@ -269,6 +276,8 @@ func runLiveAcceptance(
 		app.ControllerRunnerConfig{
 			ScaleSetID:      scaleSet.ID,
 			TargetID:        targetID,
+			Scope:           targetScope,
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: runnerProfileID,
 			VersionPolicy:   versionPolicy,
 			NodeID:          domain.NodeID(config.NodeID),

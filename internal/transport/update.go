@@ -21,6 +21,7 @@ const (
 	ExecutionErrorPlatform        = domain.ExecutionErrorPlatform
 	ExecutionErrorJournal         = domain.ExecutionErrorJournal
 	ExecutionErrorCommandRejected = domain.ExecutionErrorCommandRejected
+	ExecutionErrorTargetExcluded  = domain.ExecutionErrorTargetExcluded
 )
 
 // ExecutionUpdate is safe to persist and log. It contains only classified state;

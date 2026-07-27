@@ -15,13 +15,19 @@ const (
 	ExecutionErrorPlatform        ExecutionErrorCode = "platform_unavailable"
 	ExecutionErrorJournal         ExecutionErrorCode = "journal_failed"
 	ExecutionErrorCommandRejected ExecutionErrorCode = "command_rejected"
+	// ExecutionErrorTargetExcluded is the node owner's own refusal. The agent
+	// re-reads its durable per-Target exclusion set at the exec boundary, so a
+	// stale controller dispatch is refused as a classified execution failure
+	// rather than as a transport rejection that would redeliver forever.
+	ExecutionErrorTargetExcluded ExecutionErrorCode = "target_excluded"
 )
 
 func (code ExecutionErrorCode) Validate(field string) error {
 	switch code {
 	case ExecutionErrorNone, ExecutionErrorConflict, ExecutionErrorReconciliation,
 		ExecutionErrorQuarantined, ExecutionErrorCleanup, ExecutionErrorStart,
-		ExecutionErrorPlatform, ExecutionErrorJournal, ExecutionErrorCommandRejected:
+		ExecutionErrorPlatform, ExecutionErrorJournal, ExecutionErrorCommandRejected,
+		ExecutionErrorTargetExcluded:
 		return nil
 	default:
 		return invalid("invalid_execution_error_code", field, "is not a known execution error code")

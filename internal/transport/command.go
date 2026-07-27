@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/genm/tewake/internal/domain"
@@ -27,6 +28,38 @@ type CommandMetadata struct {
 	ControllerEpoch domain.ControllerEpoch
 	ExecutionID     domain.ExecutionID
 	ExpectedState   domain.ExecutionState
+	// Target rides prepare and start so the Agent can enforce its owner's
+	// per-Target exclusion set without asking the Controller, and so desktop
+	// surfaces can name the org/repo a running job belongs to. Cancel carries no
+	// target: teardown of work this node already owns is never target-gated.
+	Target CommandTarget
+}
+
+// CommandTarget is the GitHub Target identity attached to a command. TargetID
+// is the enforcement key the Agent's exec-boundary exclusion check compares
+// against; Scope and ScopeKind are display data only and are validated for
+// shape rather than for agreement with any controller-side record.
+type CommandTarget struct {
+	TargetID  domain.TargetID
+	Scope     string
+	ScopeKind domain.TargetScopeKind
+}
+
+func (target CommandTarget) Validate() error {
+	// The identity key fails closed: a command without a usable targetId cannot
+	// be checked against the exclusion set, so it is never admitted.
+	if target.TargetID.ValidateShape("command.target_id") != nil {
+		return ErrInvalidCommand
+	}
+	switch target.ScopeKind {
+	case domain.TargetRepository, domain.TargetOrganization:
+	default:
+		return ErrInvalidCommand
+	}
+	if strings.TrimSpace(target.Scope) == "" {
+		return ErrInvalidCommand
+	}
+	return nil
 }
 
 func (metadata CommandMetadata) replayIdentity(kind MessageType, payload []byte) domain.Command {
@@ -63,6 +96,7 @@ type PrepareCommand struct {
 }
 
 func (command PrepareCommand) Metadata() CommandMetadata { return command.metadata }
+func (command PrepareCommand) Target() CommandTarget     { return command.metadata.Target }
 func (command PrepareCommand) RunnerVersion() string     { return command.runnerVersion }
 func (command PrepareCommand) DisableUpdate() bool       { return command.disableUpdate }
 func (command PrepareCommand) ReplayIdentity(payload []byte) domain.Command {
@@ -74,6 +108,9 @@ type prepareCommandWire struct {
 	ControllerEpoch domain.ControllerEpoch `json:"controllerEpoch"`
 	ExecutionID     domain.ExecutionID     `json:"executionId"`
 	ExpectedState   domain.ExecutionState  `json:"expectedState"`
+	TargetID        domain.TargetID        `json:"targetId"`
+	Scope           string                 `json:"scope"`
+	ScopeKind       domain.TargetScopeKind `json:"scopeKind"`
 	RunnerVersion   string                 `json:"runnerVersion"`
 	DisableUpdate   bool                   `json:"disableUpdate"`
 }
@@ -84,6 +121,9 @@ func EncodePrepareCommandPayload(metadata CommandMetadata, runnerVersion string,
 		ControllerEpoch: metadata.ControllerEpoch,
 		ExecutionID:     metadata.ExecutionID,
 		ExpectedState:   metadata.ExpectedState,
+		TargetID:        metadata.Target.TargetID,
+		Scope:           metadata.Target.Scope,
+		ScopeKind:       metadata.Target.ScopeKind,
 		RunnerVersion:   runnerVersion,
 		DisableUpdate:   disableUpdate,
 	}
@@ -103,26 +143,33 @@ func DecodePrepareCommand(payload []byte) (PrepareCommand, error) {
 		return PrepareCommand{}, ErrInvalidCommand
 	}
 	return PrepareCommand{
-		metadata: CommandMetadata{
-			CommandID:       wire.CommandID,
-			ControllerEpoch: wire.ControllerEpoch,
-			ExecutionID:     wire.ExecutionID,
-			ExpectedState:   wire.ExpectedState,
-		},
+		metadata:      prepareWireMetadata(wire),
 		runnerVersion: wire.RunnerVersion,
 		disableUpdate: wire.DisableUpdate,
 	}, nil
 }
 
-func validatePrepareWire(wire prepareCommandWire) error {
-	metadata := CommandMetadata{
+func prepareWireMetadata(wire prepareCommandWire) CommandMetadata {
+	return CommandMetadata{
 		CommandID:       wire.CommandID,
 		ControllerEpoch: wire.ControllerEpoch,
 		ExecutionID:     wire.ExecutionID,
 		ExpectedState:   wire.ExpectedState,
+		Target: CommandTarget{
+			TargetID:  wire.TargetID,
+			Scope:     wire.Scope,
+			ScopeKind: wire.ScopeKind,
+		},
 	}
+}
+
+func validatePrepareWire(wire prepareCommandWire) error {
+	metadata := prepareWireMetadata(wire)
 	if wire.RunnerVersion != runner.OfficialRunnerVersion || metadata.ExpectedState != domain.ExecutionReserved {
 		return ErrInvalidCommand
+	}
+	if err := metadata.Target.Validate(); err != nil {
+		return err
 	}
 	return metadata.replayIdentity(MessagePrepare, []byte(`{}`)).Validate()
 }
@@ -144,6 +191,7 @@ type commandSecret struct {
 }
 
 func (command StartCommand) Metadata() CommandMetadata { return command.metadata }
+func (command StartCommand) Target() CommandTarget     { return command.metadata.Target }
 func (command StartCommand) RunnerVersion() string     { return command.runnerVersion }
 func (command StartCommand) DisableUpdate() bool       { return command.disableUpdate }
 func (command StartCommand) ReplayIdentity(payload []byte) domain.Command {
@@ -204,6 +252,9 @@ type startCommandWire struct {
 	ControllerEpoch domain.ControllerEpoch `json:"controllerEpoch"`
 	ExecutionID     domain.ExecutionID     `json:"executionId"`
 	ExpectedState   domain.ExecutionState  `json:"expectedState"`
+	TargetID        domain.TargetID        `json:"targetId"`
+	Scope           string                 `json:"scope"`
+	ScopeKind       domain.TargetScopeKind `json:"scopeKind"`
 	RunnerVersion   string                 `json:"runnerVersion"`
 	DisableUpdate   bool                   `json:"disableUpdate"`
 	JITConfig       string                 `json:"jitConfig"`
@@ -218,6 +269,9 @@ func EncodeStartCommandPayload(metadata CommandMetadata, runnerVersion string, d
 		ControllerEpoch: metadata.ControllerEpoch,
 		ExecutionID:     metadata.ExecutionID,
 		ExpectedState:   metadata.ExpectedState,
+		TargetID:        metadata.Target.TargetID,
+		Scope:           metadata.Target.Scope,
+		ScopeKind:       metadata.Target.ScopeKind,
 		RunnerVersion:   runnerVersion,
 		DisableUpdate:   disableUpdate,
 		JITConfig:       jitConfig,
@@ -239,27 +293,34 @@ func DecodeStartCommand(payload []byte) (StartCommand, error) {
 	}
 	digest := sha256.Sum256([]byte(wire.JITConfig))
 	return StartCommand{
-		metadata: CommandMetadata{
-			CommandID:       wire.CommandID,
-			ControllerEpoch: wire.ControllerEpoch,
-			ExecutionID:     wire.ExecutionID,
-			ExpectedState:   wire.ExpectedState,
-		},
+		metadata:      startWireMetadata(wire),
 		runnerVersion: wire.RunnerVersion,
 		disableUpdate: wire.DisableUpdate,
 		secret:        &commandSecret{value: wire.JITConfig, digest: hex.EncodeToString(digest[:])},
 	}, nil
 }
 
-func validateStartWire(wire startCommandWire) error {
-	metadata := CommandMetadata{
+func startWireMetadata(wire startCommandWire) CommandMetadata {
+	return CommandMetadata{
 		CommandID:       wire.CommandID,
 		ControllerEpoch: wire.ControllerEpoch,
 		ExecutionID:     wire.ExecutionID,
 		ExpectedState:   wire.ExpectedState,
+		Target: CommandTarget{
+			TargetID:  wire.TargetID,
+			Scope:     wire.Scope,
+			ScopeKind: wire.ScopeKind,
+		},
 	}
+}
+
+func validateStartWire(wire startCommandWire) error {
+	metadata := startWireMetadata(wire)
 	if wire.JITConfig == "" || wire.RunnerVersion != runner.OfficialRunnerVersion || metadata.ExpectedState != domain.ExecutionPreparing {
 		return ErrInvalidCommand
+	}
+	if err := metadata.Target.Validate(); err != nil {
+		return err
 	}
 	return metadata.replayIdentity(MessageStart, []byte(`{}`)).Validate()
 }

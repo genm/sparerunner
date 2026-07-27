@@ -305,9 +305,11 @@ func runAgentSessionWithOptions(
 	}
 	nativeReady := probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout)
 	intent := domain.AvailabilityAccepting
+	var excludedTargets []domain.TargetID
 	if options.availability != nil {
 		options.availability.setNativeReady(nativeReady)
 		intent = options.availability.Intent()
+		excludedTargets = options.availability.ExcludedTargets()
 	}
 	snapshot, err := buildAgentSnapshot(
 		ctx,
@@ -318,6 +320,7 @@ func runAgentSessionWithOptions(
 		// runtime is perfectly healthy.
 		nativeReady && intent.Accepts(),
 		intent,
+		excludedTargets,
 	)
 	if err != nil {
 		return ErrAgentRuntimeDegraded
@@ -347,6 +350,7 @@ func buildAgentSnapshot(
 	runnerVersion string,
 	nativeRunnerReady bool,
 	availabilityIntent domain.AvailabilityIntent,
+	excludedTargets []domain.TargetID,
 ) (transport.AgentSnapshot, error) {
 	if state == nil || state.Store == nil || state.NodeID == "" ||
 		runnerVersion == "" {
@@ -361,6 +365,10 @@ func buildAgentSnapshot(
 		RunnerVersion:      runnerVersion,
 		NativeRunnerReady:  nativeRunnerReady,
 		AvailabilityIntent: availabilityIntent,
+		// The owner's exclusion set travels on every snapshot so the controller
+		// adopts it in the same transaction that records the snapshot, before
+		// any capacity is advertised after a reconnect.
+		ExcludedTargets:    excludedTargets,
 		MaxControllerEpoch: journal.MaxControllerEpoch,
 		Commands:           journal.Commands,
 	}
@@ -489,14 +497,19 @@ func runAgentSessionActor(
 				options.readinessTimeout,
 			)
 			heartbeatIntent := domain.AvailabilityAccepting
+			var heartbeatExcluded []domain.TargetID
 			if options.availability != nil {
 				options.availability.setNativeReady(heartbeatNativeReady)
 				heartbeatIntent = options.availability.Intent()
+				heartbeatExcluded = options.availability.ExcludedTargets()
 			}
 			payload, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
 				NodeID:             nodeID,
 				NativeRunnerReady:  heartbeatNativeReady && heartbeatIntent.Accepts(),
 				AvailabilityIntent: heartbeatIntent,
+				// An exclusion made while connected reaches the controller at
+				// heartbeat cadence rather than waiting for the next reconnect.
+				ExcludedTargets: heartbeatExcluded,
 			})
 			if err != nil {
 				return errors.New("agent heartbeat is invalid")

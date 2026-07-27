@@ -3,6 +3,8 @@ package nodectl
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/genm/tewake/internal/domain"
 )
 
 // Client is the desktop-side half of the contract. Every surface (CLI, tray,
@@ -15,24 +17,53 @@ type Client struct {
 }
 
 func (client Client) Status() (Status, error) {
-	return client.call(OperationStatus)
+	return client.call(OperationStatus, "")
 }
 
 func (client Client) Pause() (Status, error) {
-	return client.call(OperationPause)
+	return client.call(OperationPause, "")
 }
 
 func (client Client) Resume() (Status, error) {
-	return client.call(OperationResume)
+	return client.call(OperationResume, "")
 }
 
-func (client Client) call(operation Operation) (Status, error) {
+// Targets reads the same status document as Status. It is a separate method so
+// a caller's intent is explicit at the call site.
+func (client Client) Targets() (Status, error) {
+	return client.call(OperationTargets, "")
+}
+
+// Exclude withdraws one GitHub Target from this computer. It is subtractive, so
+// it is effective the instant the agent records it durably.
+func (client Client) Exclude(targetID domain.TargetID) (Status, error) {
+	return client.call(OperationExclude, targetID)
+}
+
+// Include re-allows one GitHub Target. It is additive, so it stays pending in
+// the returned document until the controller echoes its adoption.
+func (client Client) Include(targetID domain.TargetID) (Status, error) {
+	return client.call(OperationInclude, targetID)
+}
+
+func (client Client) call(operation Operation, targetID domain.TargetID) (Status, error) {
 	source := client.Source
 	if source == "" {
 		source = SourceCLI
 	}
 	if err := source.Validate(); err != nil {
 		return Status{}, &Error{Class: ErrorClassInvalidRequest, Message: err.Error()}
+	}
+	request := Request{
+		ProtocolVersion: ProtocolVersion,
+		Operation:       operation,
+		Source:          source,
+		TargetID:        targetID,
+	}
+	// Validating before dialing keeps a malformed identifier from ever leaving
+	// this process and gives the caller the same class the server would.
+	if err := request.Validate(); err != nil {
+		return Status{}, &Error{Class: errorClassFor(err), Message: err.Error()}
 	}
 	path, err := EndpointPath(client.StateDirectory)
 	if err != nil {
@@ -49,11 +80,7 @@ func (client Client) call(operation Operation) (Status, error) {
 	}
 	_ = connection.SetDeadline(time.Now().Add(timeout))
 
-	payload, err := json.Marshal(Request{
-		ProtocolVersion: ProtocolVersion,
-		Operation:       operation,
-		Source:          source,
-	})
+	payload, err := json.Marshal(request)
 	if err != nil {
 		return Status{}, &Error{Class: ErrorClassInvalidRequest, Message: err.Error()}
 	}

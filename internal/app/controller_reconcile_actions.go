@@ -92,6 +92,9 @@ func (coordinator *ControllerRunnerCoordinator) replayPrepareAction(
 		ControllerEpoch: issued.Command.ControllerEpoch,
 		ExecutionID:     issued.Command.ExecutionID,
 		ExpectedState:   issued.Command.ExpectedState,
+		// A replay must re-encode the exact original payload, so it reuses the
+		// coordinator's own Target rather than inventing one.
+		Target: coordinator.commandTarget(),
 	}
 	update, err := coordinator.agents.ReplayPrepare(
 		ctx,

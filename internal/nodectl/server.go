@@ -17,12 +17,14 @@ import (
 // reading must not hold an Agent goroutine open.
 const RequestTimeout = 5 * time.Second
 
-// Controller is the Agent-side implementation of the two allowlisted
-// operations. Status must return observation only, and SetIntent must durably
-// record the decision before it returns.
+// Controller is the Agent-side implementation of the allowlisted operations.
+// Status must return observation only. SetIntent and SetTargetExclusion must
+// durably record the decision before they return, because a caller that sees a
+// new value must be seeing durable state rather than an optimistic guess.
 type Controller interface {
 	Status(ctx context.Context) (Status, error)
 	SetIntent(ctx context.Context, intent domain.AvailabilityIntent, source Source) (Status, error)
+	SetTargetExclusion(ctx context.Context, targetID domain.TargetID, excluded bool, source Source) (Status, error)
 }
 
 // Authorizer decides whether a kernel-reported peer identity is an authorized
@@ -185,8 +187,14 @@ func (server *Server) handle(connection net.Conn) {
 
 func (server *Server) execute(ctx context.Context, request Request) (Status, error) {
 	switch request.Operation {
-	case OperationStatus:
+	case OperationStatus, OperationTargets:
+		// The per-Target view is part of the one status document, so both verbs
+		// read the same observation rather than two divergent projections.
 		return server.controller.Status(ctx)
+	case OperationExclude:
+		return server.controller.SetTargetExclusion(ctx, request.TargetID, true, request.Source)
+	case OperationInclude:
+		return server.controller.SetTargetExclusion(ctx, request.TargetID, false, request.Source)
 	case OperationPause:
 		return server.controller.SetIntent(ctx, domain.AvailabilityStopped, request.Source)
 	case OperationResume:

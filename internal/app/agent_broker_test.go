@@ -392,6 +392,7 @@ func brokerMetadata(commandID, executionID string) transport.CommandMetadata {
 		ControllerEpoch: 1,
 		ExecutionID:     domain.ExecutionID(executionID),
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 }
 

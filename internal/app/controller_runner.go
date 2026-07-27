@@ -141,8 +141,13 @@ func (lifecycle githubClientRunnerLifecycle) RemoveRunner(
 }
 
 type ControllerRunnerConfig struct {
-	ScaleSetID      github.ScaleSetID
-	TargetID        domain.TargetID
+	ScaleSetID github.ScaleSetID
+	TargetID   domain.TargetID
+	// Scope and ScopeKind name the GitHub org/repo this coordinator serves. They
+	// travel on prepare and start purely so a node owner's desktop surface can
+	// say which scope a job belongs to; the Agent enforces on TargetID alone.
+	Scope           string
+	ScopeKind       domain.TargetScopeKind
 	RunnerProfileID domain.RunnerProfileID
 	VersionPolicy   domain.RunnerVersionPolicy
 	NodeID          domain.NodeID
@@ -182,6 +187,10 @@ func NewControllerRunnerCoordinator(
 	if stateStore == nil || session == nil || agents == nil || lifecycle == nil ||
 		config.ScaleSetID <= 0 || config.TargetID == "" || config.NodeID == "" ||
 		config.RunnerProfileID == "" ||
+		// Target identity is mandatory on the command wire, so a coordinator that
+		// cannot name its own scope must never be constructed. Failing here keeps
+		// the refusal at configuration time instead of at every dispatch.
+		commandTargetFor(config).Validate() != nil ||
 		config.ControllerEpoch.Validate() != nil || config.Reconciler == nil ||
 		(config.VersionPolicy != domain.RunnerVersionAutoUpdate &&
 			config.VersionPolicy != domain.RunnerVersionPinned) {
@@ -214,6 +223,21 @@ func NewControllerRunnerCoordinator(
 }
 
 var _ github.DurableMessageHandler = (*ControllerRunnerCoordinator)(nil)
+
+// commandTargetFor is the single place the coordinator's configured Target
+// becomes command wire identity, so prepare, start, and Prepare replay cannot
+// drift apart and produce different payload digests for the same execution.
+func commandTargetFor(config ControllerRunnerConfig) transport.CommandTarget {
+	return transport.CommandTarget{
+		TargetID:  config.TargetID,
+		Scope:     config.Scope,
+		ScopeKind: config.ScopeKind,
+	}
+}
+
+func (coordinator *ControllerRunnerCoordinator) commandTarget() transport.CommandTarget {
+	return commandTargetFor(coordinator.config)
+}
 
 func (coordinator *ControllerRunnerCoordinator) CommitSessionDemand(
 	ctx context.Context,
@@ -1271,6 +1295,7 @@ func (coordinator *ControllerRunnerCoordinator) prepare(ctx context.Context, cla
 		ControllerEpoch: coordinator.config.ControllerEpoch,
 		ExecutionID:     claim.Execution.ID,
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          coordinator.commandTarget(),
 	}
 	update, err := coordinator.agents.SendPrepare(
 		ctx, coordinator.config.NodeID, metadata, coordinator.disableUpdate())
@@ -1400,6 +1425,7 @@ func (coordinator *ControllerRunnerCoordinator) generateAndStart(ctx context.Con
 		ControllerEpoch: coordinator.config.ControllerEpoch,
 		ExecutionID:     claim.Execution.ID,
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          coordinator.commandTarget(),
 	}
 	update, err := coordinator.agents.SendStart(
 		ctx, coordinator.config.NodeID, metadata, coordinator.disableUpdate(), jitConfig)

@@ -18,10 +18,11 @@ import (
 )
 
 type fakeController struct {
-	mu      sync.Mutex
-	intent  domain.AvailabilityIntent
-	changes int
-	err     error
+	mu       sync.Mutex
+	intent   domain.AvailabilityIntent
+	changes  int
+	err      error
+	excluded map[domain.TargetID]struct{}
 }
 
 func (controller *fakeController) Status(context.Context) (nodectl.Status, error) {
@@ -46,6 +47,47 @@ func (controller *fakeController) SetIntent(
 	controller.intent = intent
 	controller.changes++
 	return nodectl.Status{NodeID: "node-1", Intent: intent, IntentChangedBy: string(source)}, nil
+}
+
+func (controller *fakeController) SetTargetExclusion(
+	_ context.Context,
+	targetID domain.TargetID,
+	excluded bool,
+	source nodectl.Source,
+) (nodectl.Status, error) {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if controller.err != nil {
+		return nodectl.Status{}, controller.err
+	}
+	if controller.excluded == nil {
+		controller.excluded = make(map[domain.TargetID]struct{})
+	}
+	if excluded {
+		controller.excluded[targetID] = struct{}{}
+	} else {
+		delete(controller.excluded, targetID)
+	}
+	controller.changes++
+	status := nodectl.Status{
+		NodeID:          "node-1",
+		Intent:          controller.intent,
+		IntentChangedBy: string(source),
+	}
+	for id := range controller.excluded {
+		status.UnknownExclusions = append(status.UnknownExclusions, id)
+	}
+	return status, nil
+}
+
+func (controller *fakeController) exclusions() []domain.TargetID {
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	ids := make([]domain.TargetID, 0, len(controller.excluded))
+	for id := range controller.excluded {
+		ids = append(ids, id)
+	}
+	return ids
 }
 
 func (controller *fakeController) snapshot() (domain.AvailabilityIntent, int) {
@@ -172,19 +214,19 @@ func TestServerRejectsMalformedAndUnsupportedRequests(t *testing.T) {
 		class   string
 	}{
 		"protocol mismatch": {
-			request: `{"protocolVersion":2,"operation":"pause","source":"cli"}`,
+			request: `{"protocolVersion":1,"operation":"pause","source":"cli"}`,
 			class:   nodectl.ErrorClassProtocolMismatch,
 		},
 		"unsupported operation": {
-			request: `{"protocolVersion":1,"operation":"revoke","source":"cli"}`,
+			request: `{"protocolVersion":2,"operation":"revoke","source":"cli"}`,
 			class:   nodectl.ErrorClassUnsupportedOperation,
 		},
 		"unknown field": {
-			request: `{"protocolVersion":1,"operation":"pause","source":"cli","extra":true}`,
+			request: `{"protocolVersion":2,"operation":"pause","source":"cli","extra":true}`,
 			class:   nodectl.ErrorClassInvalidRequest,
 		},
 		"unknown source": {
-			request: `{"protocolVersion":1,"operation":"pause","source":"browser"}`,
+			request: `{"protocolVersion":2,"operation":"pause","source":"browser"}`,
 			class:   nodectl.ErrorClassInvalidRequest,
 		},
 		"garbage": {

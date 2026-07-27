@@ -174,6 +174,7 @@ func TestAgentRuntimeReadinessFailsClosedAfterLocalJournalDegradation(t *testing
 		ControllerEpoch: 1,
 		ExecutionID:     "degraded-monitor-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, true)
 	if err != nil {
@@ -229,6 +230,7 @@ func TestAgentDegradedReadinessStillAllowsExactReplayAndCancel(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "degraded-replay-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	newPrepare := func() transport.Envelope {
 		payload, encodeErr := transport.EncodePrepareCommandPayload(
@@ -268,6 +270,7 @@ func TestAgentDegradedReadinessStillAllowsExactReplayAndCancel(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "degraded-replay-execution",
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
 	if err != nil {
@@ -311,6 +314,7 @@ func TestAgentRejectsNewRunnerAdmissionWhenPlatformReadinessDegrades(t *testing.
 		ControllerEpoch: 1,
 		ExecutionID:     "degraded-prepare-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodePrepareCommandPayload(
 		metadata,
@@ -370,6 +374,7 @@ func TestAgentCommandAdmissionTimeoutReleasesExecutionLock(t *testing.T) {
 			ControllerEpoch: 1,
 			ExecutionID:     "stalled-readiness-execution",
 			ExpectedState:   domain.ExecutionReserved,
+			Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 		}
 		payload, encodeErr := transport.EncodePrepareCommandPayload(
 			metadata,
@@ -470,6 +475,7 @@ func TestAgentMonitorFailureLinearizesBeforeCommandRecord(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "monitor-race-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, true)
 	if err != nil {
@@ -546,6 +552,7 @@ func TestAgentPrepareCommandPersistsBeforeMaterialization(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "prepare-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, true)
 	if err != nil {
@@ -595,6 +602,7 @@ func TestAgentCommandAcceptPersistsBeforeStartAndErasesWireJIT(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "execution-1",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, true, "jit-canary.example.test")
 	if err != nil {
@@ -650,6 +658,7 @@ func TestAgentCommandReplayMismatchFailsBeforeRunner(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "execution-replay",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	for index, jit := range []string{"first.example.test", "different.example.test"} {
 		payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, jit)
@@ -696,6 +705,7 @@ func TestAgentCleanupFailurePersistsQuarantineTombstone(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "execution-cancel",
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeCancelCommandPayload(metadata)
 	if err != nil {
@@ -742,6 +752,7 @@ func TestAgentStartFailureDestroysPreparedWorkspaceBeforeReportingFailed(t *test
 		ControllerEpoch: 1,
 		ExecutionID:     "failed-start-cleanup-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "failed-start-cleanup-canary.example.test")
 	if err != nil {
@@ -803,6 +814,7 @@ func TestAgentStartCleanupFailureQueuesActualQuarantineOutcome(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "failed-start-quarantine-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "failed-start-quarantine-canary.example.test")
 	if err != nil {
@@ -865,6 +877,7 @@ func TestAgentStartCleanupFailureWithoutDurableTombstoneDoesNotQueueFailed(t *te
 		ControllerEpoch: 1,
 		ExecutionID:     "missing-tombstone-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "missing-tombstone-canary.example.test")
 	if err != nil {
@@ -912,6 +925,7 @@ func TestAgentCommandRejectsStaleCancelWithoutRecordingIt(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "stale-execution",
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	for range 2 {
 		payload, err := transport.EncodeCancelCommandPayload(metadata)
@@ -965,6 +979,7 @@ func TestAgentCommandInvalidFirstReplayMustPassStateAdmission(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "invalid-first-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	accept := func() (*acceptedAgentCommand, error) {
 		payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, true, "invalid-first-canary.example.test")
@@ -1029,6 +1044,7 @@ func TestAgentCommandAckFailureStillExecutesCommittedCommand(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "ack-failure-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "ack-failure-canary.example.test")
 	if err != nil {
@@ -1106,6 +1122,7 @@ func TestAgentCommandExactReplayRemainsIdempotentAfterStateChanges(t *testing.T)
 		ControllerEpoch: 1,
 		ExecutionID:     "state-change-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	for index := range 2 {
 		payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "state-change-canary.example.test")
@@ -1168,6 +1185,7 @@ func TestAgentPrepareExactReplayNormalizesReleasedConflict(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "released-prepare-execution",
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	for index := range 2 {
 		payload, err := transport.EncodePrepareCommandPayload(metadata, runner.OfficialRunnerVersion, false)
@@ -1236,6 +1254,7 @@ func TestAgentCommandSerializesConcurrentExecutionOrdering(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "ordered-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	startPayload, err := transport.EncodeStartCommandPayload(startMetadata, runner.OfficialRunnerVersion, false, "ordered-canary.example.test")
 	if err != nil {
@@ -1253,6 +1272,7 @@ func TestAgentCommandSerializesConcurrentExecutionOrdering(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     startMetadata.ExecutionID,
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
 	if err != nil {
@@ -1382,6 +1402,7 @@ func TestAgentCancelOwnsTerminalOutboxWhenCompletionMonitorWasWaiting(t *testing
 		ControllerEpoch: 1,
 		ExecutionID:     executionID,
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	startPayload, err := transport.EncodeStartCommandPayload(
 		startMetadata,
@@ -1412,6 +1433,7 @@ func TestAgentCancelOwnsTerminalOutboxWhenCompletionMonitorWasWaiting(t *testing
 		ControllerEpoch: 1,
 		ExecutionID:     executionID,
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
 	if err != nil {
@@ -1530,6 +1552,7 @@ func TestAgentTerminalAcknowledgementPruneCannotDegradeWaitingCompletionMonitor(
 		ControllerEpoch: 1,
 		ExecutionID:     executionID,
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	startPayload, err := transport.EncodeStartCommandPayload(
 		startMetadata,
@@ -1559,6 +1582,7 @@ func TestAgentTerminalAcknowledgementPruneCannotDegradeWaitingCompletionMonitor(
 		ControllerEpoch: 1,
 		ExecutionID:     executionID,
 		ExpectedState:   domain.ExecutionRunning,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	cancelPayload, err := transport.EncodeCancelCommandPayload(cancelMetadata)
 	if err != nil {
@@ -1696,6 +1720,7 @@ func TestAgentCompletionMonitorCleansAndQueuesUpdatesWithoutSession(t *testing.T
 		ControllerEpoch: 1,
 		ExecutionID:     "monitored-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "monitor-canary.example.test")
 	if err != nil {
@@ -1799,6 +1824,7 @@ func TestAgentCompletionWaitFailureStillCleansWithDeliverableUpdates(t *testing.
 		ControllerEpoch: 1,
 		ExecutionID:     "wait-failure-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "wait-failure-canary.example.test")
 	if err != nil {
@@ -1876,6 +1902,7 @@ func TestAgentLifetimeCancellationLeavesRunningForReconciliation(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "shutdown-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "shutdown-canary.example.test")
 	if err != nil {
@@ -1971,6 +1998,7 @@ func TestAgentCompletionOutboxFailureStillDestroysRunner(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "outbox-failure-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "outbox-failure-canary.example.test")
 	if err != nil {
@@ -2019,6 +2047,8 @@ func TestAgentRunningUpdateJournalFailureStillStartsCleanupMonitor(t *testing.T)
 	destroyed := make(chan struct{})
 	var stateMu sync.Mutex
 	localState := runner.StatePrepared
+	var closeJournalOnce sync.Once
+	var closeJournalErr error
 	manager := &fakeRunnerLifecycle{
 		start: func(_ context.Context, request runner.Start) (runner.Snapshot, error) {
 			if err := request.JIT.Deliver(func(string) error { return nil }); err != nil {
@@ -2027,6 +2057,11 @@ func TestAgentRunningUpdateJournalFailureStillStartsCleanupMonitor(t *testing.T)
 			stateMu.Lock()
 			localState = runner.StateRunning
 			stateMu.Unlock()
+			// The journal dies once the process exists. Closing it before the
+			// exec boundary would instead refuse the start outright, because the
+			// agent re-reads its durable exclusion set there and must not admit
+			// work whose admission it cannot check.
+			closeJournalOnce.Do(func() { closeJournalErr = agentStore.Close() })
 			return runner.Snapshot{ExecutionID: request.ExecutionID, State: runner.StateRunning, Running: true}, nil
 		},
 		inspect: func(_ context.Context, executionID string) (runner.Snapshot, error) {
@@ -2070,6 +2105,7 @@ func TestAgentRunningUpdateJournalFailureStillStartsCleanupMonitor(t *testing.T)
 		ControllerEpoch: 1,
 		ExecutionID:     "running-journal-failure-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "running-journal-failure-canary.example.test")
 	if err != nil {
@@ -2080,11 +2116,11 @@ func TestAgentRunningUpdateJournalFailureStillStartsCleanupMonitor(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := agentStore.Close(); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := accepted.Execute(lifetime); err == nil {
 		t.Fatal("running update unexpectedly persisted after journal close")
+	}
+	if closeJournalErr != nil {
+		t.Fatal(closeJournalErr)
 	}
 	select {
 	case <-waitEntered:
@@ -2126,6 +2162,7 @@ func TestAgentCompletionMonitorClassifiesObservedCleanupFailure(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "observed-cleanup-failure-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	commandRuntime.monitorCompletion(context.Background(), metadata, false)
 	pending, err := agentStore.PendingExecutionUpdates(context.Background())
@@ -2511,6 +2548,7 @@ func TestAgentSessionPersistsRunningOutcomeBeforeCommandAck(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "execution-session",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	commandPayload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, true, "session-jit.example.test")
 	if err != nil {
@@ -2637,6 +2675,7 @@ func TestAgentSessionReplaysUnacknowledgedOutboxAfterDisconnect(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     "outbox-replay-execution",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	payload, err := transport.EncodeStartCommandPayload(metadata, runner.OfficialRunnerVersion, false, "outbox-replay-canary.example.test")
 	if err != nil {

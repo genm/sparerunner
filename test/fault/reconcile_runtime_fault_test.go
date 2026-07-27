@@ -75,6 +75,8 @@ func TestRuntimeFaultControllerCommitHelper(t *testing.T) {
 		app.ControllerRunnerConfig{
 			ScaleSetID:      runtimeFaultScaleSetID,
 			TargetID:        runtimeFaultTargetID,
+			Scope:           "owner/repo",
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: runtimeFaultProfileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,
 			NodeID:          nodeID,
@@ -114,6 +116,7 @@ func TestRuntimeFaultAgentAcceptedStartHelper(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     runtimeFaultAcceptedExecID,
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	preparePayload, err := transport.EncodePrepareCommandPayload(
 		prepareMetadata,
@@ -158,6 +161,7 @@ func TestRuntimeFaultAgentAcceptedStartHelper(t *testing.T) {
 		ControllerEpoch: 1,
 		ExecutionID:     runtimeFaultAcceptedExecID,
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	startPayload, err := transport.EncodeStartCommandPayload(
 		startMetadata,
@@ -519,6 +523,7 @@ func runtimeFaultProveControllerLostJITCleanup(
 		ControllerEpoch: owningEpoch,
 		ExecutionID:     runtimeFaultAcceptedExecID,
 		ExpectedState:   domain.ExecutionReserved,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	preparePayload, err := transport.EncodePrepareCommandPayload(
 		prepareMetadata,
@@ -596,6 +601,7 @@ func runtimeFaultProveControllerLostJITCleanup(
 		ControllerEpoch: owningEpoch,
 		ExecutionID:     runtimeFaultAcceptedExecID,
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          transport.CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 	startPayload, err := transport.EncodeStartCommandPayload(
 		startMetadata,
@@ -676,6 +682,8 @@ func runtimeFaultProveControllerLostJITCleanup(
 		app.ControllerRunnerConfig{
 			ScaleSetID:      runtimeFaultScaleSetID,
 			TargetID:        runtimeFaultTargetID,
+			Scope:           "owner/repo",
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: runtimeFaultProfileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,
 			NodeID:          nodeID,
@@ -1127,6 +1135,8 @@ func (harness *runtimeFaultHarness) newCoordinator(
 		app.ControllerRunnerConfig{
 			ScaleSetID:      runtimeFaultScaleSetID,
 			TargetID:        runtimeFaultTargetID,
+			Scope:           "owner/repo",
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: runtimeFaultProfileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,
 			NodeID:          harness.nodeID,
