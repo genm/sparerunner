@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,6 +25,348 @@ import (
 
 const apiTestOrigin = "http://127.0.0.1:7442"
 
+func TestBrowserHandoffRequiresOwnerApprovalAndIssuesExactlyOneSession(t *testing.T) {
+	t.Parallel()
+
+	handler, backend := newAPITestHandler(t)
+	var secret [32]byte
+	for index := range secret {
+		secret[index] = byte(index + 1)
+	}
+	handoff := createAPIBrowserHandoff(t, handler, secret)
+
+	pending := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+	if pending.Code != http.StatusAccepted {
+		t.Fatalf("pending claim = %d %s", pending.Code, pending.Body.String())
+	}
+	if cookies := pending.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("pending claim issued cookies: %#v", cookies)
+	}
+	var pendingState gen.BrowserHandoffPending
+	if err := json.Unmarshal(pending.Body.Bytes(), &pendingState); err != nil {
+		t.Fatal(err)
+	}
+	if pendingState.State != gen.BrowserHandoffPendingStatePending ||
+		!pendingState.ExpiresAt.Equal(handoff.ExpiresAt) {
+		t.Fatalf("pending state = %#v, handoff = %#v", pendingState, handoff)
+	}
+
+	wrongSecret := secret
+	wrongSecret[0] ^= 0xff
+	wrong := claimAPIBrowserHandoff(t, handler, handoff.Code, wrongSecret)
+	assertProblem(t, wrong, http.StatusUnauthorized, "browser_handoff_invalid")
+	if cookies := wrong.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("wrong-secret claim issued cookies: %#v", cookies)
+	}
+
+	cookie, csrf := bootstrapAPISession(t, handler)
+	authorize := authorizeAPIBrowserHandoff(
+		t,
+		handler,
+		cookie,
+		csrf,
+		handoff.Code,
+	)
+	if authorize.Code != http.StatusNoContent || authorize.Body.Len() != 0 {
+		t.Fatalf("authorization = %d %q", authorize.Code, authorize.Body.String())
+	}
+	backend.mu.Lock()
+	auditCountAfterApproval := len(backend.audits)
+	approvalAudit := backend.audits[auditCountAfterApproval-1]
+	backend.mu.Unlock()
+	if approvalAudit.Action != "browser_handoff_authorized" ||
+		approvalAudit.ResourceID != "" {
+		t.Fatalf("approval audit = %#v", approvalAudit)
+	}
+
+	retry := authorizeAPIBrowserHandoff(t, handler, cookie, csrf, handoff.Code)
+	if retry.Code != http.StatusNoContent {
+		t.Fatalf("idempotent authorization = %d %s", retry.Code, retry.Body.String())
+	}
+	backend.mu.Lock()
+	if len(backend.audits) != auditCountAfterApproval {
+		t.Fatalf(
+			"idempotent authorization appended an audit: %#v",
+			backend.audits,
+		)
+	}
+	backend.mu.Unlock()
+
+	claimed := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+	if claimed.Code != http.StatusCreated {
+		t.Fatalf("approved claim = %d %s", claimed.Code, claimed.Body.String())
+	}
+	cookies := claimed.Result().Cookies()
+	if len(cookies) != 1 ||
+		cookies[0].Name != auth.SessionCookieName ||
+		cookies[0].Value == "" {
+		t.Fatalf("approved claim cookies = %#v", cookies)
+	}
+	if strings.Contains(claimed.Body.String(), base64.RawURLEncoding.EncodeToString(secret[:])) ||
+		strings.Contains(claimed.Body.String(), handoff.Code) {
+		t.Fatalf("claim response reflected handoff material: %s", claimed.Body.String())
+	}
+
+	replayed := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+	assertProblem(
+		t,
+		replayed,
+		http.StatusConflict,
+		"browser_handoff_already_claimed",
+	)
+	if cookies := replayed.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("replayed claim issued cookies: %#v", cookies)
+	}
+}
+
+func TestBrowserHandoffConcurrentHTTPClaimsIssueExactlyOneSession(t *testing.T) {
+	t.Parallel()
+
+	handler, backend := newAPITestHandler(t)
+	secret := [32]byte{9, 8, 7, 6}
+	handoff := createAPIBrowserHandoff(t, handler, secret)
+	cookie, csrf := bootstrapAPISession(t, handler)
+	authorized := authorizeAPIBrowserHandoff(t, handler, cookie, csrf, handoff.Code)
+	if authorized.Code != http.StatusNoContent {
+		t.Fatalf("authorization = %d %s", authorized.Code, authorized.Body.String())
+	}
+
+	encodedSecret := base64.RawURLEncoding.EncodeToString(secret[:])
+	body, err := json.Marshal(gen.ClaimBrowserHandoffRequest{
+		Code:        handoff.Code,
+		ClaimSecret: &encodedSecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const contenders = 16
+	start := make(chan struct{})
+	responses := make(chan *httptest.ResponseRecorder, contenders)
+	var wait sync.WaitGroup
+	for range contenders {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			request := httptest.NewRequest(
+				http.MethodPost,
+				apiTestOrigin+"/api/v1/browser-handoffs/claim",
+				bytes.NewReader(body),
+			)
+			request.Header.Set("Origin", apiTestOrigin)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			responses <- response
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(responses)
+
+	created := 0
+	for response := range responses {
+		switch response.Code {
+		case http.StatusCreated:
+			created++
+			if cookies := response.Result().Cookies(); len(cookies) != 1 ||
+				cookies[0].Name != auth.SessionCookieName {
+				t.Fatalf("winning claim cookies = %#v", cookies)
+			}
+		case http.StatusConflict:
+			if cookies := response.Result().Cookies(); len(cookies) != 0 {
+				t.Fatalf("losing claim issued cookies: %#v", cookies)
+			}
+			var problem gen.Problem
+			if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+				t.Fatal(err)
+			}
+			if problem.Code != "browser_handoff_claim_in_progress" &&
+				problem.Code != "browser_handoff_already_claimed" {
+				t.Fatalf("losing claim problem = %#v", problem)
+			}
+		default:
+			t.Fatalf("parallel claim = %d %s", response.Code, response.Body.String())
+		}
+	}
+	if created != 1 {
+		t.Fatalf("created sessions = %d, want exactly one", created)
+	}
+
+	backend.mu.Lock()
+	defer backend.mu.Unlock()
+	authenticationAudits := 0
+	for _, event := range backend.audits {
+		if event.Action == "authentication_succeeded" {
+			authenticationAudits++
+		}
+	}
+	// One audit belongs to the owner CLI bootstrap and one to the winning browser.
+	if authenticationAudits != 2 {
+		t.Fatalf("authentication audits = %d, want two", authenticationAudits)
+	}
+}
+
+func TestBrowserHandoffClaimsBrowserDigestKnownVector(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newAPITestHandler(t)
+	var secret [32]byte
+	for index := range secret {
+		secret[index] = byte(index)
+	}
+	const browserDigest = "Yw3NKWbEM2aRElRIu7JbT_QSpJxzLbLIq8G4WBvXEN0"
+	handoff := createAPIBrowserHandoff(t, handler, secret)
+	parts := strings.Split(handoff.Code, ".")
+	if len(parts) != 5 || parts[3] != browserDigest {
+		t.Fatalf("handoff digest = %#v, want browser vector %q", parts, browserDigest)
+	}
+
+	cookie, csrf := bootstrapAPISession(t, handler)
+	authorized := authorizeAPIBrowserHandoff(t, handler, cookie, csrf, handoff.Code)
+	if authorized.Code != http.StatusNoContent {
+		t.Fatalf("authorization = %d %s", authorized.Code, authorized.Body.String())
+	}
+	claimed := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+	if claimed.Code != http.StatusCreated {
+		t.Fatalf("known-vector claim = %d %s", claimed.Code, claimed.Body.String())
+	}
+}
+
+func TestBrowserHandoffChecksHostAndOriginBeforeClaimMaterial(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newAPITestHandler(t)
+	canary := "claim-secret-canary.example.test"
+	tests := []struct {
+		name   string
+		target string
+		origin string
+		status int
+		code   string
+	}{
+		{
+			name:   "wrong host",
+			target: "http://localhost:7442/api/v1/browser-handoffs/claim",
+			origin: apiTestOrigin,
+			status: http.StatusMisdirectedRequest,
+			code:   "misdirected_host",
+		},
+		{
+			name:   "wrong origin",
+			target: apiTestOrigin + "/api/v1/browser-handoffs/claim",
+			origin: "http://127.0.0.1:7443",
+			status: http.StatusForbidden,
+			code:   "request_forbidden",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(
+				http.MethodPost,
+				test.target,
+				strings.NewReader(`{"code":"`+canary+`","claimSecret":"`+canary+`"}`),
+			)
+			request.Header.Set("Origin", test.origin)
+			request.Header.Set("Content-Type", "application/json")
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			assertSecretFreeProblem(t, response, test.status, test.code, canary)
+			if cookies := response.Result().Cookies(); len(cookies) != 0 {
+				t.Fatalf("rejected claim issued cookies: %#v", cookies)
+			}
+		})
+	}
+}
+
+func TestBrowserHandoffAuditFailuresRollBackAuthority(t *testing.T) {
+	t.Parallel()
+
+	t.Run("approval", func(t *testing.T) {
+		handler, backend := newAPITestHandler(t)
+		secret := [32]byte{1, 2, 3}
+		handoff := createAPIBrowserHandoff(t, handler, secret)
+		cookie, csrf := bootstrapAPISession(t, handler)
+		backend.mu.Lock()
+		backend.auditErr = errors.New("approval audit secret-canary")
+		backend.mu.Unlock()
+
+		failed := authorizeAPIBrowserHandoff(
+			t,
+			handler,
+			cookie,
+			csrf,
+			handoff.Code,
+		)
+		assertSecretFreeProblem(
+			t,
+			failed,
+			http.StatusServiceUnavailable,
+			"management_unavailable",
+			"secret-canary",
+		)
+		pending := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+		if pending.Code != http.StatusAccepted {
+			t.Fatalf("failed approval became claimable: %d %s", pending.Code, pending.Body.String())
+		}
+
+		backend.mu.Lock()
+		backend.auditErr = nil
+		backend.mu.Unlock()
+		succeeded := authorizeAPIBrowserHandoff(
+			t,
+			handler,
+			cookie,
+			csrf,
+			handoff.Code,
+		)
+		if succeeded.Code != http.StatusNoContent {
+			t.Fatalf("authorization after rollback = %d %s", succeeded.Code, succeeded.Body.String())
+		}
+	})
+
+	t.Run("authentication", func(t *testing.T) {
+		handler, backend := newAPITestHandler(t)
+		secret := [32]byte{4, 5, 6}
+		handoff := createAPIBrowserHandoff(t, handler, secret)
+		cookie, csrf := bootstrapAPISession(t, handler)
+		authorized := authorizeAPIBrowserHandoff(
+			t,
+			handler,
+			cookie,
+			csrf,
+			handoff.Code,
+		)
+		if authorized.Code != http.StatusNoContent {
+			t.Fatalf("authorization = %d %s", authorized.Code, authorized.Body.String())
+		}
+		backend.mu.Lock()
+		backend.auditErr = errors.New("authentication audit secret-canary")
+		backend.mu.Unlock()
+
+		failed := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+		assertSecretFreeProblem(
+			t,
+			failed,
+			http.StatusServiceUnavailable,
+			"management_unavailable",
+			"secret-canary",
+		)
+		if cookies := failed.Result().Cookies(); len(cookies) != 0 {
+			t.Fatalf("failed authentication audit issued cookies: %#v", cookies)
+		}
+
+		backend.mu.Lock()
+		backend.auditErr = nil
+		backend.mu.Unlock()
+		retry := claimAPIBrowserHandoff(t, handler, handoff.Code, secret)
+		if retry.Code != http.StatusCreated {
+			t.Fatalf("claim after audit rollback = %d %s", retry.Code, retry.Body.String())
+		}
+	})
+}
+
 func TestSessionBootstrapIsExplicitExactOriginAndStaticReadsDoNotIssueCookie(t *testing.T) {
 	t.Parallel()
 
@@ -35,6 +379,30 @@ func TestSessionBootstrapIsExplicitExactOriginAndStaticReadsDoNotIssueCookie(t *
 	}
 	if cookies := staticResponse.Result().Cookies(); len(cookies) != 0 {
 		t.Fatalf("static read issued cookies: %#v", cookies)
+	}
+	for name, want := range map[string]string{
+		"Cache-Control":                "no-store",
+		"Cross-Origin-Opener-Policy":   "same-origin",
+		"Cross-Origin-Resource-Policy": "same-origin",
+		"Permissions-Policy":           "camera=(), microphone=(), geolocation=()",
+		"Referrer-Policy":              "no-referrer",
+		"X-Content-Type-Options":       "nosniff",
+		"X-Frame-Options":              "DENY",
+	} {
+		if got := staticResponse.Header().Get(name); got != want {
+			t.Fatalf("static %s = %q, want %q", name, got, want)
+		}
+	}
+	csp := staticResponse.Header().Get("Content-Security-Policy")
+	for _, directive := range []string{
+		"default-src 'self'",
+		"base-uri 'none'",
+		"frame-ancestors 'none'",
+		"connect-src 'self'",
+	} {
+		if !strings.Contains(csp, directive) {
+			t.Fatalf("static CSP %q is missing %q", csp, directive)
+		}
 	}
 
 	wrongHost := httptest.NewRequest(http.MethodPost, "http://localhost:7442/api/v1/session", nil)
@@ -288,8 +656,9 @@ func TestAuditEventsPagesWithBoundedDefaultsAndOpaqueCursor(t *testing.T) {
 	handler, backend := newAPITestHandler(t)
 	cookie, _ := bootstrapAPISession(t, handler)
 	nextAfter := uint64(2)
+	resumeAfter := uint64(2)
 	backend.mu.Lock()
-	backend.auditPage = AuditPage{NextAfter: &nextAfter}
+	backend.auditPage = AuditPage{NextAfter: &nextAfter, ResumeAfter: &resumeAfter}
 	backend.mu.Unlock()
 
 	firstRequest := httptest.NewRequest(
@@ -307,7 +676,11 @@ func TestAuditEventsPagesWithBoundedDefaultsAndOpaqueCursor(t *testing.T) {
 	if err := json.Unmarshal(firstResponse.Body.Bytes(), &first); err != nil {
 		t.Fatal(err)
 	}
-	if first.Events == nil || len(first.Events) != 0 || first.NextCursor == nil {
+	if first.Events == nil ||
+		len(first.Events) != 0 ||
+		first.NextCursor == nil ||
+		first.ResumeCursor == nil ||
+		*first.ResumeCursor != *first.NextCursor {
 		t.Fatalf("first page = %#v", first)
 	}
 	backend.mu.Lock()
@@ -670,18 +1043,17 @@ func TestJoinCodeIsDeliveredOnceAndUnknownFieldsFailClosed(t *testing.T) {
 	}
 }
 
-func TestSSERequiresSameOriginAndResetsUnknownCursor(t *testing.T) {
+func TestSSERequiresSessionCSRFAndResetsUnknownCursor(t *testing.T) {
 	t.Parallel()
 
 	handler, _ := newAPITestHandler(t)
-	cookie, _ := bootstrapAPISession(t, handler)
+	cookie, csrf := bootstrapAPISession(t, handler)
 
-	crossOrigin := httptest.NewRequest(http.MethodGet, apiTestOrigin+"/api/v1/events", nil)
-	crossOrigin.Header.Set("Origin", "http://attacker.invalid")
-	crossOrigin.AddCookie(cookie)
-	crossResponse := httptest.NewRecorder()
-	handler.ServeHTTP(crossResponse, crossOrigin)
-	assertProblem(t, crossResponse, http.StatusForbidden, "request_forbidden")
+	missingCSRF := httptest.NewRequest(http.MethodGet, apiTestOrigin+"/api/v1/events", nil)
+	missingCSRF.AddCookie(cookie)
+	missingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingResponse, missingCSRF)
+	assertProblem(t, missingResponse, http.StatusForbidden, "request_forbidden")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -690,7 +1062,7 @@ func TestSSERequiresSameOriginAndResetsUnknownCursor(t *testing.T) {
 		apiTestOrigin+"/api/v1/events?cursor=unknown",
 		nil,
 	).WithContext(ctx)
-	request.Header.Set("Origin", apiTestOrigin)
+	request.Header.Set(auth.CSRFHeaderName, csrf)
 	request.AddCookie(cookie)
 	response := newSSETestWriter()
 	done := make(chan struct{})
@@ -715,7 +1087,7 @@ func TestSSEWithoutCursorResetsAndDoesNotLoseSubscribeRevisionRace(t *testing.T)
 	t.Parallel()
 
 	handler, backend := newAPITestHandler(t)
-	cookie, _ := bootstrapAPISession(t, handler)
+	cookie, csrf := bootstrapAPISession(t, handler)
 	apiServer := handler.(*server)
 
 	resetContext, cancelReset := context.WithCancel(context.Background())
@@ -724,7 +1096,7 @@ func TestSSEWithoutCursorResetsAndDoesNotLoseSubscribeRevisionRace(t *testing.T)
 		apiTestOrigin+"/api/v1/events",
 		nil,
 	).WithContext(resetContext)
-	resetRequest.Header.Set("Origin", apiTestOrigin)
+	resetRequest.Header.Set(auth.CSRFHeaderName, csrf)
 	resetRequest.AddCookie(cookie)
 	resetResponse := newSSETestWriter()
 	resetDone := make(chan struct{})
@@ -754,7 +1126,7 @@ func TestSSEWithoutCursorResetsAndDoesNotLoseSubscribeRevisionRace(t *testing.T)
 		apiTestOrigin+"/api/v1/events?cursor="+current,
 		nil,
 	).WithContext(raceContext)
-	raceRequest.Header.Set("Origin", apiTestOrigin)
+	raceRequest.Header.Set(auth.CSRFHeaderName, csrf)
 	raceRequest.AddCookie(cookie)
 	raceResponse := newSSETestWriter()
 	raceDone := make(chan struct{})
@@ -774,6 +1146,87 @@ func TestSSEWithoutCursorResetsAndDoesNotLoseSubscribeRevisionRace(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("racing SSE handler did not stop after cancellation")
 	}
+}
+
+func TestSSEClosesWhenSessionExpires(t *testing.T) {
+	t.Parallel()
+
+	manager, err := auth.NewManagerWithSessionTTL(
+		apiTestRoot(),
+		apiTestOrigin,
+		false,
+		500*time.Millisecond,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler, _ := newAPITestHandlerWithAuth(t, manager)
+	cookie, csrf := bootstrapAPISession(t, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		apiTestOrigin+"/api/v1/events",
+		nil,
+	).WithContext(ctx)
+	request.Header.Set(auth.CSRFHeaderName, csrf)
+	request.AddCookie(cookie)
+	response := newSSETestWriter()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(response, request)
+	}()
+	response.waitForFlush(t)
+	waitForSSEClose(t, done)
+
+	reconnect := httptest.NewRequest(http.MethodGet, apiTestOrigin+"/api/v1/events", nil)
+	reconnect.Header.Set(auth.CSRFHeaderName, csrf)
+	reconnect.AddCookie(cookie)
+	reconnectResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reconnectResponse, reconnect)
+	assertProblem(t, reconnectResponse, http.StatusUnauthorized, "authentication_failed")
+}
+
+func TestSSEClosesWhenSessionIsRevoked(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newAPITestHandler(t)
+	cookie, csrf := bootstrapAPISession(t, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	request := httptest.NewRequest(
+		http.MethodGet,
+		apiTestOrigin+"/api/v1/events",
+		nil,
+	).WithContext(ctx)
+	request.Header.Set(auth.CSRFHeaderName, csrf)
+	request.AddCookie(cookie)
+	response := newSSETestWriter()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		handler.ServeHTTP(response, request)
+	}()
+	response.waitForFlush(t)
+
+	logout := httptest.NewRequest(http.MethodDelete, apiTestOrigin+"/api/v1/session", nil)
+	logout.Header.Set("Origin", apiTestOrigin)
+	logout.Header.Set(auth.CSRFHeaderName, csrf)
+	logout.AddCookie(cookie)
+	logoutResponse := httptest.NewRecorder()
+	handler.ServeHTTP(logoutResponse, logout)
+	if logoutResponse.Code != http.StatusNoContent {
+		t.Fatalf("logout = %d %s", logoutResponse.Code, logoutResponse.Body.String())
+	}
+	waitForSSEClose(t, done)
+
+	reconnect := httptest.NewRequest(http.MethodGet, apiTestOrigin+"/api/v1/events", nil)
+	reconnect.Header.Set(auth.CSRFHeaderName, csrf)
+	reconnect.AddCookie(cookie)
+	reconnectResponse := httptest.NewRecorder()
+	handler.ServeHTTP(reconnectResponse, reconnect)
+	assertProblem(t, reconnectResponse, http.StatusUnauthorized, "authentication_failed")
 }
 
 func TestIfMatchIsRequiredAndCanonical(t *testing.T) {
@@ -1103,6 +1556,14 @@ func newAPITestHandler(t *testing.T) (http.Handler, *apiTestBackend) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return newAPITestHandlerWithAuth(t, manager)
+}
+
+func newAPITestHandlerWithAuth(
+	t *testing.T,
+	manager *auth.Manager,
+) (http.Handler, *apiTestBackend) {
+	t.Helper()
 	configuration := gen.Configuration{
 		SchemaVersion:  gen.ConfigurationSchemaVersionN1,
 		Revision:       "0",
@@ -1146,6 +1607,102 @@ func bootstrapAPISession(t *testing.T, handler http.Handler) (*http.Cookie, stri
 		t.Fatal(err)
 	}
 	return cookies[0], session.CsrfToken
+}
+
+func createAPIBrowserHandoff(
+	t *testing.T,
+	handler http.Handler,
+	secret [32]byte,
+) gen.BrowserHandoff {
+	t.Helper()
+	digest := sha256.Sum256(secret[:])
+	body, err := json.Marshal(gen.CreateBrowserHandoffRequest{
+		ClaimDigest: base64.RawURLEncoding.EncodeToString(digest[:]),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		apiTestOrigin+"/api/v1/browser-handoffs",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Origin", apiTestOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create browser handoff = %d %s", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("handoff cache control = %q", response.Header().Get("Cache-Control"))
+	}
+	if cookies := response.Result().Cookies(); len(cookies) != 0 {
+		t.Fatalf("handoff issuance created cookies: %#v", cookies)
+	}
+	var handoff gen.BrowserHandoff
+	if err := json.Unmarshal(response.Body.Bytes(), &handoff); err != nil {
+		t.Fatal(err)
+	}
+	if !auth.ValidBrowserHandoffCodeEncoding(handoff.Code) ||
+		handoff.State != gen.BrowserHandoffStatePending ||
+		handoff.ExpiresAt.IsZero() {
+		t.Fatalf("browser handoff = %#v", handoff)
+	}
+	return handoff
+}
+
+func authorizeAPIBrowserHandoff(
+	t *testing.T,
+	handler http.Handler,
+	cookie *http.Cookie,
+	csrf string,
+	code string,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	body, err := json.Marshal(gen.AuthorizeBrowserHandoffRequest{Code: code})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		apiTestOrigin+"/api/v1/browser-handoff-authorizations",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Origin", apiTestOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(auth.CSRFHeaderName, csrf)
+	request.AddCookie(cookie)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
+}
+
+func claimAPIBrowserHandoff(
+	t *testing.T,
+	handler http.Handler,
+	code string,
+	secret [32]byte,
+) *httptest.ResponseRecorder {
+	t.Helper()
+	encodedSecret := base64.RawURLEncoding.EncodeToString(secret[:])
+	body, err := json.Marshal(gen.ClaimBrowserHandoffRequest{
+		Code:        code,
+		ClaimSecret: &encodedSecret,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(
+		http.MethodPost,
+		apiTestOrigin+"/api/v1/browser-handoffs/claim",
+		bytes.NewReader(body),
+	)
+	request.Header.Set("Origin", apiTestOrigin)
+	request.Header.Set("Content-Type", "application/json")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	return response
 }
 
 func setAPIBootstrapProof(t *testing.T, request *http.Request) {
@@ -1282,5 +1839,14 @@ func (writer *sseTestWriter) waitForFlush(t *testing.T) {
 	case <-writer.flushed:
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for SSE flush")
+	}
+}
+
+func waitForSSEClose(t *testing.T, done <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for authenticated SSE stream to close")
 	}
 }

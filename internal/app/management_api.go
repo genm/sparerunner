@@ -296,8 +296,9 @@ func (backend *managementBackend) AuditEvents(
 		result = append(result, item)
 	}
 	return managementapi.AuditPage{
-		Events:    result,
-		NextAfter: page.NextAfter,
+		Events:      result,
+		NextAfter:   page.NextAfter,
+		ResumeAfter: page.ResumeAfter,
 	}, nil
 }
 
@@ -538,7 +539,9 @@ func (backend *managementBackend) CurrentRevision(
 }
 
 func (backend *managementBackend) conditions() []gen.Condition {
-	var conditions []gen.Condition
+	// OpenAPI requires collection fields to stay arrays even when empty. A nil
+	// slice would serialize as null and break every real browser empty state.
+	conditions := make([]gen.Condition, 0, 2)
 	if !backend.AuditHealthy() {
 		conditions = append(conditions, gen.Condition{
 			Code:   "audit_persistence_unavailable",

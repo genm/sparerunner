@@ -70,7 +70,10 @@ parallelism, and re-registering broken runners.
    and first one-time join code.
 3. Run `tewake serve`, or install the controller as an OS service with
    `tewake install controller`.
-4. Open the loopback-only Web UI.
+4. Open the loopback-only Web UI. The browser creates an in-memory claim secret
+   and displays a non-authorizing handoff code.
+5. Run the displayed `tewake ui authorize '<code>'` command on the Controller
+   host, then complete the claim in the same browser tab.
 
 ### Join a node
 
@@ -380,15 +383,45 @@ identical operation against the local agent, so none of them is a privileged pat
 - The CLI shall obtain the owner proof through the OS-private Controller state
   boundary, clear it after the one bootstrap request, and explicitly end its
   session after each command without hiding the command's primary failure. Static
-  UI reads shall not issue sessions. Direct browser bootstrap remains unavailable
-  until TWK-013 supplies an owner-authorized one-time browser handoff; a plain UI
-  POST is not treated as owner authority. Forwarded-host and forwarded-protocol
-  headers shall not participate in any decision.
+  UI reads shall not issue sessions, and a plain UI POST is not owner authority.
+  Browser access shall instead use an owner-authorized, device-code-style handoff:
+  the browser generates a 256-bit claim secret, sends only its digest to obtain a
+  signed non-authorizing code, and retains the secret only in volatile memory. The
+  CLI approves that exact code through a normal owner session. Only the browser
+  holding the matching secret may then consume the approval and receive a normal
+  administrator session.
+- A browser handoff code shall expire no later than the existing two-minute owner
+  bootstrap boundary, shall not extend its lifetime when approved, and shall
+  become invalid on Controller restart. Approval and claim state shall be
+  process-local. A code alone shall not authenticate a caller; claim requires the
+  matching browser secret. Concurrent claims shall issue at most one session, and
+  an authentication-audit failure shall revoke that session before returning 503.
+- Browser handoff codes are non-secret correlation values and may appear only in
+  the explicit UI instruction and `tewake ui authorize` argument. Claim secrets,
+  owner proofs, session cookies, and CSRF values shall never appear in URLs,
+  browser history, DOM text, browser storage, command arguments, logs, audit
+  events, SQLite, or diagnostics. Reloading or closing the authorizing tab loses
+  the claim and requires a new handoff.
+- Browser handoff audit success shall describe a durably recorded owner decision
+  or process-local session issuance, not browser delivery. If the final handoff
+  fence cannot commit after that append, the request shall fail closed, any new
+  session shall be revoked, and no cookie shall be emitted.
+- Forwarded-host and forwarded-protocol headers shall not participate in any
+  management identity or authorization decision.
 - Administrator sessions shall be process-local, expire after at most twelve
   hours, and become invalid immediately on explicit logout or Controller restart.
   Deleting a browser cookie alone is not sufficient server-side revocation.
 - Unauthenticated API mutations shall return 401; authenticated cross-origin
   mutations without a valid CSRF token and Origin shall return 403.
+- The SSE invalidation stream shall use same-origin `fetch` with the host-only
+  session cookie and per-session CSRF header. Session or CSRF material shall not
+  enter its URL, cursor, reconnect state, logs, or failure artifacts.
+- An SSE 401 or 403 shall terminate that subscription, remove the protected
+  last-known snapshot from the browser surface, and require a fresh owner-authorized
+  session. Network and 5xx failures may reconnect without erasing confirmed state.
+- The Controller shall close an already-open SSE response at the exact
+  administrator-session expiry or server-side revocation boundary. The browser's
+  next authenticated reconnect shall then receive 401 or 403.
 - Requests for a different Host shall return 421 before routing or authentication
   and shall not issue a cookie. Management responses shall not emit CORS access
   headers.

@@ -41,10 +41,20 @@ jobs:
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
-          cache-dependency-path: web/pnpm-lock.yaml
+          cache-dependency-path: |
+            api/codegen/pnpm-lock.yaml
+            web/pnpm-lock.yaml
 
       - name: Install Web dependencies
         run: pnpm --dir web install --frozen-lockfile
+
+      - name: Install API codegen dependencies
+        run: pnpm --dir api/codegen install --frozen-lockfile
+
+      - name: Check generated API and embedded Web UI
+        run: |
+          ./scripts/check-generated-api.sh
+          ./scripts/check-generated-web.sh
 
       - name: Check Go formatting
         shell: bash
@@ -71,8 +81,23 @@ jobs:
       - name: Test Web
         run: pnpm --dir web test:ci
 
-      - name: Build Web
-        run: pnpm --dir web build
+      - name: Install Playwright Chromium
+        run: pnpm --dir web exec playwright install --with-deps chromium
+
+      - name: Test Web components
+        run: pnpm --dir web test:ct
+
+      - name: Build release binary for browser verification
+        run: go build -trimpath -o "${RUNNER_TEMP}/tewake" ./cmd/tewake
+
+      - name: Test critical management journey in a real browser
+        run: ./scripts/test-management-ui-linux.sh "${RUNNER_TEMP}/tewake"
+
+      - name: Smoke embedded Web UI from the release binary
+        run: |
+          ./scripts/smoke-embedded-ui.sh \
+            "${RUNNER_TEMP}/tewake" \
+            output/test-results/embedded-ui-smoke.json
 
       - name: Install actionlint
         env:
@@ -91,6 +116,7 @@ jobs:
           name: quality-failure-${{ github.run_attempt }}
           path: |
             output/test-results/
+            output/playwright/
             web/test-results/
           if-no-files-found: ignore
           retention-days: 3

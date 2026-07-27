@@ -93,8 +93,9 @@ type AuditInput struct {
 }
 
 type AuditPage struct {
-	Events    []gen.AuditEvent
-	NextAfter *uint64
+	Events      []gen.AuditEvent
+	NextAfter   *uint64
+	ResumeAfter *uint64
 }
 
 // Backend is the sole authority used by the HTTP adapter. Implementations keep
@@ -232,11 +233,28 @@ func (server *server) ServeHTTP(writer http.ResponseWriter, request *http.Reques
 	}
 	if !strings.HasPrefix(request.URL.Path, Prefix+"/") &&
 		request.URL.Path != Prefix {
+		setManagementStaticHeaders(writer.Header())
 		server.ui.ServeHTTP(writer, request)
 		return
 	}
 	writer.Header().Set("Cache-Control", "no-store")
 	server.route(writer, request, requestID)
+}
+
+func setManagementStaticHeaders(header http.Header) {
+	header.Set("Cache-Control", "no-store")
+	header.Set(
+		"Content-Security-Policy",
+		"default-src 'self'; base-uri 'none'; object-src 'none'; "+
+			"frame-ancestors 'none'; form-action 'self'; script-src 'self'; "+
+			"style-src 'self'; connect-src 'self'",
+	)
+	header.Set("Cross-Origin-Opener-Policy", "same-origin")
+	header.Set("Cross-Origin-Resource-Policy", "same-origin")
+	header.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+	header.Set("Referrer-Policy", "no-referrer")
+	header.Set("X-Content-Type-Options", "nosniff")
+	header.Set("X-Frame-Options", "DENY")
 }
 
 func (server *server) route(writer http.ResponseWriter, request *http.Request, requestID string) {
@@ -249,6 +267,17 @@ func (server *server) route(writer http.ResponseWriter, request *http.Request, r
 		contract.GetSession(writer, request)
 	case path == "/session" && request.Method == http.MethodDelete:
 		contract.DeleteSession(writer, request, gen.DeleteSessionParams{})
+	case path == "/browser-handoffs" && request.Method == http.MethodPost:
+		contract.CreateBrowserHandoff(writer, request)
+	case path == "/browser-handoffs/claim" && request.Method == http.MethodPost:
+		contract.ClaimBrowserHandoff(writer, request)
+	case path == "/browser-handoff-authorizations" &&
+		request.Method == http.MethodPost:
+		contract.AuthorizeBrowserHandoff(
+			writer,
+			request,
+			gen.AuthorizeBrowserHandoffParams{},
+		)
 	case path == "/setup" && request.Method == http.MethodGet:
 		contract.GetSetup(writer, request)
 	case path == "/overview" && request.Method == http.MethodGet:
@@ -373,6 +402,293 @@ func (server *server) deleteSession(writer http.ResponseWriter, request *http.Re
 	writer.WriteHeader(http.StatusNoContent)
 }
 
+func (server *server) createBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+) {
+	if err := server.auth.ValidateOrigin(request); err != nil {
+		server.recordRejection(request.Context(), requestID, "request_forbidden")
+		server.writeAuthProblem(writer, request, requestID, err)
+		return
+	}
+	var input gen.CreateBrowserHandoffRequest
+	if err := decodeJSONBody(writer, request, &input); err != nil {
+		server.writeDecodeError(writer, request, requestID, err)
+		return
+	}
+	digest, ok := decodeCanonicalBase64URL32(input.ClaimDigest)
+	if !ok {
+		server.writeProblemWithFields(
+			writer,
+			request,
+			requestID,
+			http.StatusUnprocessableEntity,
+			"validation_failed",
+			"Request validation failed",
+			"Correct the listed fields and retry.",
+			[]gen.FieldError{{
+				Field:   "claimDigest",
+				Code:    "invalid_encoding",
+				Message: "The claim digest must be one canonical SHA-256 value.",
+			}},
+		)
+		return
+	}
+	handoff, err := server.auth.IssueBrowserHandoff(digest)
+	if err != nil {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	server.writeJSON(writer, http.StatusCreated, gen.BrowserHandoff{
+		Code:      handoff.Code(),
+		State:     gen.BrowserHandoffStatePending,
+		ExpiresAt: handoff.ExpiresAt(),
+	})
+}
+
+func (server *server) authorizeBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+) {
+	if _, authorized := server.authorizeMutation(
+		writer,
+		request,
+		requestID,
+	); !authorized {
+		return
+	}
+	var input gen.AuthorizeBrowserHandoffRequest
+	if err := decodeJSONBody(writer, request, &input); err != nil {
+		server.writeDecodeError(writer, request, requestID, err)
+		return
+	}
+	if !auth.ValidBrowserHandoffCodeEncoding(input.Code) {
+		server.writeBrowserHandoffValidation(
+			writer,
+			request,
+			requestID,
+			"code",
+		)
+		return
+	}
+	approval, err := server.auth.ApproveBrowserHandoff(input.Code)
+	if err != nil {
+		server.writeBrowserHandoffError(writer, request, requestID, err, true)
+		return
+	}
+	if !approval.NeedsAudit() {
+		writer.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := server.recordAudit(request.Context(), AuditInput{
+		Actor: "single_admin", Action: "browser_handoff_authorized",
+		Outcome: "succeeded", ResourceType: "controller", RequestID: requestID,
+	}); err != nil {
+		_ = server.auth.RollbackBrowserHandoffApproval(approval)
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	if err := server.auth.CommitBrowserHandoffApproval(approval); err != nil {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	writer.WriteHeader(http.StatusNoContent)
+}
+
+func (server *server) claimBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+) {
+	if err := server.auth.ValidateOrigin(request); err != nil {
+		server.recordRejection(request.Context(), requestID, "request_forbidden")
+		server.writeAuthProblem(writer, request, requestID, err)
+		return
+	}
+	var input gen.ClaimBrowserHandoffRequest
+	if err := decodeJSONBody(writer, request, &input); err != nil {
+		server.writeDecodeError(writer, request, requestID, err)
+		return
+	}
+	if !auth.ValidBrowserHandoffCodeEncoding(input.Code) {
+		server.writeBrowserHandoffValidation(
+			writer,
+			request,
+			requestID,
+			"code",
+		)
+		return
+	}
+	if input.ClaimSecret == nil {
+		server.writeBrowserHandoffValidation(
+			writer,
+			request,
+			requestID,
+			"claimSecret",
+		)
+		return
+	}
+	secret, ok := decodeCanonicalBase64URL32(*input.ClaimSecret)
+	if !ok {
+		server.writeBrowserHandoffValidation(
+			writer,
+			request,
+			requestID,
+			"claimSecret",
+		)
+		return
+	}
+	claim, err := server.auth.ClaimBrowserHandoff(input.Code, secret)
+	if err != nil {
+		server.writeBrowserHandoffError(writer, request, requestID, err, false)
+		return
+	}
+	session, cookie, err := server.auth.IssueSession()
+	if err != nil {
+		_ = server.auth.RollbackBrowserHandoffClaim(claim)
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	revokeAndRollback := func() {
+		_ = server.auth.RevokeSession(session)
+		_ = server.auth.RollbackBrowserHandoffClaim(claim)
+	}
+	if err := server.recordAudit(request.Context(), AuditInput{
+		Actor: "single_admin", Action: "authentication_succeeded",
+		Outcome: "succeeded", ResourceType: "controller", RequestID: requestID,
+	}); err != nil {
+		revokeAndRollback()
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	csrf, err := server.auth.CSRFToken(session)
+	if err != nil {
+		revokeAndRollback()
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	if err := server.auth.CommitBrowserHandoffClaim(claim); err != nil {
+		_ = server.auth.RevokeSession(session)
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	http.SetCookie(writer, cookie)
+	server.writeJSON(writer, http.StatusCreated, gen.Session{
+		Authenticated: gen.SessionAuthenticated(true),
+		CsrfToken:     csrf,
+	})
+}
+
+func (server *server) writeBrowserHandoffValidation(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	field string,
+) {
+	server.writeProblemWithFields(
+		writer,
+		request,
+		requestID,
+		http.StatusUnprocessableEntity,
+		"validation_failed",
+		"Request validation failed",
+		"Correct the listed fields and retry.",
+		[]gen.FieldError{{
+			Field:   field,
+			Code:    "invalid_encoding",
+			Message: "The browser handoff value is not canonically encoded.",
+		}},
+	)
+}
+
+func (server *server) writeBrowserHandoffError(
+	writer http.ResponseWriter,
+	request *http.Request,
+	requestID string,
+	err error,
+	ownerAuthorized bool,
+) {
+	var pending *auth.BrowserHandoffPendingError
+	switch {
+	case errors.As(err, &pending):
+		if ownerAuthorized {
+			server.writeProblem(
+				writer,
+				request,
+				requestID,
+				http.StatusConflict,
+				"browser_handoff_pending",
+				"Browser handoff authorization is in progress",
+				"Retry after the current owner authorization finishes.",
+				nil,
+			)
+			return
+		}
+		server.writeJSON(writer, http.StatusAccepted, gen.BrowserHandoffPending{
+			State:     gen.BrowserHandoffPendingStatePending,
+			ExpiresAt: pending.ExpiresAt(),
+		})
+	case errors.Is(err, auth.ErrExpiredBrowserHandoff):
+		server.writeProblem(
+			writer,
+			request,
+			requestID,
+			http.StatusGone,
+			"browser_handoff_expired",
+			"Browser handoff expired",
+			"Create and authorize a new browser handoff.",
+			nil,
+		)
+	case errors.Is(err, auth.ErrBrowserHandoffClaiming):
+		server.writeProblem(
+			writer,
+			request,
+			requestID,
+			http.StatusConflict,
+			"browser_handoff_claim_in_progress",
+			"Browser handoff claim is in progress",
+			"Wait for the active claim before checking the current session.",
+			nil,
+		)
+	case errors.Is(err, auth.ErrBrowserHandoffClaimed):
+		server.writeProblem(
+			writer,
+			request,
+			requestID,
+			http.StatusConflict,
+			"browser_handoff_already_claimed",
+			"Browser handoff was already claimed",
+			"Read the current session or create a new browser handoff.",
+			nil,
+		)
+	case errors.Is(err, auth.ErrInvalidBrowserHandoff):
+		server.recordRejection(request.Context(), requestID, "authentication_failed")
+		if ownerAuthorized {
+			server.writeBrowserHandoffValidation(
+				writer,
+				request,
+				requestID,
+				"code",
+			)
+			return
+		}
+		server.writeProblem(
+			writer,
+			request,
+			requestID,
+			http.StatusUnauthorized,
+			"browser_handoff_invalid",
+			"Browser handoff is invalid",
+			"Create and authorize a new browser handoff.",
+			nil,
+		)
+	default:
+		server.writeUnavailable(writer, request, requestID)
+	}
+}
+
 func (server *server) read(
 	writer http.ResponseWriter,
 	request *http.Request,
@@ -462,6 +778,14 @@ func (server *server) listAuditEvents(writer http.ResponseWriter, request *http.
 			return
 		}
 		response.NextCursor = &cursor
+	}
+	if page.ResumeAfter != nil {
+		cursor, err := encodeAuditCursor(*page.ResumeAfter)
+		if err != nil {
+			server.writeUnavailable(writer, request, requestID)
+			return
+		}
+		response.ResumeCursor = &cursor
 	}
 	server.writeJSON(writer, http.StatusOK, response)
 }
@@ -622,11 +946,27 @@ func (server *server) mutateNode(
 }
 
 func (server *server) streamEvents(writer http.ResponseWriter, request *http.Request, requestID string) {
-	if _, err := server.auth.AuthorizeSameOriginRead(request); err != nil {
+	session, err := server.auth.AuthorizeSameOriginRead(request)
+	if err != nil {
 		server.recordRejection(request.Context(), requestID, "event_stream_rejected")
 		server.writeAuthProblem(writer, request, requestID, err)
 		return
 	}
+	expiresAt, revoked, err := server.auth.WatchSession(session)
+	if err != nil {
+		server.recordRejection(request.Context(), requestID, "event_stream_rejected")
+		server.writeAuthProblem(writer, request, requestID, err)
+		return
+	}
+	streamContext, stopStream := context.WithDeadline(request.Context(), expiresAt)
+	defer stopStream()
+	go func() {
+		select {
+		case <-revoked:
+			stopStream()
+		case <-streamContext.Done():
+		}
+	}()
 	flusher, ok := writer.(http.Flusher)
 	if !ok {
 		server.writeUnavailable(writer, request, requestID)
@@ -637,10 +977,18 @@ func (server *server) streamEvents(writer http.ResponseWriter, request *http.Req
 	// as an invalidate event; it can never disappear between the two steps.
 	changes, generation, unsubscribe := server.events.subscribe()
 	defer unsubscribe()
-	revision, err := server.backend.CurrentRevision(request.Context())
+	revision, err := server.backend.CurrentRevision(streamContext)
 	if err != nil {
+		if streamContext.Err() != nil {
+			return
+		}
 		server.writeBackendError(writer, request, requestID, err)
 		return
+	}
+	select {
+	case <-streamContext.Done():
+		return
+	default:
 	}
 
 	writer.Header().Set("Content-Type", "text/event-stream")
@@ -664,13 +1012,13 @@ func (server *server) streamEvents(writer http.ResponseWriter, request *http.Req
 
 	for {
 		select {
-		case <-request.Context().Done():
+		case <-streamContext.Done():
 			return
 		case _, open := <-changes:
 			if !open {
 				return
 			}
-			revision, err = server.backend.CurrentRevision(request.Context())
+			revision, err = server.backend.CurrentRevision(streamContext)
 			if err != nil {
 				return
 			}
@@ -1002,6 +1350,18 @@ func requireEmptyBody(writer http.ResponseWriter, request *http.Request) error {
 		return errors.New("session bootstrap body is not empty")
 	}
 	return nil
+}
+
+func decodeCanonicalBase64URL32(value string) ([32]byte, bool) {
+	var result [32]byte
+	decoded, err := base64.RawURLEncoding.DecodeString(value)
+	if err != nil ||
+		len(decoded) != len(result) ||
+		base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return result, false
+	}
+	copy(result[:], decoded)
+	return result, true
 }
 
 var errInvalidAuditQuery = errors.New("audit page query is invalid")

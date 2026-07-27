@@ -562,8 +562,8 @@ available to the dedicated runner account.
 The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The API
 provides:
 
-- setup state; GitHub App Manifest callback support remains unavailable until its
-  one-time signed callback-state contract is implemented
+- setup state; GitHub App Manifest callback support remains unavailable until
+  TWK-016 implements its provider and signed callback-state authority
 - node inventory, join-code creation/cancellation, drain/resume, revoke, and the
   node-reported availability intent with its observation age
 - target and runner-profile configuration
@@ -594,16 +594,49 @@ root and proof are never placed in argv, environment variables, SQLite, config,
 logs, audit rows, or response bodies.
 
 TWK-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
-browser bootstrap. TWK-013 must add a separate one-time owner-authorized browser
-handoff before the embedded static UI can establish a session; JavaScript cannot
-read the Controller credential and a plain same-origin POST returns 401. After a
-valid proof, the Controller issues a random process-local session nonce signed with
-a separate domain-separated HMAC-SHA-256. The host-only cookie has `Path=/`,
-`HttpOnly`, and `SameSite=Strict`; a future explicit TLS mode must also set
-`Secure`. The session expires after twelve hours and is invalidated by logout or
-Controller restart. The per-session CSRF value is another domain-separated HMAC
-over the session nonce and canonical origin and is returned only by the
-authenticated session API.
+browser bootstrap. JavaScript cannot read the Controller credential and a plain
+same-origin session POST returns 401. TWK-013 adds a device-code-style browser
+handoff without putting a bearer credential in a URL or command argument:
+
+1. the browser creates a random 256-bit claim secret with Web Crypto, retains it
+   only in volatile component state, and sends its canonical SHA-256 digest to
+   `POST /api/v1/browser-handoffs`;
+2. the Controller returns a process-key-signed `twh1` code containing a 128-bit
+   handoff ID, issue time, and claim digest. The code is a correlation value, not
+   authentication authority;
+3. the UI displays `tewake ui authorize '<code>'`. That CLI command uses the
+   existing owner proof, temporary administrator session, CSRF, and logout path to
+   approve the exact code;
+4. the same browser tab sends the code and its claim secret to
+   `POST /api/v1/browser-handoffs/claim`. A pending approval returns 202; the first
+   matching approved claim receives the normal administrator cookie and CSRF
+   response.
+
+The entire handoff expires at the existing two-minute bootstrap boundary and an
+approval does not extend it. The process-local handoff signing key and approval
+map disappear on Controller restart. Approval is fenced before its audit commit
+and becomes claimable only after that commit succeeds. Claim atomically fences an
+approved handoff before issuing a session; if the authentication audit fails, the
+new session is revoked and the handoff returns to approved state. A concurrent or
+replayed claim never creates a second session.
+
+The append-only audit actions deliberately describe the authority boundary that
+the Controller actually observed, not HTTP delivery: `browser_handoff_authorized`
+means the single owner decision was durably recorded, and
+`authentication_succeeded` means the claim preimage was validated and a
+process-local session was issued. Neither action claims that `Set-Cookie` reached
+the browser. If the handoff expires while an audit append is in flight, final
+fence commit fails closed, the API returns an error, and any newly issued session
+is revoked without emitting a cookie. Operators must use the request outcome and
+current session state—not an audit success row alone—as delivery evidence.
+
+After either owner bootstrap or browser claim, the Controller issues a random
+process-local session nonce signed with a separate domain-separated
+HMAC-SHA-256. The host-only cookie has `Path=/`, `HttpOnly`, and
+`SameSite=Strict`; a future explicit TLS mode must also set `Secure`. The session
+expires after twelve hours and is invalidated by logout or Controller restart.
+The per-session CSRF value is another domain-separated HMAC over the session nonce
+and canonical origin and is returned only by the authenticated session API.
 
 Known management operations use this rejection order:
 
@@ -613,6 +646,13 @@ Known management operations use this rejection order:
 4. media, size, schema, or domain validation failure: 400, 413, 415, or 422;
 5. stale optimistic configuration revision: 409;
 6. unavailable audit/store authority: 503.
+
+Unauthenticated browser handoff issuance and claim still require the exact Host
+and Origin before parsing claim material. An invalid or expired code never reveals
+whether a different claim secret was registered. The code may be rendered and
+copied, but the claim secret never enters DOM text, a URL, history state,
+`localStorage`, `sessionStorage`, IndexedDB, a service-worker cache, logs, or
+diagnostics.
 
 CORS headers are absent. The CLI obtains the same cookie and CSRF value, calls the
 same `/api/v1` contract, and sends `DELETE /session` in a detached bounded context
@@ -659,12 +699,24 @@ is never stored for replay, the UI must not persist it after the one-time displa
 and subsequent reads expose only non-secret metadata. Cancellation and consumption
 remain auditable. The database continues to retain only the code digest.
 
-SSE is an authenticated, same-origin, invalidation-only stream. Events contain a
-schema version, opaque cursor, and safe resource names, not resource snapshots.
-`ready`, `invalidate`, and `reset` are the only event kinds. Slow subscribers have
-at most one pending invalidation, and an absent, old, or unknown cursor produces a
-`reset` so the client refetches REST state; the Controller does not retain an
-unbounded event history.
+SSE is an authenticated, same-origin, invalidation-only stream. Native
+`EventSource` cannot attach the per-session CSRF header and same-origin GETs do not
+reliably carry an Origin header, so the Web client reads the stream with
+same-origin `fetch`, the host-only session cookie, and `X-Tewake-CSRF`. The token
+never enters the URL, while cross-origin JavaScript cannot send that header through
+the API's no-CORS boundary. Events contain a schema version, opaque cursor, and
+safe resource names, not resource snapshots. `ready`, `invalidate`, and `reset`
+are the only event kinds. Slow subscribers have at most one pending invalidation,
+and an absent, old, or unknown cursor produces a `reset` so the client refetches
+REST state; the Controller does not retain an unbounded event history. Network
+and 5xx stream failures retain the confirmed snapshot while reconnecting. A 401
+or 403 is instead terminal for that subscription: the client stops retrying,
+removes the protected snapshot from view, and requires a fresh browser handoff.
+Each open stream also owns a context bounded by the authenticated session's
+absolute deadline and exact revocation signal. The deadline is never recomputed
+as a relative timeout after authorization, so scheduler delay cannot extend it.
+Expiry or logout closes the existing response, so a quiet event bus cannot keep
+stale authority alive; the next reconnect receives the terminal 401 or 403.
 
 The configuration request-body limit is a transport memory boundary, not a fleet,
 Node, Target, or history quota. It is applied before JSON or YAML decoding and

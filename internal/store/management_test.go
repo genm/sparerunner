@@ -572,7 +572,9 @@ func TestManagementAuditPageUsesExclusiveCursorAndBoundedLookahead(t *testing.T)
 	}
 	if !reflect.DeepEqual(first.Events, appended[:2]) ||
 		first.NextAfter == nil ||
-		*first.NextAfter != appended[1].Sequence {
+		*first.NextAfter != appended[1].Sequence ||
+		first.ResumeAfter == nil ||
+		*first.ResumeAfter != appended[1].Sequence {
 		t.Fatalf("first audit page = %#v", first)
 	}
 
@@ -582,7 +584,9 @@ func TestManagementAuditPageUsesExclusiveCursorAndBoundedLookahead(t *testing.T)
 	}
 	if !reflect.DeepEqual(second.Events, appended[2:4]) ||
 		second.NextAfter == nil ||
-		*second.NextAfter != appended[3].Sequence {
+		*second.NextAfter != appended[3].Sequence ||
+		second.ResumeAfter == nil ||
+		*second.ResumeAfter != appended[3].Sequence {
 		t.Fatalf("second audit page = %#v", second)
 	}
 
@@ -590,7 +594,10 @@ func TestManagementAuditPageUsesExclusiveCursorAndBoundedLookahead(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !reflect.DeepEqual(last.Events, appended[4:]) || last.NextAfter != nil {
+	if !reflect.DeepEqual(last.Events, appended[4:]) ||
+		last.NextAfter != nil ||
+		last.ResumeAfter == nil ||
+		*last.ResumeAfter != appended[4].Sequence {
 		t.Fatalf("last audit page = %#v", last)
 	}
 
@@ -598,7 +605,10 @@ func TestManagementAuditPageUsesExclusiveCursorAndBoundedLookahead(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(empty.Events) != 0 || empty.NextAfter != nil {
+	if len(empty.Events) != 0 ||
+		empty.NextAfter != nil ||
+		empty.ResumeAfter == nil ||
+		*empty.ResumeAfter != appended[4].Sequence {
 		t.Fatalf("empty audit page = %#v", empty)
 	}
 }
@@ -699,6 +709,13 @@ func TestManagementAuditSupportsSessionJoinAndNodeActions(t *testing.T) {
 			ResourceID:   "00112233445566778899aabbccddeeff",
 			ErrorCode:    AuditErrorAgentProtocolRejected,
 			RequestID:    "req_43434343434343434343434343434343",
+		},
+		{
+			Actor:        AuditActorSingleAdmin,
+			Action:       AuditActionBrowserHandoffAuthorized,
+			Outcome:      AuditOutcomeSucceeded,
+			ResourceKind: AuditResourceController,
+			RequestID:    "req_40404040404040404040404040404040",
 		},
 		{
 			Actor:        AuditActorSingleAdmin,

@@ -28,6 +28,73 @@ const (
 	testRawSecret     = "raw-server-secret-must-not-leak"
 )
 
+func TestUIAuthorizeUsesOwnerSessionAndDoesNotTreatCodeAsAuthority(t *testing.T) {
+	code := canonicalManagementCLITestBrowserHandoffCode()
+	server := newManagementCLITestServer(t, func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost ||
+			request.URL.Path != "/api/v1/browser-handoff-authorizations" {
+			t.Fatalf("operation request = %s %s", request.Method, request.URL.Path)
+		}
+		if request.Header.Get(auth.CSRFHeaderName) != testCSRFToken {
+			t.Fatalf("operation CSRF = %q", request.Header.Get(auth.CSRFHeaderName))
+		}
+		if _, err := request.Cookie(auth.SessionCookieName); err != nil {
+			t.Fatalf("operation session cookie: %v", err)
+		}
+		if request.Header.Get(auth.BootstrapHeaderName) != "" {
+			t.Fatal("operation leaked owner bootstrap proof")
+		}
+		var body struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body.Code != code {
+			t.Fatalf("handoff code = %q", body.Code)
+		}
+		writer.WriteHeader(http.StatusNoContent)
+	})
+	defer server.Close()
+
+	var stdout, stderr bytes.Buffer
+	err := run(withManagementState(t, []string{
+		"ui", "authorize", code,
+		"--admin-url", server.URL + "/api/v1",
+	}), &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("ui authorize: %v", err)
+	}
+	if stdout.String() != "Browser authorized. Return to Tewake in the browser.\n" {
+		t.Fatalf("stdout = %q", stdout.String())
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr = %q", stderr.String())
+	}
+}
+
+func TestUIAuthorizeRejectsMalformedCodeBeforeReadingOwnerCredential(t *testing.T) {
+	previous := loadManagementBootstrapProof
+	loadManagementBootstrapProof = func(string, string) (string, error) {
+		t.Fatal("malformed handoff reached owner credential boundary")
+		return "", nil
+	}
+	t.Cleanup(func() {
+		loadManagementBootstrapProof = previous
+	})
+
+	var stdout, stderr bytes.Buffer
+	err := run([]string{
+		"ui", "authorize", "twh1.not-a-valid-code",
+	}, &stdout, &stderr)
+	if err == nil || err.Error() != "browser handoff code is invalid" {
+		t.Fatalf("error = %v", err)
+	}
+	if stdout.Len() != 0 || stderr.Len() != 0 {
+		t.Fatalf("output = (%q, %q)", stdout.String(), stderr.String())
+	}
+}
+
 func TestNodeAddUsesManagementAPISessionCookieOriginAndCSRF(t *testing.T) {
 	var operationCalls int
 	hints := []string{"https://controller.example.test:7443"}
@@ -664,6 +731,11 @@ func newManagementCLITestJoinCode(t *testing.T, hints []string) (string, string)
 	}
 	tokenID := code.TokenID()
 	return encoded, hex.EncodeToString(tokenID[:])
+}
+
+func canonicalManagementCLITestBrowserHandoffCode() string {
+	return "twh1.1." + strings.Repeat("A", 22) + "." +
+		strings.Repeat("A", 43) + "." + strings.Repeat("A", 43)
 }
 
 func assertApplyRequest(

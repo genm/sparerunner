@@ -1143,6 +1143,86 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 	}
 }
 
+func TestBrowserHandoffAuditMigrationPreservesVersionElevenRowsAndGuards(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	db := openRawTestDatabase(t)
+	defer db.Close()
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(migrations) < 12 {
+		t.Fatalf("controller migrations = %d, want at least 12", len(migrations))
+	}
+	if err := applyLoadedMigrations(
+		ctx,
+		db,
+		"controller",
+		migrations[:11],
+		func() time.Time { return time.Unix(100, 0) },
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	const requestID = "req_0123456789abcdef0123456789abcdef"
+	if _, err := db.ExecContext(ctx, `INSERT INTO management_audit_events(
+			sequence, occurred_at_unix_nano, actor, action, outcome,
+			resource_kind, resource_id, error_code, request_id, revision
+		) VALUES (1, 1, 'single_admin', 'authentication_succeeded',
+			'succeeded', 'controller', '', '', ?, 11)`, requestID); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyLoadedMigrations(
+		ctx,
+		db,
+		"controller",
+		migrations,
+		func() time.Time { return time.Unix(101, 0) },
+		nil,
+	); err != nil {
+		t.Fatal(err)
+	}
+	var action string
+	var revision uint64
+	if err := db.QueryRowContext(
+		ctx,
+		`SELECT action, revision FROM management_audit_events WHERE sequence = 1`,
+	).Scan(&action, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if action != "authentication_succeeded" || revision != 11 {
+		t.Fatalf("preserved audit = (%q, %d)", action, revision)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO management_audit_events(
+			sequence, occurred_at_unix_nano, actor, action, outcome,
+			resource_kind, resource_id, error_code, request_id, revision
+		) VALUES (2, 2, 'single_admin', 'browser_handoff_authorized',
+			'succeeded', 'controller', '', '', ?, 12)`, requestID); err != nil {
+		t.Fatalf("new browser handoff audit rejected: %v", err)
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`UPDATE management_audit_events SET revision = 13 WHERE sequence = 1`,
+	); err == nil {
+		t.Fatal("upgraded audit row was mutable")
+	}
+	if _, err := db.ExecContext(
+		ctx,
+		`DELETE FROM management_audit_events WHERE sequence = 1`,
+	); err == nil {
+		t.Fatal("upgraded audit row was deletable")
+	}
+	for _, column := range tableColumns(t, db, "management_audit_events") {
+		switch column {
+		case "code", "claim_digest", "claim_secret", "session", "csrf":
+			t.Fatalf("browser credential column migrated into audit table: %q", column)
+		}
+	}
+}
+
 func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
 	ctx := context.Background()
 	db := openRawTestDatabase(t)

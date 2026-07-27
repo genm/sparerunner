@@ -21,6 +21,32 @@ type generatedServerContract struct {
 
 var _ gen.ServerInterface = (*generatedServerContract)(nil)
 
+func (contract *generatedServerContract) AuthorizeBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+	_ gen.AuthorizeBrowserHandoffParams,
+) {
+	contract.server.authorizeBrowserHandoff(
+		writer,
+		request,
+		contract.requestID,
+	)
+}
+
+func (contract *generatedServerContract) CreateBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	contract.server.createBrowserHandoff(writer, request, contract.requestID)
+}
+
+func (contract *generatedServerContract) ClaimBrowserHandoff(
+	writer http.ResponseWriter,
+	request *http.Request,
+) {
+	contract.server.claimBrowserHandoff(writer, request, contract.requestID)
+}
+
 func (contract *generatedServerContract) ListAuditEvents(
 	writer http.ResponseWriter,
 	request *http.Request,

@@ -1,0 +1,135 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test } from "@playwright/experimental-ct-react";
+
+import { App } from "./App";
+import { createScenarioClient } from "./test/scenario-client";
+import type { ScenarioName, ScreenName } from "./ui/state-registry";
+
+type StateCase = {
+  readonly scenario: ScenarioName;
+  readonly route: ScreenName;
+  readonly expectedText: string | RegExp;
+};
+
+async function captureState(
+  testInfo: { outputPath: (name: string) => string },
+  page: { screenshot: (options: { path: string; fullPage: boolean }) => Promise<unknown> },
+  name: string,
+) {
+  await page.screenshot({ path: testInfo.outputPath(`${name}.png`), fullPage: true });
+}
+
+const stateCases: readonly StateCase[] = [
+  {
+    scenario: "loading",
+    route: "overview",
+    expectedText: /Opening the local management console/i,
+  },
+  {
+    scenario: "empty",
+    route: "nodes",
+    expectedText: "No enrolled nodes",
+  },
+  {
+    scenario: "running",
+    route: "runs",
+    expectedText: "running",
+  },
+  {
+    scenario: "offline",
+    route: "nodes",
+    expectedText: /last known/i,
+  },
+  {
+    scenario: "stale",
+    route: "targets",
+    expectedText: /last known — stale/i,
+  },
+  {
+    scenario: "permission_error",
+    route: "overview",
+    expectedText: "Administrator session required",
+  },
+  {
+    scenario: "quarantined",
+    route: "nodes",
+    expectedText: "Safety quarantine",
+  },
+];
+
+for (const stateCase of stateCases) {
+  test(`${stateCase.scenario} remains explicit`, async ({ mount, page }, testInfo) => {
+    const component = await mount(
+      <App api={createScenarioClient(stateCase.scenario)} initialRoute={stateCase.route} />,
+    );
+    await expect(component.getByText(stateCase.expectedText)).toBeVisible();
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await captureState(testInfo, page, `${stateCase.scenario}-${testInfo.project.name}`);
+  });
+}
+
+test("pending browser handoff remains non-authorizing", async ({ mount, page }, testInfo) => {
+  const component = await mount(
+    <App api={createScenarioClient("handoff_processing")} initialRoute="setup" />,
+  );
+  await component.getByRole("button", { name: "Begin browser authorization" }).click();
+  await component.getByRole("button", { name: "Continue after authorization" }).click();
+
+  await expect(component.getByText(/Authorization is still pending/i)).toBeVisible();
+  await expect(component.getByText(/TWA-TEST-DEVICE-CODE/)).toBeVisible();
+  expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  expect(page.url()).not.toContain("claimSecret");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `handoff-pending-${testInfo.project.name}`);
+});
+
+test("rejected browser handoff is scrubbed", async ({ mount, page }, testInfo) => {
+  const component = await mount(
+    <App api={createScenarioClient("handoff_rejected")} initialRoute="setup" />,
+  );
+  await component.getByRole("button", { name: "Begin browser authorization" }).click();
+  await component.getByRole("button", { name: "Continue after authorization" }).click();
+
+  await expect(component.getByText(/rejected or expired/i)).toBeVisible();
+  await expect(component.getByText(/TWA-TEST-DEVICE-CODE/)).toHaveCount(0);
+  expect(await page.evaluate(() => [localStorage.length, sessionStorage.length])).toEqual([0, 0]);
+  expect(page.url()).not.toContain("claimSecret");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `handoff-rejected-${testInfo.project.name}`);
+});
+
+test("navigation and live-update state remain reachable", async ({ mount, page }, testInfo) => {
+  const component = await mount(
+    <App api={createScenarioClient("empty")} initialRoute="overview" />,
+  );
+
+  await expect(component.getByText("Live updates reconnecting")).toBeVisible();
+  for (const label of ["Setup", "Overview", "Nodes", "Targets", "Runs", "Settings"]) {
+    await expect(component.getByRole("link", { name: label, exact: true })).toBeVisible();
+  }
+  const settingsBox = await component
+    .getByRole("link", { name: "Settings", exact: true })
+    .boundingBox();
+  const viewport = page.viewportSize();
+  expect(settingsBox).not.toBeNull();
+  expect(viewport).not.toBeNull();
+  expect(settingsBox!.x).toBeGreaterThanOrEqual(0);
+  expect(settingsBox!.x + settingsBox!.width).toBeLessThanOrEqual(viewport!.width);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `navigation-${testInfo.project.name}`);
+});
+
+test("field validation identifies the invalid control", async ({ mount, page }, testInfo) => {
+  const component = await mount(
+    <App api={createScenarioClient("validation_error")} initialRoute="settings" />,
+  );
+  const maximum = component.getByRole("spinbutton", { name: "Maximum runners" });
+  await component.getByRole("button", { name: "Apply configuration" }).click();
+
+  await expect(maximum).toHaveAttribute("aria-invalid", "true");
+  await expect(maximum).toHaveAttribute("aria-describedby", "scheduler-max-error");
+  await expect(component.locator("#scheduler-max-error")).toHaveAttribute("role", "alert");
+  await expect(component.locator("#scheduler-max-error")).toHaveText("must be positive");
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `validation-error-${testInfo.project.name}`);
+});

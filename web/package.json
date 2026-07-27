@@ -11,6 +11,8 @@
     "lint": "oxlint --deny-warnings src",
     "test": "vitest",
     "test:ci": "vitest run --reporter=default --reporter=junit --outputFile.junit=../output/test-results/vitest-junit.xml",
+    "test:ct": "playwright test -c playwright-ct.config.ts",
+    "test:e2e": "playwright test -c playwright-e2e.config.ts",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {
@@ -18,11 +20,16 @@
     "react-dom": "19.2.8"
   },
   "devDependencies": {
+    "@axe-core/playwright": "4.12.1",
+    "@playwright/experimental-ct-react": "1.62.0",
+    "@playwright/test": "1.62.0",
     "@testing-library/react": "16.3.2",
+    "@testing-library/user-event": "14.6.1",
     "@types/react": "19.2.14",
     "@types/react-dom": "19.2.3",
     "@vitejs/plugin-react": "6.0.4",
     "jsdom": "28.0.0",
+    "msw": "2.15.0",
     "oxfmt": "0.60.0",
     "oxlint": "1.75.0",
     "typescript": "7.0.2",

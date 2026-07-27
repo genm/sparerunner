@@ -72,6 +72,119 @@ paths:
           $ref: "#/components/responses/Misdirected"
         "503":
           $ref: "#/components/responses/Unavailable"
+  /browser-handoffs:
+    post:
+      operationId: createBrowserHandoff
+      summary: Create a non-authorizing browser handoff code
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateBrowserHandoffRequest"
+      responses:
+        "201":
+          description: Browser handoff created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserHandoff"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMedia"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /browser-handoffs/claim:
+    post:
+      operationId: claimBrowserHandoff
+      summary: Claim an owner-approved browser handoff
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ClaimBrowserHandoffRequest"
+      responses:
+        "201":
+          description: Administrator session created
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "202":
+          description: Handoff still awaits owner approval
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BrowserHandoffPending"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMedia"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /browser-handoff-authorizations:
+    post:
+      operationId: authorizeBrowserHandoff
+      summary: Authorize one browser handoff as the Controller owner
+      parameters:
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthorizeBrowserHandoffRequest"
+      responses:
+        "204":
+          description: Browser handoff authorized
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "410":
+          $ref: "#/components/responses/Gone"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMedia"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /setup:
     get:
       operationId: getSetup
@@ -472,6 +585,7 @@ paths:
           required: false
           schema:
             type: string
+        - $ref: "#/components/parameters/CSRFToken"
       responses:
         "200":
           description: SSE ready, invalidate, and reset events
@@ -557,6 +671,12 @@ components:
         application/problem+json:
           schema:
             $ref: "#/components/schemas/Problem"
+    Gone:
+      description: The short-lived resource expired
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
     ValidationFailed:
       description: The request is structurally valid but violates management invariants
       content:
@@ -623,6 +743,60 @@ components:
           enum: [true]
         csrfToken:
           type: string
+    CreateBrowserHandoffRequest:
+      type: object
+      additionalProperties: false
+      required: [claimDigest]
+      properties:
+        claimDigest:
+          type: string
+          description: Canonical raw-base64url SHA-256 of the browser-held claim secret.
+          pattern: "^[A-Za-z0-9_-]{43}$"
+    ClaimBrowserHandoffRequest:
+      type: object
+      additionalProperties: false
+      required: [code, claimSecret]
+      properties:
+        code:
+          $ref: "#/components/schemas/BrowserHandoffCode"
+        claimSecret:
+          type: string
+          writeOnly: true
+          description: Canonical raw-base64url 256-bit secret retained only by the requesting browser tab.
+          pattern: "^[A-Za-z0-9_-]{43}$"
+    AuthorizeBrowserHandoffRequest:
+      type: object
+      additionalProperties: false
+      required: [code]
+      properties:
+        code:
+          $ref: "#/components/schemas/BrowserHandoffCode"
+    BrowserHandoffCode:
+      type: string
+      description: Signed correlation code that carries no session authority without the browser claim secret.
+      pattern: '^twh1\.[0-9]{1,19}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}\.[A-Za-z0-9_-]{43}$'
+    BrowserHandoff:
+      type: object
+      required: [code, state, expiresAt]
+      properties:
+        code:
+          $ref: "#/components/schemas/BrowserHandoffCode"
+        state:
+          type: string
+          enum: [pending]
+        expiresAt:
+          type: string
+          format: date-time
+    BrowserHandoffPending:
+      type: object
+      required: [state, expiresAt]
+      properties:
+        state:
+          type: string
+          enum: [pending]
+        expiresAt:
+          type: string
+          format: date-time
     Setup:
       type: object
       required:
@@ -896,6 +1070,13 @@ components:
             $ref: "#/components/schemas/AuditEvent"
         nextCursor:
           type: string
+          pattern: '^aud1_[A-Za-z0-9_-]{11}$'
+        resumeCursor:
+          type: string
+          description: |
+            Opaque exclusive cursor for the last event represented by this
+            response. Unlike nextCursor, it remains present on the final page
+            so append-only consumers can request only later events.
           pattern: '^aud1_[A-Za-z0-9_-]{11}$'
     CreateJoinCodeRequest:
       type: object

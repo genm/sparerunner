@@ -342,7 +342,9 @@ func TestManagementBackendProjectsBoundedAuditPages(t *testing.T) {
 		first.Events[0].ErrorCode == nil ||
 		*first.Events[0].ErrorCode != "authentication_failed" ||
 		first.NextAfter == nil ||
-		*first.NextAfter != 2 {
+		*first.NextAfter != 2 ||
+		first.ResumeAfter == nil ||
+		*first.ResumeAfter != 2 {
 		t.Fatalf("first backend audit page = %#v", first)
 	}
 
@@ -352,7 +354,9 @@ func TestManagementBackendProjectsBoundedAuditPages(t *testing.T) {
 	}
 	if len(last.Events) != 1 ||
 		last.Events[0].Id != "audit-3" ||
-		last.NextAfter != nil {
+		last.NextAfter != nil ||
+		last.ResumeAfter == nil ||
+		*last.ResumeAfter != 3 {
 		t.Fatalf("last backend audit page = %#v", last)
 	}
 }
@@ -472,6 +476,26 @@ func TestManagementProjectionDegradationBlocksConfigurationBeforeCommit(t *testi
 		setup.Conditions[0].Code != "management_projection_unavailable" ||
 		setup.Conditions[0].Status != gen.ConditionStatusUnavailable {
 		t.Fatalf("degraded projection conditions = %#v", setup.Conditions)
+	}
+}
+
+func TestManagementHealthyConditionsRemainEmptyArrays(t *testing.T) {
+	ctx := context.Background()
+	backend, _ := newManagementBackendForTest(t)
+
+	setup, err := backend.Setup(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overview, err := backend.Overview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup.Conditions == nil || len(setup.Conditions) != 0 {
+		t.Fatalf("healthy setup conditions = %#v, want empty array", setup.Conditions)
+	}
+	if overview.Conditions == nil || len(overview.Conditions) != 0 {
+		t.Fatalf("healthy overview conditions = %#v, want empty array", overview.Conditions)
 	}
 }
 

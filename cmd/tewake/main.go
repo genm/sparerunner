@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/genm/tewake/internal/app"
+	"github.com/genm/tewake/internal/auth"
 	"github.com/genm/tewake/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
@@ -74,6 +75,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newServeCommand())
 	root.AddCommand(newJoinCommand())
 	root.AddCommand(newNodeCommand())
+	root.AddCommand(newUICommand())
 	root.AddCommand(newConfigCommand())
 	return root
 }
@@ -221,6 +223,52 @@ func newNodeCommand() *cobra.Command {
 	add.Flags().StringSliceVar(&hints, "hint", nil, "HTTPS controller endpoint hint embedded in the join code")
 	node.AddCommand(add)
 	return node
+}
+
+func newUICommand() *cobra.Command {
+	var adminURL, stateDirectory string
+	ui := &cobra.Command{
+		Use:   "ui",
+		Short: "Authorize access to the loopback management UI",
+	}
+	authorize := &cobra.Command{
+		Use:   "authorize <handoff-code>",
+		Short: "Authorize one browser-generated handoff",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			if !auth.ValidBrowserHandoffCodeEncoding(args[0]) {
+				return errors.New("browser handoff code is invalid")
+			}
+			client, err := newOwnerManagementAPIClient(adminURL, stateDirectory)
+			if err != nil {
+				return err
+			}
+			return client.withSession(command.Context(), func(ctx context.Context) error {
+				if err := client.authorizeBrowserHandoff(ctx, args[0]); err != nil {
+					return err
+				}
+				fmt.Fprintln(
+					command.OutOrStdout(),
+					"Browser authorized. Return to Tewake in the browser.",
+				)
+				return nil
+			})
+		},
+	}
+	authorize.Flags().StringVar(
+		&adminURL,
+		"admin-url",
+		defaultAdminURL,
+		"loopback management API URL",
+	)
+	authorize.Flags().StringVar(
+		&stateDirectory,
+		"state-dir",
+		"",
+		"controller state directory used to authorize the local admin session",
+	)
+	ui.AddCommand(authorize)
+	return ui
 }
 
 func newConfigCommand() *cobra.Command {
