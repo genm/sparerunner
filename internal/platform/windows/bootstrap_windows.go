@@ -588,7 +588,7 @@ func validateBootstrapClient(handle syswindows.Handle) error {
 	var processID uint32
 	if err := syswindows.GetNamedPipeClientProcessId(handle, &processID); err != nil ||
 		processID == 0 {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("client process id=%d err=%v", processID, err))
 	}
 	return validateElevatedProcess(processID)
 }
@@ -642,28 +642,28 @@ func validateElevatedProcess(processID uint32) error {
 		processID,
 	)
 	if err != nil {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("open elevated process id=%d err=%v", processID, err))
 	}
 	defer syswindows.CloseHandle(process)
 	var token syswindows.Token
 	if err := syswindows.OpenProcessToken(process, syswindows.TOKEN_QUERY, &token); err != nil {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("open elevated token id=%d err=%v", processID, err))
 	}
 	defer token.Close()
 	user, err := token.GetTokenUser()
 	if err != nil || user == nil || user.User.Sid == nil {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("elevated token user id=%d err=%v", processID, err))
 	}
 	if strings.EqualFold(user.User.Sid.String(), "S-1-5-18") {
 		return nil
 	}
 	administrators, err := syswindows.CreateWellKnownSid(syswindows.WinBuiltinAdministratorsSid)
 	if err != nil {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("administrator sid id=%d err=%v", processID, err))
 	}
 	member, err := token.IsMember(administrators)
 	if err != nil || !member || !token.IsElevated() {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("elevated membership id=%d member=%t elevated=%t err=%v", processID, member, token.IsElevated(), err))
 	}
 	return nil
 }
