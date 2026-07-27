@@ -19,8 +19,8 @@ the accepted specification, durable domain/store foundations, the isolated GitHu
 scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
 work for development, including pinned enrollment, mTLS WebSockets, and reconnect.
-Scheduling, OS service installation, GitHub job execution, cleanup, and the
-management API remain incomplete. Do not install it on a production runner fleet.
+Scheduling, OS service installation, GitHub job execution, cleanup, the
+management API, and the desktop tray client remain incomplete. Do not install it on a production runner fleet.
 
 The specification is the project source of truth:
 
@@ -48,6 +48,11 @@ runs-on: tewake
 ```
 
 OS-specific labels are `tewake-linux`, `tewake-macos`, and `tewake-windows`.
+
+On a computer you also use yourself, an optional tray client sits in the system tray
+or menu bar. It shows what that computer is running and stops or resumes accepting
+new jobs in one click. Stopping never cancels the job already running, and the same
+switch is available as `tewake node pause` / `tewake node resume` and in the Web UI.
 
 ## Product boundary
 

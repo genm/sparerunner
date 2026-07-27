@@ -341,19 +341,68 @@ tasks:
       - Component screenshots have no unresolved visual or accessibility defects.
       - A release binary serves the same generated UI with no Node.js runtime.
 
+  - id: twk-016
+    title: Implement node availability control
+    type: backend
+    description: >
+      Add the durable node-local availability intent, the same-host agent control
+      endpoint with OS peer authorization, protocol reporting, scheduler
+      enforcement, and the shared API/CLI availability mutation.
+    depends_on: [twk-010, twk-012]
+    paths:
+      - internal/nodectl
+      - internal/agent
+      - internal/scheduler
+      - internal/transport
+      - internal/api
+      - cmd/tewake
+      - cmd/tewake-agent
+    ci_targets: [lint, test, build]
+    pr_order: 14
+    status: todo
+    acceptance:
+      - A stopped node receives no execution and remains stopped across agent service restart and reboot.
+      - Stopping during a running job leaves the job running and passes normal verified cleanup.
+      - Without a controller session, stopping applies locally and resuming reports pending instead of accepting.
+      - Controller Draining, Quarantined, and Revoked override a local Accepting intent.
+      - An unauthorized or unidentifiable local control peer is refused with no state change and an audit event.
+      - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
+
+  - id: twk-017
+    title: Ship the desktop tray client
+    type: platform
+    description: >
+      Build the optional unprivileged per-user tray client for macOS, Windows, and
+      StatusNotifierItem Linux desktops, with login-item installation and native
+      per-platform build and packaging.
+    depends_on: [twk-007, twk-008, twk-009, twk-016]
+    paths:
+      - cmd/tewake-tray
+      - packaging/tray
+      - test/live/tray
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 15
+    status: todo
+    acceptance:
+      - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
+      - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
+      - A desktop without a tray host exits with an explicit unsupported-environment error while the agent service and CLI continue unchanged.
+      - Removing, stopping, or never installing the tray changes no fleet behavior.
+      - Tray build failure does not gate controller or agent artifacts, and the support matrix states which packages include it.
+
   - id: twk-014
     title: Validate cross-platform security and release behavior
     type: verification
     description: >
       Run real three-OS, two-installation E2E and publish the threat model, security
       contract, support matrix, native-isolation limitations, and machine-readable evidence.
-    depends_on: [twk-008, twk-009, twk-011, twk-013]
+    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017]
     paths:
       - docs/security
       - test/live
       - output/release-evidence
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 14
+    pr_order: 16
     status: todo
     acceptance:
       - Private generic and OS-specific jobs route correctly across all three OSes.
@@ -376,7 +425,7 @@ tasks:
       - CONTRIBUTING.md
       - SECURITY.md
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 15
+    pr_order: 17
     status: todo
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
