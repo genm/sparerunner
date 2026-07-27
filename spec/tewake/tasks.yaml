@@ -347,7 +347,8 @@ tasks:
     description: >
       Add the durable node-local availability intent, the same-host agent control
       endpoint with OS peer authorization, protocol reporting, scheduler
-      enforcement, and the shared API/CLI availability mutation.
+      enforcement, the shared API/CLI availability mutation, and the versioned
+      machine-readable CLI document that desktop clients integrate against.
     depends_on: [twk-010, twk-012]
     paths:
       - internal/nodectl
@@ -367,6 +368,7 @@ tasks:
       - Controller Draining, Quarantined, and Revoked override a local Accepting intent.
       - An unauthorized or unidentifiable local control peer is refused with no state change and an audit event.
       - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
+      - "`tewake node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
 
   - id: twk-017
     title: Ship the desktop tray client
@@ -432,3 +434,27 @@ tasks:
       - Checksums, SBOM, provenance, and available platform signatures verify.
       - Every release gate and real-fleet evidence check succeeds.
       - The public release documents unsupported signing or platform combinations explicitly.
+
+  - id: twk-018
+    title: Ship the Raycast launcher extension
+    type: frontend
+    description: >
+      Build the optional macOS Raycast extension over the versioned CLI contract,
+      with status view, pause and resume commands, CLI resolution and compatibility
+      checks, and no stored controller credential.
+    depends_on: [twk-008, twk-016]
+    paths:
+      - extensions/raycast
+      - docs/integrations
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 18
+    status: todo
+    notes: >
+      Ordered after the first release because Raycast is macOS-only, optional, and
+      its store publication is an external review step. It gates no Tewake artifact.
+    acceptance:
+      - Pause and resume from Raycast produce the same effective state as the tray, the CLI, and the Web UI.
+      - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
+      - A missing, incompatible, or non-executable CLI produces an actionable installation error instead of an assumed state.
+      - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
+      - Removing or never installing the extension changes no fleet behavior, and its build gates no Tewake artifact.
