@@ -16,7 +16,7 @@ func exclusionTestController(t *testing.T) *Controller {
 	}, Config{Nodes: []NodeDefinition{testNodeDefinition("node-a", 1)}})
 }
 
-func exclusionSnapshot(excluded []domain.TargetID) transport.AgentSnapshot {
+func exclusionSnapshot(excluded *[]domain.TargetID) transport.AgentSnapshot {
 	return transport.AgentSnapshot{
 		NodeID:             "node-a",
 		OS:                 domain.OSLinux,
@@ -33,7 +33,7 @@ func exclusionSnapshot(excluded []domain.TargetID) transport.AgentSnapshot {
 func TestSnapshotExclusionsProjectAndHonorAbsence(t *testing.T) {
 	controller := exclusionTestController(t)
 	result, err := controller.ReconcileAgentSnapshot(
-		exclusionSnapshot([]domain.TargetID{"target-a"}))
+		exclusionSnapshot(transport.TargetIDSet("target-a")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +51,7 @@ func TestSnapshotExclusionsProjectAndHonorAbsence(t *testing.T) {
 	}
 
 	cleared, err := controller.ReconcileAgentSnapshot(
-		exclusionSnapshot([]domain.TargetID{}))
+		exclusionSnapshot(transport.TargetIDSet()))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestDegradationKeepsExclusions(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			controller := exclusionTestController(t)
 			if _, err := controller.ReconcileAgentSnapshot(
-				exclusionSnapshot([]domain.TargetID{"target-a"})); err != nil {
+				exclusionSnapshot(transport.TargetIDSet("target-a"))); err != nil {
 				t.Fatal(err)
 			}
 			result := test.degrade(t, controller)

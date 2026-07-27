@@ -86,3 +86,11 @@ func ValidateExcludedTargets(targetIDs []domain.TargetID) error {
 	}
 	return nil
 }
+
+// TargetIDSet wraps a literal exclusion set in the pointer shape the wire
+// carries, keeping "present, possibly empty" distinct from an absent field at
+// every construction site.
+func TargetIDSet(targetIDs ...domain.TargetID) *[]domain.TargetID {
+	set := append([]domain.TargetID{}, targetIDs...)
+	return &set
+}

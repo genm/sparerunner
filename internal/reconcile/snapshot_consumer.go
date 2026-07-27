@@ -52,6 +52,14 @@ func (consumer *SnapshotConsumer) HandleAgentSnapshot(
 		Architecture:      snapshot.Arch,
 		RunnerVersion:     snapshot.RunnerVersion,
 		NativeRunnerReady: snapshot.NativeRunnerReady,
+		// Owner-editable observed state must reach the same snapshot
+		// transaction, or reconnect-time adoption silently never happens: this
+		// consumer replaces the store-backed one in every activated Controller,
+		// so dropping the fields here would drop them in production while every
+		// consumer-level unit test still passes. Nil-ness is preserved — nil is
+		// "no change reported", not an empty set.
+		AvailabilityIntent: snapshot.AvailabilityIntent,
+		ExcludedTargets:    copiedExclusionSet(snapshot.ExcludedTargets),
 		Journal: store.AgentSnapshot{
 			MaxControllerEpoch: snapshot.MaxControllerEpoch,
 			Commands:           append([]domain.Command(nil), snapshot.Commands...),
@@ -98,6 +106,16 @@ func (consumer *SnapshotConsumer) HandleAgentSnapshot(
 	}
 	_, err = consumer.controller.ReconcileAgentSnapshot(snapshot)
 	return err
+}
+
+// copiedExclusionSet flattens the wire pointer into the store's slice shape:
+// nil stays nil ("no change reported"), and a present set — including an empty
+// one — becomes a non-nil copy that replaces the adopted rows wholesale.
+func copiedExclusionSet(set *[]domain.TargetID) []domain.TargetID {
+	if set == nil {
+		return nil
+	}
+	return append([]domain.TargetID{}, *set...)
 }
 
 // EnsureStoreBackedRestartNode projects a newly enrolled node from a fresh

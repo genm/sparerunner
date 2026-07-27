@@ -83,12 +83,11 @@ func (availability *agentAvailability) ExcludedTargets() []domain.TargetID {
 	}
 	availability.mu.Lock()
 	defer availability.mu.Unlock()
-	if len(availability.excluded) == 0 {
-		// A confirmed-empty set and an unset one are the same fact here: this
-		// node withdraws nothing. The wire omits the field in both cases.
-		return nil
-	}
-	return append([]domain.TargetID(nil), availability.excluded...)
+	// The returned set is always non-nil: the Agent knows its complete set, so
+	// even "withdraws nothing" is an authoritative fact the wire must carry as
+	// [] — otherwise removing the last exclusion would look like "no change
+	// reported" and the controller would keep the stale adopted row forever.
+	return append([]domain.TargetID{}, availability.excluded...)
 }
 
 // SetTargetExclusion durably records the owner's per-Target decision before any

@@ -298,7 +298,7 @@ func (consumers storeBackedAgentConsumers) HandleAgentSnapshot(ctx context.Conte
 	// boundary: nil is "no change reported", empty is an authoritative empty set.
 	var excluded []domain.TargetID
 	if snapshot.ExcludedTargets != nil {
-		excluded = append([]domain.TargetID{}, snapshot.ExcludedTargets...)
+		excluded = append([]domain.TargetID{}, *snapshot.ExcludedTargets...)
 	}
 	return consumers.store.RecordAgentSnapshot(ctx, store.NodeAgentSnapshot{
 		NodeID:             snapshot.NodeID,

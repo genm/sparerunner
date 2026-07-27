@@ -305,11 +305,16 @@ func runAgentSessionWithOptions(
 	}
 	nativeReady := probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout)
 	intent := domain.AvailabilityAccepting
-	var excludedTargets []domain.TargetID
+	// The Agent always knows its complete exclusion set, so whenever the local
+	// availability surface exists the snapshot carries the authoritative full
+	// set — including an empty one, which must replace stale adopted rows. Only
+	// an Agent without the surface omits the field entirely.
+	var excludedTargets *[]domain.TargetID
 	if options.availability != nil {
 		options.availability.setNativeReady(nativeReady)
 		intent = options.availability.Intent()
-		excludedTargets = options.availability.ExcludedTargets()
+		set := options.availability.ExcludedTargets()
+		excludedTargets = &set
 	}
 	snapshot, err := buildAgentSnapshot(
 		ctx,
@@ -350,7 +355,7 @@ func buildAgentSnapshot(
 	runnerVersion string,
 	nativeRunnerReady bool,
 	availabilityIntent domain.AvailabilityIntent,
-	excludedTargets []domain.TargetID,
+	excludedTargets *[]domain.TargetID,
 ) (transport.AgentSnapshot, error) {
 	if state == nil || state.Store == nil || state.NodeID == "" ||
 		runnerVersion == "" {
@@ -497,11 +502,12 @@ func runAgentSessionActor(
 				options.readinessTimeout,
 			)
 			heartbeatIntent := domain.AvailabilityAccepting
-			var heartbeatExcluded []domain.TargetID
+			var heartbeatExcluded *[]domain.TargetID
 			if options.availability != nil {
 				options.availability.setNativeReady(heartbeatNativeReady)
 				heartbeatIntent = options.availability.Intent()
-				heartbeatExcluded = options.availability.ExcludedTargets()
+				set := options.availability.ExcludedTargets()
+				heartbeatExcluded = &set
 			}
 			payload, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
 				NodeID:             nodeID,
