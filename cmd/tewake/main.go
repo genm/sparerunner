@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -191,6 +192,12 @@ func newServeCommand() *cobra.Command {
 }
 
 func newJoinCommand() *cobra.Command {
+	return newJoinCommandForPlatform(runtime.GOOS, app.JoinAgent)
+}
+
+type joinAgentFunc func(context.Context, app.JoinOptions) (string, error)
+
+func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Command {
 	var stateDirectory, controller string
 	var discoveryTimeout, connectionTimeout time.Duration
 	command := &cobra.Command{
@@ -202,7 +209,7 @@ func newJoinCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			nodeID, err := app.JoinAgent(command.Context(), app.JoinOptions{
+			nodeID, err := joinAgent(command.Context(), app.JoinOptions{
 				StateDirectory:    directory,
 				JoinCode:          args[0],
 				Controller:        controller,
@@ -213,7 +220,7 @@ func newJoinCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			fmt.Fprintf(command.OutOrStdout(), "Start it with: tewake-agent serve --state-dir %s\n", directory)
+			writeJoinServiceHint(command.OutOrStdout(), goos, directory)
 			return nil
 		},
 	}
@@ -222,6 +229,18 @@ func newJoinCommand() *cobra.Command {
 	command.Flags().DurationVar(&discoveryTimeout, "discovery-timeout", app.DefaultDiscoveryTimeout, "mDNS discovery deadline")
 	command.Flags().DurationVar(&connectionTimeout, "connection-timeout", app.DefaultConnectTimeout, "per-controller enrollment and confirmation deadline")
 	return command
+}
+
+func writeJoinServiceHint(output io.Writer, goos, stateDirectory string) {
+	const macOSServiceState = "/Library/Application Support/Tewake/agent"
+	if goos == "darwin" && filepath.Clean(stateDirectory) == macOSServiceState {
+		fmt.Fprintln(
+			output,
+			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+		)
+		return
+	}
+	fmt.Fprintf(output, "Start it with: tewake-agent serve --state-dir %s\n", stateDirectory)
 }
 
 func newNodeCommand() *cobra.Command {

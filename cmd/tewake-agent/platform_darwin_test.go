@@ -128,4 +128,3 @@ func TestDarwinRequiredRuntimeRejectsIgnoredSupervisorSocket(t *testing.T) {
 		t.Fatal("ignored supervisor socket was accepted")
 	}
 }
-

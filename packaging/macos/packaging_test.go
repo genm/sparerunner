@@ -57,11 +57,13 @@ func TestInstallScriptCreatesHiddenNonLoginRunnerAndPrivateRoots(t *testing.T) {
 		`configured_home`,
 		`configured_auth`,
 		`configured_password`,
-		`refusing unsafe service directory`,
-		`/bin/chmod 0700`,
-		`/bin/chmod 0711`,
-		`/usr/bin/install -o root -g wheel -m 0600`,
-		`launchctl bootstrap system`,
+		`marker_name=".tewake-install-ownership-v1"`,
+		`"$EUID" -eq 0`,
+		`stat -f '%u:%g:%p'`,
+		`validate_owned_layout`,
+		`refusing foreign or partial Tewake service roots`,
+		`run_tool install -o root -g wheel -m 0600`,
+		`run_tool launchctl bootstrap system`,
 	} {
 		if !strings.Contains(script, required) {
 			t.Fatalf("installer lacks %q", required)
@@ -73,15 +75,47 @@ func TestInstallScriptCreatesHiddenNonLoginRunnerAndPrivateRoots(t *testing.T) {
 		"-w ",
 		"-X ",
 		"Password \"-\"",
+		"/usr/sbin/chown",
+		"/bin/chmod",
+		"%Mp%Lp",
 	} {
 		if strings.Contains(script, forbidden) {
 			t.Fatalf("installer contains forbidden value %q", forbidden)
 		}
 	}
 	loadedCheck := strings.Index(script, `launchctl print "system/${label}"`)
-	installPlist := strings.Index(script, `/usr/bin/install -o root -g wheel -m 0600`)
+	installPlist := strings.Index(script, `run_tool install -o root -g wheel -m 0600`)
 	if loadedCheck < 0 || installPlist < 0 || loadedCheck > installPlist {
 		t.Fatal("installer checks the live label only after mutating its plist")
+	}
+}
+
+func TestInstallationPrecedesRootContextJoinIntoServiceState(t *testing.T) {
+	readme := readPackagingFile(t, "README.md")
+	install := `sudo ./packaging/macos/install-service.sh`
+	installCLI := `./tewake /usr/local/bin/tewake`
+	join := `sudo /usr/local/bin/tewake join twk_... \`
+	state := `--state-dir "/Library/Application Support/Tewake/agent"`
+	activation := `sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent`
+	installAt := strings.Index(readme, install)
+	installCLIAt := strings.Index(readme, installCLI)
+	joinAt := strings.Index(readme, join)
+	stateAt := strings.Index(readme, state)
+	activationAt := strings.Index(readme, activation)
+	if installAt < 0 || installCLIAt < 0 || joinAt < 0 ||
+		stateAt < 0 || activationAt < 0 {
+		t.Fatalf(
+			"README must install the CLI then document root join and launchd activation: cli=%d install=%d join=%d state=%d activation=%d",
+			installCLIAt,
+			installAt,
+			joinAt,
+			stateAt,
+			activationAt,
+		)
+	}
+	if installCLIAt > installAt || installAt > joinAt ||
+		joinAt > stateAt || stateAt > activationAt {
+		t.Fatal("README changed the CLI install -> service install -> root join -> launchd activation sequence")
 	}
 }
 
@@ -99,6 +133,19 @@ func TestPackagingDoesNotClaimCompletedLiveAcceptance(t *testing.T) {
 	}
 	if strings.Contains(readme, "Status: complete") {
 		t.Fatal(errors.New("packaging claimed unverified completion"))
+	}
+	if strings.Contains(readme, "binds native Keychain access to code-signing identity") {
+		t.Fatal("README claims TrustAll is constrained by code-signing identity")
+	}
+	for _, boundary := range []string{
+		"any process running in the same root service",
+		"Code signing does not narrow this",
+		"runner UID",
+		"do not prove native Keychain access",
+	} {
+		if !strings.Contains(readme, boundary) {
+			t.Fatalf("README does not document TrustAll boundary %q", boundary)
+		}
 	}
 }
 

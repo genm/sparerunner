@@ -17,12 +17,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/runner"
 )
 
 const (
-	WorkspaceBackend   = "darwin-stat-v1"
-	containmentBackend = "darwin-pgrp-uid-v1"
+	WorkspaceBackend       = "darwin-stat-v1"
+	NativeRunnerMaxRunners = domain.MacOSNativeRunnerMaxRunners
+	containmentBackend     = "darwin-pgrp-uid-v1"
 
 	defaultObservationTimeout = 5 * time.Second
 )
@@ -132,6 +134,12 @@ func New(config Config, nativeRuntime Runtime, workspace Workspace) (*Adapter, e
 func (*Adapter) StrongDescendantOwnership() bool { return true }
 func (*Adapter) StrongWorkspaceOwnership() bool  { return true }
 func (*Adapter) WorkspaceBackend() string        { return WorkspaceBackend }
+
+// MaxRunners is the physical capacity backed by this adapter. The first macOS
+// release provisions one exclusive UID, so the Controller's current readiness
+// boolean may represent only concrete slot 0. Raising this value requires one
+// independently supervised UID per additional slot.
+func (*Adapter) MaxRunners() int { return NativeRunnerMaxRunners }
 
 func (adapter *Adapter) ValidateRuntimeRoot(ctx context.Context, root string) error {
 	if ctx == nil || ctx.Err() != nil {

@@ -91,6 +91,22 @@ func newTestRuntime() *testRuntime {
 	return &testRuntime{fences: make(map[string]*testFence), alive: true}
 }
 
+func TestAdapterExposesExactlyOneUIDBackedRunnerSlot(t *testing.T) {
+	workspace := &testWorkspace{}
+	adapter, err := New(
+		Config{Identity: StaticIdentity(workspace.RunnerIdentity())},
+		newTestRuntime(),
+		workspace,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adapter.MaxRunners() != NativeRunnerMaxRunners ||
+		adapter.MaxRunners() != 1 {
+		t.Fatalf("macOS native capacity = %d, want exactly one", adapter.MaxRunners())
+	}
+}
+
 func (*testRuntime) EnsureProcessGroup(_ context.Context, owner string) (ProcessGroup, error) {
 	return ProcessGroup{Scope: "tewake/" + owner, HostEpoch: "boot-test"}, nil
 }

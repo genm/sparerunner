@@ -257,6 +257,10 @@ tasks:
     ci_targets: [lint, test, build, e2e]
     pr_order: 8
     status: in_progress
+    notes:
+      - "2026-07-27: The local macOS vertical now uses one exclusive non-login UID, a durable root-owned start fence, descriptor-pinned workspace cleanup, and a hard platform capability of maxRunners 1. More concurrency requires one independently owned UID per added slot; the current readiness contract must never advertise beyond slot 0."
+      - "2026-07-27: Private material is stored through native Security.framework calls with random movable locators, no-clobber publication, and a pre-published recovery locator that remains retryable when both main publication and Keychain deletion fail. Locked, unavailable, denied, recovery-pending, or mismatched Keychain state removes native readiness; no security CLI or plaintext fallback is used."
+      - "2026-07-27: TrustAll intentionally permits any process in the root service-user Keychain context; runner-UID denial is the boundary and root compromise is outside native mode. Root LaunchDaemon Keychain availability without an interactive login, same-user access and runner-UID denial across upgrade, sleep/reboot recovery, Intel hardware, process cleanup, and a private GitHub job still require live macOS evidence, so this task remains in progress."
     acceptance:
       - The agent reconnects after reboot and sleep without duplicate local runtimes.
       - Keychain material is unavailable to the runner account and absent from diagnostics.

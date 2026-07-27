@@ -59,4 +59,3 @@ func (*FileRuntime) GarbageCollectFence(context.Context, runner.ContainmentRef) 
 }
 
 func RunExecLauncherHelper([]string) (bool, error) { return false, nil }
-
