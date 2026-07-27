@@ -3,6 +3,14 @@
 These instructions supplement the user-scope rules. The closest specification under
 `spec/tewake/` is authoritative for product behavior.
 
+## Language
+
+- Write all repository content in English: source code, identifiers, comments,
+  commit messages, `spec/tewake/` documents, other Markdown docs, and GitHub-facing
+  content such as issue titles/bodies, pull request titles/descriptions, and review
+  comments.
+- This applies regardless of the contributor's or reviewer's working language.
+
 ## Product boundary
 
 - Tewake schedules official GitHub Actions runner processes on persistent computers
