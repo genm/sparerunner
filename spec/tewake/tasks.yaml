@@ -557,6 +557,7 @@ tasks:
       - "2026-07-27: The release evidence validator now resolves the Go module from its own repository path, so the documented gate can be invoked from an external evidence directory and still fails closed on missing manifests."
       - "2026-07-27: Hosted PR #17 run 30266682090 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 29a1b64. This validates the release plumbing only; no tagged artifact or live-fleet evidence was published."
       - "2026-07-27: Hosted PR #17 run 30267782874 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head b420ea7 after the runner-group pagination hardening."
+      - "2026-07-27: Hosted PR #17 run 30268689444 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 581dc95 after the future-observation admission hardening."
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.
