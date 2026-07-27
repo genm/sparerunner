@@ -17,6 +17,7 @@ func testCommandMetadata() CommandMetadata {
 		ControllerEpoch: 1,
 		ExecutionID:     "execution-1",
 		ExpectedState:   domain.ExecutionPreparing,
+		Target:          CommandTarget{TargetID: "target-1", Scope: "owner/repo", ScopeKind: domain.TargetRepository},
 	}
 }
 
@@ -176,6 +177,9 @@ func TestCancelCommandRoundTrip(t *testing.T) {
 		domain.ExecutionCleaning,
 	} {
 		metadata.ExpectedState = state
+		// Cancel deliberately carries no target identity: tearing down work this
+		// node already owns is never gated on the owner's exclusion set.
+		metadata.Target = CommandTarget{}
 		payload, err := EncodeCancelCommandPayload(metadata)
 		if err != nil {
 			t.Fatal(err)

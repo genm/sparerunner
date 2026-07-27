@@ -1,11 +1,12 @@
 // Package nodectl is the node-local control contract between the privileged
 // Agent service and the unprivileged desktop surfaces (tray, launcher, CLI).
 //
-// It is deliberately an allowlist of two operations over a same-host endpoint:
-// read non-secret node status, and set the node-local availability intent. No
-// JIT material, token, certificate, join code, or process output has a field
-// here, so a compromised desktop session cannot escalate through the Agent
-// beyond withholding this computer's own capacity.
+// It is deliberately a small allowlist over a same-host endpoint: read
+// non-secret node status, set the node-local availability intent, and edit the
+// node owner's per-Target exclusion set. No JIT material, token, certificate,
+// join code, or process output has a field here, so a compromised desktop
+// session cannot escalate through the Agent beyond withholding this computer's
+// own capacity — in whole, or for individual GitHub Targets.
 package nodectl
 
 import (
@@ -18,8 +19,10 @@ import (
 
 // ProtocolVersion is exact-matched. A mismatch is an explicit error before 1.0
 // rather than a compatibility shim, so a stale desktop client never renders a
-// state it does not understand.
-const ProtocolVersion = 1
+// state it does not understand. Version 2 added the per-Target exclusion
+// operations, the per-Target view on Status, and target attribution on running
+// executions.
+const ProtocolVersion = 2
 
 // MaxMessageBytes bounds one request or response frame. The contract carries a
 // bounded status document, so anything larger is malformed input.
@@ -31,15 +34,30 @@ const (
 	OperationStatus Operation = "status"
 	OperationPause  Operation = "pause"
 	OperationResume Operation = "resume"
+	// OperationTargets reads the same status document as OperationStatus. It
+	// exists as its own verb so a desktop surface can express "show me the
+	// per-Target view" without implying it may mutate anything.
+	OperationTargets Operation = "targets"
+	OperationExclude Operation = "exclude"
+	OperationInclude Operation = "include"
 )
 
 func (operation Operation) Validate() error {
 	switch operation {
-	case OperationStatus, OperationPause, OperationResume:
+	case OperationStatus, OperationPause, OperationResume,
+		OperationTargets, OperationExclude, OperationInclude:
 		return nil
 	default:
 		return ErrUnsupportedOperation
 	}
+}
+
+// carriesTargetID reports whether an operation takes a target identifier. It is
+// an exact partition rather than a permissive check: an operation that does not
+// take one must not be sent with one, so a client cannot smuggle a field the
+// server would silently ignore.
+func (operation Operation) carriesTargetID() bool {
+	return operation == OperationExclude || operation == OperationInclude
 }
 
 // Source names the requesting desktop surface for audit and display. It is
@@ -66,6 +84,12 @@ type Request struct {
 	ProtocolVersion int       `json:"protocolVersion"`
 	Operation       Operation `json:"operation"`
 	Source          Source    `json:"source"`
+	// TargetID names the GitHub Target for exclude and include, and must be
+	// absent for every other operation. Its shape is validated here so garbage
+	// from a desktop client can never reach SQLite or the controller wire; its
+	// existence deliberately is not, because excluding a Target this node has
+	// never heard of is a safe no-op rather than an error.
+	TargetID domain.TargetID `json:"targetId,omitempty"`
 }
 
 func (request Request) Validate() error {
@@ -75,7 +99,19 @@ func (request Request) Validate() error {
 	if err := request.Operation.Validate(); err != nil {
 		return err
 	}
-	return request.Source.Validate()
+	if err := request.Source.Validate(); err != nil {
+		return err
+	}
+	if !request.Operation.carriesTargetID() {
+		if request.TargetID != "" {
+			return ErrInvalidRequest
+		}
+		return nil
+	}
+	if request.TargetID.ValidateShape("request.target_id") != nil {
+		return ErrInvalidRequest
+	}
+	return nil
 }
 
 // RunningExecution is the non-secret identity of work this computer is doing.
@@ -83,6 +119,12 @@ func (request Request) Validate() error {
 type RunningExecution struct {
 	ExecutionID domain.ExecutionID    `json:"executionId"`
 	State       domain.ExecutionState `json:"state"`
+	// TargetID, Scope, and ScopeKind name the org/repo this job belongs to, so a
+	// desktop surface can say what the computer is working on. They are omitted
+	// for an execution admitted before target attribution existed.
+	TargetID  domain.TargetID        `json:"targetId,omitempty"`
+	Scope     string                 `json:"scope,omitempty"`
+	ScopeKind domain.TargetScopeKind `json:"scopeKind,omitempty"`
 }
 
 // EligibleTarget mirrors transport.EligibleTarget's shape for the node-local
@@ -94,7 +136,15 @@ type EligibleTarget struct {
 	ScopeKind    domain.TargetScopeKind `json:"scopeKind"`
 	Scope        string                 `json:"scope"`
 	ScaleSetName string                 `json:"scaleSetName"`
-	Excluded     bool                   `json:"excluded"`
+	// Excluded is the controller's adopted view, echoed back on the heartbeat
+	// acknowledgement. LocallyExcluded is this computer's own durable decision.
+	Excluded        bool `json:"excluded"`
+	LocallyExcluded bool `json:"locallyExcluded"`
+	// Pending is the honest disagreement between the two. Excluding is
+	// subtractive and locally effective at once, so it renders as excluded while
+	// still pending; including is additive and ineffective until the controller
+	// releases it, so it must never render as served.
+	Pending bool `json:"pending"`
 }
 
 // Status is the complete document every desktop surface renders. Every field is
@@ -122,9 +172,14 @@ type Status struct {
 	// controller's heartbeat acknowledgement. It is omitted until the first
 	// heartbeat round trip completes, and it is display data only: it never
 	// implies a free slot exists right now.
-	EligibleTargets    []EligibleTarget `json:"eligibleTargets,omitempty"`
-	ObservedAtUnixNano int64            `json:"observedAtUnixNano"`
-	AgentVersion       string           `json:"agentVersion"`
+	EligibleTargets []EligibleTarget `json:"eligibleTargets,omitempty"`
+	// UnknownExclusions are locally excluded Targets absent from the last
+	// eligible list. Excluding a Target this node has never been told about —
+	// while offline, or before the first heartbeat round trip — is deliberately
+	// legal, so these render as not-currently-eligible rather than as an error.
+	UnknownExclusions  []domain.TargetID `json:"unknownExclusions,omitempty"`
+	ObservedAtUnixNano int64             `json:"observedAtUnixNano"`
+	AgentVersion       string            `json:"agentVersion"`
 }
 
 // EffectiveAccepting reports whether this node currently offers capacity as far

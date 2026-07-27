@@ -18,7 +18,12 @@ func TestWriteAvailabilityTextRendersTargetsSectionWhenPresent(t *testing.T) {
 		NativeRunnerReady:   true,
 		EligibleTargets: []nodectl.EligibleTarget{
 			{TargetID: "target-1", ScopeKind: domain.TargetRepository, Scope: "owner/repo", ScaleSetName: "scale-set"},
-			{TargetID: "target-2", ScopeKind: domain.TargetOrganization, Scope: "owner", ScaleSetName: "scale-set-2", Excluded: true},
+			// Locally excluded and adopted by the controller: a settled exclusion
+			// rather than one still syncing.
+			{
+				TargetID: "target-2", ScopeKind: domain.TargetOrganization, Scope: "owner",
+				ScaleSetName: "scale-set-2", Excluded: true, LocallyExcluded: true,
+			},
 		},
 	})
 	rendered := out.String()

@@ -11,13 +11,35 @@ const run = promisify(execFile);
 // keeps one implementation of the local protocol, peer authorization, and
 // degraded-state semantics, and it means this extension holds no controller
 // credential: it can only affect the computer it runs on.
-export const PROTOCOL_VERSION = 1;
+// Version 2 added the per-Target exclusion view and target attribution on
+// running executions. The version is exact-matched with no pre-1.0 shim, so a
+// stale extension reports an incompatibility rather than rendering a document
+// it does not understand.
+export const PROTOCOL_VERSION = 2;
 
 export type Intent = "accepting" | "stopped";
+
+export type ScopeKind = "repository" | "organization";
 
 export interface RunningExecution {
   executionId: string;
   state: string;
+  // Absent for an execution admitted before target attribution existed.
+  targetId?: string;
+  scope?: string;
+  scopeKind?: ScopeKind;
+}
+
+export interface EligibleTarget {
+  targetId: string;
+  scopeKind: ScopeKind;
+  scope: string;
+  scaleSetName: string;
+  // excluded is the controller's adopted view; locallyExcluded is this
+  // computer's own durable decision; pending is their disagreement.
+  excluded: boolean;
+  locallyExcluded: boolean;
+  pending: boolean;
 }
 
 export interface NodeStatus {
@@ -31,6 +53,11 @@ export interface NodeStatus {
   pendingResume: boolean;
   nativeRunnerReady: boolean;
   runningExecutions: RunningExecution[] | null;
+  // Omitted until the first heartbeat round trip completes.
+  eligibleTargets?: EligibleTarget[];
+  // Locally excluded Targets absent from the last eligible list. Excluding an
+  // unknown Target is a safe no-op, rendered as not-currently-eligible.
+  unknownExclusions?: string[];
   observedAtUnixNano: number;
   agentVersion: string;
 }

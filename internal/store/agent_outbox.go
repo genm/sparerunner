@@ -205,6 +205,10 @@ func pruneAcknowledgedTerminalExecution(
 		`DELETE FROM command_replays WHERE execution_id = ?`,
 		`DELETE FROM execution_observations WHERE execution_id = ?`,
 		`DELETE FROM runner_journal_records WHERE execution_id = ?`,
+		// Target attribution exists to describe work this computer is doing. A
+		// cleanly finished execution is no longer that, so it leaves with the
+		// rest of the journal instead of accumulating forever.
+		`DELETE FROM execution_targets WHERE execution_id = ?`,
 	} {
 		if _, err := tx.ExecContext(ctx, statement, executionID); err != nil {
 			return err

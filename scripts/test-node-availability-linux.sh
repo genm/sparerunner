@@ -65,6 +65,21 @@ docker run --rm \
       /opt/tewake node status --state-dir /state/agent --json | field "$1"
     }
 
+    await_endpoint() {
+      # The local control endpoint answers without a controller session, so a
+      # restart in the offline part of this test is waited on directly.
+      i=0
+      while [ "${i}" -lt 100 ]; do
+        if /opt/tewake node status --state-dir /state/agent --json >/dev/null 2>&1; then
+          return 0
+        fi
+        i=$((i + 1))
+        sleep 0.1
+      done
+      echo "timed out waiting for the local control endpoint" >&2
+      return 1
+    }
+
     await_field() {
       name="$1"
       want="$2"
@@ -172,9 +187,78 @@ docker run --rm \
     /opt/tewake node pause --state-dir /state/agent --source cli --json >/tmp/offline-pause.json
     test "$(field intent </tmp/offline-pause.json)" = stopped
 
+    # Per-Target exclusion. No GitHub target exists in this offline rig, so the
+    # scenarios below are exactly the ones that do not need one: excluding an
+    # unknown Target is a deliberate safe no-op rendered as not-currently-
+    # eligible, and it must be just as durable as the global intent.
+    /opt/tewake node targets --state-dir /state/agent \
+      --exclude twk-e2e-unknown-target --source tray --json >/tmp/exclude.json
+    grep -q "unknownExclusions" /tmp/exclude.json
+    grep -q "twk-e2e-unknown-target" /tmp/exclude.json
+
+    # Excluding is subtractive, so it is durable the instant it is recorded and
+    # survives an agent service restart exactly like a stop.
+    stop_agent
+    /opt/tewake-agent serve \
+      --state-dir /state/agent \
+      --local-control \
+      --connection-timeout 2s \
+      --reconnect-delay 50ms >/tmp/agent-targets.log 2>&1 &
+    agent_pid=$!
+    await_endpoint
+    /opt/tewake node targets --state-dir /state/agent --json >/tmp/targets.json
+    grep -q "twk-e2e-unknown-target" /tmp/targets.json
+
+    # The text surface renders it as not-currently-eligible rather than as an
+    # error, because the owner may legitimately exclude a Target this node has
+    # never been told about.
+    /opt/tewake node targets --state-dir /state/agent >/tmp/targets.txt
+    grep -q "not currently eligible" /tmp/targets.txt
+
+    # Including removes it again.
+    /opt/tewake node targets --state-dir /state/agent \
+      --include twk-e2e-unknown-target --source cli --json >/tmp/include.json
+    if grep -q "twk-e2e-unknown-target" /tmp/include.json; then
+      echo "include did not remove the exclusion" >&2
+      exit 1
+    fi
+
+    # An ambiguous invocation is refused rather than silently resolved.
+    if /opt/tewake node targets --state-dir /state/agent \
+      --exclude --include twk-e2e-unknown-target >/tmp/ambiguous.log 2>&1; then
+      echo "ambiguous exclude/include invocation was accepted" >&2
+      exit 1
+    fi
+
+    # A malformed identifier is rejected at the control boundary with a
+    # machine-readable class, so garbage never reaches SQLite or the wire.
+    if /opt/tewake node targets --state-dir /state/agent \
+      --exclude " padded-target " --json >/tmp/bad-target.json 2>/dev/null; then
+      echo "a malformed target identifier was accepted" >&2
+      exit 1
+    fi
+    test "$(field errorClass </tmp/bad-target.json)" = invalid_request
+
+    # The exclusion set is bounded and fails closed at the boundary instead of
+    # silently truncating the owner deny-list.
+    i=0
+    while [ "${i}" -lt 256 ]; do
+      /opt/tewake node targets --state-dir /state/agent \
+        --exclude "twk-e2e-cap-${i}" >/dev/null
+      i=$((i + 1))
+    done
+    if /opt/tewake node targets --state-dir /state/agent \
+      --exclude twk-e2e-cap-overflow --json >/tmp/cap.json 2>/dev/null; then
+      echo "a full exclusion set accepted another entry" >&2
+      exit 1
+    fi
+    test "$(field ok </tmp/cap.json)" = false
+    test "$(field errorClass </tmp/cap.json)" = invalid_request
+
     # The control surface is non-secret: no join code or credential material may
     # appear in its documents.
-    if grep -R -F "${join_code}" /tmp/pause.json /tmp/resume.json /tmp/offline-pause.json; then
+    if grep -R -F "${join_code}" /tmp/pause.json /tmp/resume.json \
+      /tmp/offline-pause.json /tmp/exclude.json /tmp/targets.json /tmp/include.json; then
       echo "join code leaked into the node control documents" >&2
       exit 1
     fi

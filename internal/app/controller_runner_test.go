@@ -3479,6 +3479,8 @@ func newControllerRunnerForEpochWithReconciler(
 		ControllerRunnerConfig{
 			ScaleSetID:      7,
 			TargetID:        "target-1",
+			Scope:           "owner/repo",
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: "profile-1",
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,
 			NodeID:          "00000000000000000000000000000001",

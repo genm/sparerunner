@@ -313,6 +313,8 @@ func newOfflineCapacityCoordinator(
 		ControllerRunnerConfig{
 			ScaleSetID:      github.ScaleSetID(scaleSetID),
 			TargetID:        targetID,
+			Scope:           "owner/repo",
+			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: profileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,
 			NodeID:          nodeID,
