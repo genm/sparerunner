@@ -35,6 +35,17 @@ Pushing `v*` runs [.github/workflows/release.yml](../.github/workflows/release.y
 3. The GitHub artifact attestation is created for `checksums.txt`.
 4. A failed check uploads `dist/` for three days only.
 
+Before pushing the tag, the release owner must validate the separately captured
+TWK-014 manifest from the trusted Linux/macOS/Windows sandbox:
+
+```bash
+just validate-release-evidence output/release-evidence/twk-014.json
+```
+
+This command must return zero on the exact trusted commit that will be tagged.
+The checked-in validator rejects a missing, partial, stale, or secret-bearing
+manifest; a green unit or hosted CI run is not a substitute for this live gate.
+
 Verify an installed artifact from a trusted checkout with:
 
 ```bash
