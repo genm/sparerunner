@@ -345,10 +345,51 @@ parallelism, and re-registering broken runners.
   runner's required transient `--jitconfig` argument and files under its private,
   execution-specific root are treated as secret-bearing runtime material and must
   disappear during verified cleanup.
+- A join code is the sole exception to the response rule above: an authenticated
+  administrator may explicitly create one through the loopback management API and
+  receive it exactly once in that response. The code shall not be replayable from an
+  idempotency record, returned by a later read, retained in UI state, or written to
+  SQLite, audit events, logs, metrics, or diagnostics; only its one-way digest and
+  non-secret lifecycle metadata may be durable.
+- The loopback management surface shall issue an administrator session only from
+  an explicit, empty-body, same-origin `POST /api/v1/session` whose Host and Origin
+  exactly match the configured listener and whose
+  `X-Tewake-Admin-Bootstrap` header contains a fresh owner proof. The proof shall
+  be derived locally from the private Controller credential, be valid for at most
+  two minutes, contain a random nonce, and be accepted only once. It shall never
+  appear in command arguments, environment variables, durable configuration,
+  logs, audit events, UI responses, or diagnostics.
+- The CLI shall obtain the owner proof through the OS-private Controller state
+  boundary, clear it after the one bootstrap request, and explicitly end its
+  session after each command without hiding the command's primary failure. Static
+  UI reads shall not issue sessions. Direct browser bootstrap remains unavailable
+  until TWK-013 supplies an owner-authorized one-time browser handoff; a plain UI
+  POST is not treated as owner authority. Forwarded-host and forwarded-protocol
+  headers shall not participate in any decision.
+- Administrator sessions shall be process-local, expire after at most twelve
+  hours, and become invalid immediately on explicit logout or Controller restart.
+  Deleting a browser cookie alone is not sufficient server-side revocation.
 - Unauthenticated API mutations shall return 401; authenticated cross-origin
   mutations without a valid CSRF token and Origin shall return 403.
+- Requests for a different Host shall return 421 before routing or authentication
+  and shall not issue a cookie. Management responses shall not emit CORS access
+  headers.
+- A privileged mutation, its optimistic configuration revision, and its allowlisted
+  audit event shall commit in one SQLite transaction. Audit persistence failure
+  shall roll the mutation back, make subsequent privileged mutations unavailable,
+  and advertise zero new runner capacity while already-running jobs continue.
 - A missing or inaccessible OS credential store shall stop new runner admission and
   surface a degraded controller state.
+- The unauthenticated enrollment endpoint shall apply bounded, process-local
+  per-source and global admission before join-code decoding, CSR verification, or
+  certificate signing. Rejection and availability audit evidence shall be typed,
+  secret-free, and coalesced to a bounded rate rather than writing one SQLite row
+  per hostile request.
+- A revoked authenticated Node credential or authenticated Agent protocol-version
+  mismatch shall append a typed, secret-free rejection audit with only the
+  verified Node ID. TLS handshake failures that do not reach the authenticated
+  HTTP boundary are observable through transport health or metrics, not falsely
+  claimed as durable per-Node audit events.
 
 ## Non-Goals
 

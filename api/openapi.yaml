@@ -1,0 +1,965 @@
+openapi: 3.0.3
+info:
+  title: Tewake Management API
+  version: 0.1.0
+  description: |
+    Loopback-first, single-administrator management contract for Tewake.
+    Credential-bearing join codes are returned only by their explicit create
+    operation and are never available from a later read.
+servers:
+  - url: /api/v1
+security:
+  - adminSession: []
+paths:
+  /session:
+    post:
+      operationId: createSession
+      summary: Start an owner-authorized loopback administrator session
+      security:
+        - adminBootstrap: []
+      parameters:
+        - $ref: "#/components/parameters/AdminBootstrap"
+      responses:
+        "201":
+          description: Session created
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    get:
+      operationId: getSession
+      summary: Read the current session and in-memory CSRF token
+      responses:
+        "200":
+          description: Authenticated session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Session"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    delete:
+      operationId: deleteSession
+      summary: End the current administrator session
+      parameters:
+        - $ref: "#/components/parameters/CSRFToken"
+      responses:
+        "204":
+          description: Session ended
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /setup:
+    get:
+      operationId: getSetup
+      summary: Read setup readiness without returning credentials
+      responses:
+        "200":
+          description: Setup state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Setup"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /overview:
+    get:
+      operationId: getOverview
+      summary: Read the safe fleet overview
+      responses:
+        "200":
+          description: Fleet overview
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Overview"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /nodes:
+    get:
+      operationId: listNodes
+      summary: List enrolled nodes and last-known state
+      responses:
+        "200":
+          description: Nodes
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [nodes, configurationRevision]
+                properties:
+                  nodes:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Node"
+                  configurationRevision:
+                    $ref: "#/components/schemas/Revision"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /nodes/{nodeId}/drain:
+    post:
+      operationId: drainNode
+      summary: Stop assigning new work to a node
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRFToken"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeMutation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /nodes/{nodeId}/resume:
+    post:
+      operationId: resumeNode
+      summary: Reconcile a drained node before it can advertise capacity
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRFToken"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeMutation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /nodes/{nodeId}/revoke:
+    post:
+      operationId: revokeNode
+      summary: Revoke a node credential
+      parameters:
+        - $ref: "#/components/parameters/NodeID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRFToken"
+      responses:
+        "200":
+          $ref: "#/components/responses/NodeMutation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /targets:
+    get:
+      operationId: listTargets
+      summary: List configured targets and last-known GitHub freshness
+      responses:
+        "200":
+          description: Targets
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [targets, configurationRevision]
+                properties:
+                  targets:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Target"
+                  configurationRevision:
+                    $ref: "#/components/schemas/Revision"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /runs:
+    get:
+      operationId: listRuns
+      summary: List safe execution history
+      responses:
+        "200":
+          description: Runs
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [runs]
+                properties:
+                  runs:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Run"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /audit-events:
+    get:
+      operationId: listAuditEvents
+      summary: List append-only safe audit events
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          description: Opaque exclusive cursor returned by the preceding page.
+          schema:
+            type: string
+            pattern: '^aud1_[A-Za-z0-9_-]{11}$'
+        - name: limit
+          in: query
+          required: false
+          description: Maximum number of audit events returned in one bounded page.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 500
+            default: 100
+      responses:
+        "200":
+          description: Audit events
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuditEventPage"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /join-codes:
+    post:
+      operationId: createJoinCode
+      summary: Create and deliver a one-time join code
+      description: |
+        The credential-bearing code appears only in this response. It is not
+        retained in audit, logs, UI state, diagnostics, or an idempotency replay.
+      parameters:
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateJoinCodeRequest"
+      responses:
+        "201":
+          description: One-time credential delivery
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JoinCodeDelivery"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMedia"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /join-codes/{tokenId}:
+    delete:
+      operationId: cancelJoinCode
+      summary: Cancel an unconsumed join code by its non-secret identifier
+      parameters:
+        - name: tokenId
+          in: path
+          required: true
+          schema:
+            type: string
+            pattern: "^[0-9a-f]{32}$"
+        - $ref: "#/components/parameters/CSRFToken"
+      responses:
+        "204":
+          description: Join code cancelled
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /configuration:
+    get:
+      operationId: getConfiguration
+      summary: Read the non-secret desired configuration
+      responses:
+        "200":
+          description: Configuration
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Configuration"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+    put:
+      operationId: applyConfiguration
+      summary: Atomically replace desired configuration and append its audit event
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Configuration"
+          application/yaml:
+            schema:
+              type: string
+      responses:
+        "200":
+          description: Applied configuration
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Configuration"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/PayloadTooLarge"
+        "415":
+          $ref: "#/components/responses/UnsupportedMedia"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /configuration/export:
+    get:
+      operationId: exportConfiguration
+      summary: Export versioned non-secret YAML
+      responses:
+        "200":
+          description: Configuration YAML
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/yaml:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /events:
+    get:
+      operationId: streamEvents
+      summary: Stream level-triggered management invalidations
+      parameters:
+        - name: cursor
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: Last-Event-ID
+          in: header
+          required: false
+          schema:
+            type: string
+      responses:
+        "200":
+          description: SSE ready, invalidate, and reset events
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+components:
+  securitySchemes:
+    adminSession:
+      type: apiKey
+      in: cookie
+      name: tewake_admin_session
+    adminBootstrap:
+      type: apiKey
+      in: header
+      name: X-Tewake-Admin-Bootstrap
+  parameters:
+    AdminBootstrap:
+      name: X-Tewake-Admin-Bootstrap
+      in: header
+      required: true
+      description: Short-lived, one-use owner proof derived from the Controller credential boundary.
+      schema:
+        type: string
+        pattern: '^twb1\.[0-9]{1,19}\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$'
+    NodeID:
+      name: nodeId
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[0-9a-f]{32}$"
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      schema:
+        type: string
+        pattern: '^"cfg-[0-9]+"$'
+    CSRFToken:
+      name: X-Tewake-CSRF
+      in: header
+      required: true
+      schema:
+        type: string
+  responses:
+    BadRequest:
+      description: Invalid request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unauthorized:
+      description: Authentication required
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Forbidden:
+      description: Origin or CSRF authorization failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NotFound:
+      description: Resource not found
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Conflict:
+      description: Stale revision or domain conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    ValidationFailed:
+      description: The request is structurally valid but violates management invariants
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PayloadTooLarge:
+      description: Request exceeds the measured configuration transport budget
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    UnsupportedMedia:
+      description: Unsupported request media type
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Misdirected:
+      description: Host does not match the configured management authority
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    PreconditionRequired:
+      description: If-Match is required
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    Unavailable:
+      description: Required store, audit, or provider authority is unavailable
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+    NodeMutation:
+      description: Node state changed
+      headers:
+        ETag:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [node, configurationRevision]
+            properties:
+              node:
+                $ref: "#/components/schemas/Node"
+              configurationRevision:
+                $ref: "#/components/schemas/Revision"
+  schemas:
+    Revision:
+      type: string
+      pattern: "^[0-9]+$"
+      example: "18"
+    Session:
+      type: object
+      required: [authenticated, csrfToken]
+      properties:
+        authenticated:
+          type: boolean
+          enum: [true]
+        csrfToken:
+          type: string
+    Setup:
+      type: object
+      required:
+        [controllerInitialized, githubAppState, manifestFlowSupported, nodeCount, targetCount, conditions]
+      properties:
+        controllerInitialized:
+          type: boolean
+        githubAppState:
+          type: string
+          enum: [disconnected, connected, degraded]
+        manifestFlowSupported:
+          type: boolean
+          description: False until signed one-time callback state is implemented.
+        nodeCount:
+          type: integer
+          minimum: 0
+        targetCount:
+          type: integer
+          minimum: 0
+        conditions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Condition"
+    Overview:
+      type: object
+      required:
+        [version, controllerEpoch, configuredCapacity, activeRuns, nodeCount, targetCount, conditions]
+      properties:
+        version:
+          type: string
+        controllerEpoch:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        configuredCapacity:
+          type: integer
+          minimum: 0
+        activeRuns:
+          type: integer
+          minimum: 0
+        nodeCount:
+          type: integer
+          minimum: 0
+        targetCount:
+          type: integer
+          minimum: 0
+        conditions:
+          type: array
+          items:
+            $ref: "#/components/schemas/Condition"
+    Condition:
+      type: object
+      required: [code, status]
+      properties:
+        code:
+          type: string
+        status:
+          type: string
+          enum: [healthy, degraded, unavailable]
+    Freshness:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [fresh, stale, unknown]
+        observedAt:
+          type: string
+          format: date-time
+        failedAt:
+          type: string
+          format: date-time
+        failureCode:
+          type: string
+    Node:
+      type: object
+      required:
+        [id, displayName, administrativeState, observedState, maxRunners, reconciled, nativeRunnerReady, activeRunnerCount]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        administrativeState:
+          type: string
+          enum: [active, draining, quarantined, revoked]
+        observedState:
+          type: string
+          enum: [online, offline, stale, reconciling]
+        operatingSystem:
+          type: string
+          enum: [linux, macos, windows]
+        architecture:
+          type: string
+          enum: [amd64, arm64]
+        maxRunners:
+          type: integer
+          minimum: 1
+        reconciled:
+          type: boolean
+        nativeRunnerReady:
+          type: boolean
+        activeRunnerCount:
+          type: integer
+          minimum: 0
+        availableMemoryBytes:
+          type: string
+          pattern: "^[0-9]+$"
+        runnerVersion:
+          type: string
+        lastSeenAt:
+          type: string
+          format: date-time
+        statusReason:
+          type: string
+    Target:
+      type: object
+      required:
+        [id, installationId, scopeKind, scope, scaleSetName, runnerProfileId, status, freshness]
+      properties:
+        id:
+          type: string
+        installationId:
+          type: string
+        scopeKind:
+          type: string
+          enum: [repository, organization]
+        scope:
+          type: string
+        scaleSetName:
+          type: string
+        runnerProfileId:
+          type: string
+        status:
+          type: string
+          enum: [reconciling, ready, deleting, degraded]
+        freshness:
+          $ref: "#/components/schemas/Freshness"
+    RunnerProfile:
+      type: object
+      required: [id, label, minAvailableMemoryBytes, versionPolicy, runtime]
+      properties:
+        id:
+          type: string
+        label:
+          type: string
+        operatingSystem:
+          type: string
+          enum: [linux, macos, windows]
+        architecture:
+          type: string
+          enum: [amd64, arm64]
+        minAvailableMemoryBytes:
+          type: string
+          pattern: "^[0-9]+$"
+        versionPolicy:
+          type: string
+          enum: [auto_update, pinned]
+        runtime:
+          type: string
+          enum: [native]
+    SchedulerConfiguration:
+      type: object
+      properties:
+        maxRunners:
+          type: integer
+          minimum: 1
+    NodeConfiguration:
+      type: object
+      required: [id, displayName, maxRunners]
+      properties:
+        id:
+          type: string
+        displayName:
+          type: string
+        maxRunners:
+          type: integer
+          minimum: 1
+    Configuration:
+      type: object
+      required: [schemaVersion, revision, scheduler, nodes, runnerProfiles, targets]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        revision:
+          $ref: "#/components/schemas/Revision"
+        scheduler:
+          $ref: "#/components/schemas/SchedulerConfiguration"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeConfiguration"
+        runnerProfiles:
+          type: array
+          items:
+            $ref: "#/components/schemas/RunnerProfile"
+        targets:
+          type: array
+          items:
+            $ref: "#/components/schemas/TargetConfiguration"
+    TargetConfiguration:
+      type: object
+      required: [id, installationId, scopeKind, scope, scaleSetName, runnerProfileId]
+      properties:
+        id:
+          type: string
+        installationId:
+          type: string
+        scopeKind:
+          type: string
+          enum: [repository, organization]
+        scope:
+          type: string
+        scaleSetName:
+          type: string
+        runnerProfileId:
+          type: string
+    Run:
+      type: object
+      required: [id, targetId, nodeId, slotIndex, state]
+      properties:
+        id:
+          type: string
+        targetId:
+          type: string
+        nodeId:
+          type: string
+        slotIndex:
+          type: integer
+          minimum: 0
+        state:
+          type: string
+          enum:
+            [pending, reserved, preparing, running, cleaning, released, failed, cleanup_failed, quarantined]
+        errorCode:
+          type: string
+          enum:
+            [execution_conflict, reconciliation_required, quarantined, cleanup_failed, start_failed, platform_unavailable, journal_failed, command_rejected]
+    AuditEvent:
+      type: object
+      required: [id, occurredAt, actor, action, resourceType, resourceId, outcome, requestId]
+      properties:
+        id:
+          type: string
+        occurredAt:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          enum: [single_admin, anonymous, join_code, node]
+        action:
+          type: string
+        resourceType:
+          type: string
+        resourceId:
+          type: string
+        outcome:
+          type: string
+          enum: [succeeded, rejected, failed]
+        errorCode:
+          type: string
+        requestId:
+          type: string
+    AuditEventPage:
+      type: object
+      required: [events]
+      properties:
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/AuditEvent"
+        nextCursor:
+          type: string
+          pattern: '^aud1_[A-Za-z0-9_-]{11}$'
+    CreateJoinCodeRequest:
+      type: object
+      required: [endpointHints]
+      properties:
+        endpointHints:
+          type: array
+          items:
+            type: string
+    JoinCodeDelivery:
+      type: object
+      required: [tokenId, code]
+      properties:
+        tokenId:
+          type: string
+          pattern: "^[0-9a-f]{32}$"
+        code:
+          type: string
+          pattern: "^twk_[A-Za-z0-9_-]+$"
+    FieldError:
+      type: object
+      required: [field, code, message]
+      properties:
+        field:
+          type: string
+        code:
+          type: string
+        message:
+          type: string
+    Problem:
+      type: object
+      required: [type, title, status, code, detail, instance, requestId]
+      properties:
+        type:
+          type: string
+        title:
+          type: string
+        status:
+          type: integer
+        code:
+          type: string
+        detail:
+          type: string
+        instance:
+          type: string
+        requestId:
+          type: string
+        currentRevision:
+          $ref: "#/components/schemas/Revision"
+        errors:
+          type: array
+          items:
+            $ref: "#/components/schemas/FieldError"
+    SSEEventData:
+      type: object
+      required: [schemaVersion, cursor, resources]
+      properties:
+        schemaVersion:
+          type: integer
+          enum: [1]
+        cursor:
+          type: string
+        resources:
+          type: array
+          items:
+            type: string
+            enum: [setup, overview, nodes, targets, runs, configuration, audit_events]

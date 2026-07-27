@@ -992,7 +992,7 @@ func (actor *agentSessionActor) run() error {
 	for {
 		envelope, err := actor.session.Read(actor.ctx)
 		if err != nil {
-			actor.terminate(ErrAgentDisconnected)
+			actor.terminate(classifyAgentSessionError(err))
 			return actor.terminalError()
 		}
 		switch envelope.Type {
@@ -1021,7 +1021,7 @@ func (actor *agentSessionActor) run() error {
 func (actor *agentSessionActor) readHello() error {
 	envelope, err := actor.session.Read(actor.ctx)
 	if err != nil {
-		return ErrAgentDisconnected
+		return classifyAgentSessionError(err)
 	}
 	if envelope.Type != transport.MessageHello {
 		return ErrAgentProtocol
@@ -1044,7 +1044,7 @@ func (actor *agentSessionActor) readHello() error {
 func (actor *agentSessionActor) readSnapshotAndActivate() error {
 	envelope, err := actor.session.Read(actor.ctx)
 	if err != nil {
-		return ErrAgentDisconnected
+		return classifyAgentSessionError(err)
 	}
 	receivedAt := time.Now()
 	if envelope.Type != transport.MessageSnapshot {
@@ -1337,7 +1337,7 @@ func (actor *agentSessionActor) acknowledge(messageID string) error {
 		Type:            transport.MessageAck,
 		Payload:         payload,
 	}); err != nil {
-		return ErrAgentDisconnected
+		return classifyAgentSessionError(err)
 	}
 	return nil
 }
@@ -1477,7 +1477,7 @@ func (actor *agentSessionActor) sendCommandWithAuthority(
 	clearPayload()
 	envelope.Payload = nil
 	if writeErr != nil {
-		actor.terminate(ErrAgentDisconnected)
+		actor.terminate(classifyAgentSessionError(writeErr))
 		return transport.ExecutionUpdate{}, actor.terminalError()
 	}
 
@@ -1578,4 +1578,19 @@ func (actor *agentSessionActor) terminalError() error {
 		return ErrAgentDisconnected
 	}
 	return actor.terminalErr
+}
+
+func classifyAgentSessionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, _, rejected := transport.AgentSessionRejection(err); rejected {
+		return err
+	}
+	if errors.Is(err, transport.ErrProtocolVersion) ||
+		errors.Is(err, transport.ErrInvalidEnvelope) ||
+		errors.Is(err, transport.ErrUnsupportedType) {
+		return errors.Join(ErrAgentProtocol, err)
+	}
+	return ErrAgentDisconnected
 }

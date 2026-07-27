@@ -12,6 +12,7 @@
 /web/dist/
 /web/playwright-report/
 /web/test-results/
+/api/codegen/node_modules/
 *.tsbuildinfo
 
 # Local runtime state

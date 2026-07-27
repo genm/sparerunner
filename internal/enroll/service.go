@@ -51,47 +51,81 @@ type EnrollmentResult struct {
 	Credential       Credential
 }
 
+// JoinCodeDelivery keeps the durable token identity beside the one-time
+// encoded credential. Callers must not decode a successfully persisted code
+// merely to recover its non-secret token ID: a post-commit decode failure would
+// make the committed token unreachable to the operator.
+type JoinCodeDelivery struct {
+	TokenID [16]byte
+	encoded string
+}
+
+func (delivery JoinCodeDelivery) Encoded() string  { return delivery.encoded }
+func (delivery JoinCodeDelivery) String() string   { return "join-code-delivery[redacted]" }
+func (delivery JoinCodeDelivery) GoString() string { return delivery.String() }
+func (delivery JoinCodeDelivery) LogValue() slog.Value {
+	return slog.StringValue(delivery.String())
+}
+
 func (service Service) CreateJoinCode(ctx context.Context, hints []string) (string, error) {
-	if err := service.valid(); err != nil {
+	delivery, err := service.CreateJoinCodeDelivery(ctx, hints)
+	if err != nil {
 		return "", err
+	}
+	return delivery.Encoded(), nil
+}
+
+// CreateJoinCodeDelivery fully validates and encodes the one-time credential
+// before persisting its digest. Once Registry.CreateToken commits, the returned
+// delivery is already complete and cannot fail during response construction.
+func (service Service) CreateJoinCodeDelivery(
+	ctx context.Context,
+	hints []string,
+) (JoinCodeDelivery, error) {
+	if err := service.valid(); err != nil {
+		return JoinCodeDelivery{}, err
 	}
 	canonical, err := CanonicalHints(hints)
 	if err != nil {
-		return "", err
+		return JoinCodeDelivery{}, err
 	}
 	code, err := NewJoinCode(service.Identity.CAFingerprint(), canonical, service.Random)
 	if err != nil {
-		return "", err
+		return JoinCodeDelivery{}, err
+	}
+	encoded, err := code.Encode()
+	if err != nil {
+		return JoinCodeDelivery{}, err
 	}
 	if err := service.Registry.CreateToken(ctx, TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.digestKey, code.tokenID, code.secret), Epoch: service.Epoch}); err != nil {
-		return "", err
+		return JoinCodeDelivery{}, err
 	}
-	return code.Encode()
+	return JoinCodeDelivery{TokenID: code.TokenID(), encoded: encoded}, nil
 }
 
 func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []byte) (EnrollmentResult, error) {
 	if err := service.valid(); err != nil {
-		return EnrollmentResult{}, err
+		return EnrollmentResult{}, unavailableEnrollment(err)
 	}
 	code, err := DecodeJoinCode(encodedCode)
 	if err != nil {
-		return EnrollmentResult{}, err
+		return EnrollmentResult{}, malformedEnrollment(err)
 	}
 	if code.caFingerprint != service.Identity.CAFingerprint() {
-		return EnrollmentResult{}, ErrControllerFingerprintMismatch
+		return EnrollmentResult{}, rejectedEnrollment(ErrControllerFingerprintMismatch)
 	}
 	nodeID, err := NewNodeID(service.random())
 	if err != nil {
-		return EnrollmentResult{}, err
+		return EnrollmentResult{}, unavailableEnrollment(err)
 	}
 	now := service.now()
 	csrRequest, parseErr := x509.ParseCertificateRequest(csrDER)
 	if parseErr != nil || csrRequest.CheckSignature() != nil {
-		return EnrollmentResult{}, errors.New("invalid certificate request")
+		return EnrollmentResult{}, malformedEnrollment(errors.New("invalid certificate request"))
 	}
 	publicKeyDER, marshalErr := x509.MarshalPKIXPublicKey(csrRequest.PublicKey)
 	if marshalErr != nil {
-		return EnrollmentResult{}, marshalErr
+		return EnrollmentResult{}, malformedEnrollment(marshalErr)
 	}
 	csrDigest := sha256.Sum256(publicKeyDER)
 	// Credential epoch is per node and starts at one. Controller process epoch is
@@ -99,16 +133,25 @@ func (service Service) Enroll(ctx context.Context, encodedCode string, csrDER []
 	// an otherwise current node credential or prevent its renewal.
 	certificate, certificateDER, err := service.Identity.IssueNodeCertificate(csrDER, nodeID, 1, now, service.random())
 	if err != nil {
-		return EnrollmentResult{}, err
+		return EnrollmentResult{}, unavailableEnrollment(err)
 	}
 	credential := credentialFor(nodeID, certificate, 1)
 	token := TokenRecord{ID: code.tokenID, SecretDigest: SecretDigest(service.digestKey, code.tokenID, code.secret), Epoch: service.Epoch}
 	node := NodeRecord{NodeID: nodeID, Credential: credential, PublicKeyDigest: csrDigest, CertificateDER: certificateDER, CACertificateDER: service.Identity.CA.Raw}
-	if err := service.Registry.ConsumeEnrollment(ctx, token, node); err != nil {
+	if consumeErr := service.Registry.ConsumeEnrollment(ctx, token, node); consumeErr != nil {
 		if replay, replayErr := service.Registry.ReplayEnrollment(ctx, token, csrDigest); replayErr == nil {
 			return enrollmentResult(replay), nil
+		} else if registryEnrollmentFailure(replayErr) == EnrollmentFailureUnavailable {
+			// A commit may have succeeded before its in-process projection
+			// failed. The replay authority therefore outranks an apparent
+			// token-not-found result from a retried consume. Report a
+			// recoverable outage so the same code and CSR can be retried.
+			return EnrollmentResult{}, unavailableEnrollment(replayErr)
 		}
-		return EnrollmentResult{}, err
+		if registryEnrollmentFailure(consumeErr) == EnrollmentFailureRejected {
+			return EnrollmentResult{}, rejectedEnrollment(consumeErr)
+		}
+		return EnrollmentResult{}, unavailableEnrollment(consumeErr)
 	}
 	return enrollmentResult(node), nil
 }

@@ -62,6 +62,7 @@ func TestRestoreRestartKeepsUnobservedNodeAtZeroUntilFreshSnapshotDefinesPlatfor
 		},
 		NodeTopology: []store.RestartNodeTopology{{
 			NodeID:              "node-new",
+			DisplayName:         "New node",
 			CertificateSerial:   "certificate-new",
 			CredentialEpoch:     1,
 			AdministrativeState: domain.NodeActive,
@@ -91,6 +92,7 @@ func TestRestoreRestartKeepsUnobservedNodeAtZeroUntilFreshSnapshotDefinesPlatfor
 	if result.Status.Phase != NodeReady ||
 		!result.Scheduler.Reconciled ||
 		!result.Scheduler.NativeReady ||
+		result.Scheduler.Node.DisplayName != "New node" ||
 		result.Scheduler.Node.OS != domain.OSMacOS ||
 		result.Scheduler.Node.Architecture != domain.ArchARM64 {
 		t.Fatalf("first authenticated platform result = %#v", result)
@@ -676,6 +678,51 @@ func TestRestoreRejectsMissingAndTerminalReservationAuthority(t *testing.T) {
 	}
 }
 
+func TestApplyNodeConfigurationsIsAtomicAndCannotStrandAReservation(t *testing.T) {
+	execution := domain.ExecutionSnapshot{
+		ID:       "execution-node-configuration",
+		TargetID: "target-a",
+		Slot:     domain.SlotKey{NodeID: "node-a", Index: 1},
+		State:    domain.ExecutionRunning,
+	}
+	controller := restoreForTest(t, authorityForExecution(2, execution), Config{
+		Nodes: []NodeDefinition{testNodeDefinition("node-a", 2)},
+	})
+	unchanged := controller.Change()
+	if err := controller.ApplyNodeConfigurations([]NodeConfiguration{{
+		NodeID: "node-a", DisplayName: "Unsafe shrink", MaxRunners: 1,
+	}}); !hasCode(err, "node_capacity_below_reservation") {
+		t.Fatalf("unsafe shrink error = %v", err)
+	}
+	select {
+	case <-unchanged:
+		t.Fatal("rejected node configuration signaled or mutated the projection")
+	default:
+	}
+	before := controller.FleetSnapshot()
+	if before.Nodes[0].Node.DisplayName != "node-a" ||
+		before.Nodes[0].Node.MaxRunners != 2 {
+		t.Fatalf("rejected configuration mutated node = %#v", before.Nodes[0].Node)
+	}
+
+	changed := controller.Change()
+	if err := controller.ApplyNodeConfigurations([]NodeConfiguration{{
+		NodeID: "node-a", DisplayName: "Build node", MaxRunners: 3,
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("accepted node configuration did not signal invalidation")
+	}
+	after := controller.FleetSnapshot()
+	if after.Nodes[0].Node.DisplayName != "Build node" ||
+		after.Nodes[0].Node.MaxRunners != 3 {
+		t.Fatalf("accepted configuration node = %#v", after.Nodes[0].Node)
+	}
+}
+
 func TestRestoreAcceptsQuarantinedExecutionWithoutReservation(t *testing.T) {
 	quarantined := domain.ExecutionSnapshot{
 		ID:       "execution-quarantined",
@@ -1067,6 +1114,58 @@ func TestTerminalGitHubFenceBlocksNodeAdmissionUntilExactRemovalFenceClears(
 	}
 	if !admission.AllowsNewCapacity || !admission.AllowsRecovery {
 		t.Fatalf("cleared terminal fence admission = %#v", admission)
+	}
+}
+
+func TestManagementProjectionFailureSuppressesNewCapacityUntilRestart(t *testing.T) {
+	const nodeID domain.NodeID = "node-management-projection"
+	controller := restoreForTest(t, store.ControllerSnapshot{
+		ControllerEpoch: 4,
+		Nodes: []store.NodeAdministration{{
+			NodeID: nodeID,
+			State:  domain.NodeActive,
+		}},
+	}, Config{Nodes: []NodeDefinition{testNodeDefinition(nodeID, 1)}})
+	if _, err := controller.ReconcileAgentSnapshot(transport.AgentSnapshot{
+		NodeID:             nodeID,
+		OS:                 domain.OSLinux,
+		Arch:               domain.ArchAMD64,
+		NativeRunnerReady:  true,
+		MaxControllerEpoch: 4,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := controller.Admission(nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !before.AllowsNewCapacity || !before.AllowsRecovery ||
+		!controller.ManagementProjectionHealthy() {
+		t.Fatalf("pre-failure admission = %#v", before)
+	}
+
+	changed := controller.Change()
+	controller.MarkManagementProjectionUnavailable()
+	select {
+	case <-changed:
+	default:
+		t.Fatal("management projection failure did not signal admission loops")
+	}
+	after, err := controller.Admission(nodeID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after.AllowsNewCapacity || !after.AllowsRecovery ||
+		controller.ManagementProjectionHealthy() {
+		t.Fatalf("post-failure admission = %#v", after)
+	}
+
+	unchanged := controller.Change()
+	controller.MarkManagementProjectionUnavailable()
+	select {
+	case <-unchanged:
+		t.Fatal("idempotent projection degradation emitted another change")
+	default:
 	}
 }
 

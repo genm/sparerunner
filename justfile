@@ -7,7 +7,14 @@ default:
 bootstrap:
   mise install
   pnpm --dir web install --frozen-lockfile
+  pnpm --dir api/codegen install --frozen-lockfile
   lefthook install
+
+generate-api:
+  ./scripts/generate-api.sh
+
+generate-api-check:
+  ./scripts/check-generated-api.sh
 
 fmt:
   gofmt -w cmd internal packaging test
@@ -45,9 +52,9 @@ build:
 build-all:
   ./scripts/cross-build.sh
 
-check: fmt-check lint test test-platform-linux build
+check: generate-api-check fmt-check lint test test-platform-linux build
 
-check-quick: fmt-check
+check-quick: generate-api-check fmt-check
   go test ./...
   pnpm --dir web typecheck
 

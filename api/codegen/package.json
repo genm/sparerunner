@@ -1,0 +1,20 @@
+{
+  "name": "@tewake/api-codegen",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "openapi-typescript ../openapi.yaml --output ../../web/src/api/generated/schema.ts"
+  },
+  "devDependencies": {
+    "openapi-typescript": "7.13.0",
+    "typescript": "5.9.3"
+  },
+  "engines": {
+    "node": ">=24.15.0",
+    "pnpm": ">=10.33.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": []
+  }
+}

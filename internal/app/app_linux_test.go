@@ -9,14 +9,18 @@ import (
 	"crypto/rand"
 	"errors"
 	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/genm/tewake/internal/auth"
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
 	"github.com/genm/tewake/internal/reconcile"
+	"github.com/genm/tewake/internal/store"
 )
 
 func TestInitServeJoinAndAgentReconnect(t *testing.T) {
@@ -71,6 +75,55 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 	}
 	eventually(t, func() bool { return controller.Sessions.Count() == 0 })
 	assertDirectoryDoesNotContain(t, agentDirectory, []byte(code))
+	assertDirectoryDoesNotContain(t, controllerDirectory, []byte(code))
+
+	auditEvents, err := controller.Store.ReadAuditEvents(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(auditEvents) != 2 {
+		t.Fatalf("audit event count after enrollment replay = %d, want 2", len(auditEvents))
+	}
+	assertAudit := func(
+		index int,
+		revision uint64,
+		actor store.AuditActor,
+		action store.AuditAction,
+		resourceKind store.AuditResourceKind,
+		resourceID string,
+	) {
+		t.Helper()
+		event := auditEvents[index]
+		if event.Revision != revision ||
+			event.Record.Actor != actor ||
+			event.Record.Action != action ||
+			event.Record.Outcome != store.AuditOutcomeSucceeded ||
+			event.Record.ResourceKind != resourceKind ||
+			event.Record.ResourceID != resourceID ||
+			event.Record.ErrorCode != "" ||
+			event.Record.RequestID == "" {
+			t.Fatalf("audit event %d = %#v", index, event)
+		}
+	}
+	assertAudit(
+		0,
+		0,
+		store.AuditActorSingleAdmin,
+		store.AuditActionJoinCodeCreated,
+		store.AuditResourceJoinCode,
+		auditEvents[0].Record.ResourceID,
+	)
+	if auditEvents[0].Record.ResourceID == "" {
+		t.Fatal("join-code audit did not retain its non-secret token identity")
+	}
+	assertAudit(
+		1,
+		1,
+		store.AuditActorJoinCode,
+		store.AuditActionNodeEnrolled,
+		store.AuditResourceNode,
+		nodeID,
+	)
 
 	agentContext, stopAgent := context.WithCancel(ctx)
 	agentResult := make(chan error, 1)
@@ -148,6 +201,41 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 	if err := enrolled.CredentialReady(ctx); !errors.Is(err, ErrAgentCredentialUnavailable) {
 		t.Fatalf("deleted durable credential readiness: %v", err)
 	}
+}
+
+func TestManagementBootstrapProofLoadsThroughPrivateCredentialBoundary(t *testing.T) {
+	ctx := context.Background()
+	controllerDirectory := filepath.Join(privateTestDirectory(t), "controller")
+	if _, err := InitializeController(ctx, controllerDirectory, nil); err != nil {
+		t.Fatal(err)
+	}
+	controller, err := OpenController(ctx, controllerDirectory, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer controller.Close()
+	origin := "http://127.0.0.1:7442"
+	proof, err := LoadManagementBootstrapProof(controllerDirectory, origin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !auth.ValidBootstrapProofEncoding(proof) {
+		t.Fatal("credential boundary returned a non-canonical owner proof")
+	}
+	manager, err := auth.NewManager(controller.AdminSession, origin, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodPost, origin+"/api/v1/session", nil)
+	request.Header.Set("Origin", origin)
+	request.Header.Set(auth.BootstrapHeaderName, proof)
+	if err := manager.ValidateBootstrap(request); err != nil {
+		t.Fatalf("private owner proof rejected: %v", err)
+	}
+	if err := manager.ValidateBootstrap(request); !errors.Is(err, auth.ErrUnauthenticated) {
+		t.Fatalf("owner proof replay error = %v", err)
+	}
+	assertDirectoryDoesNotContain(t, controllerDirectory, []byte(proof))
 }
 
 func TestControllerRestartInvalidatesUnusedCodeButNotFirstStartCode(t *testing.T) {

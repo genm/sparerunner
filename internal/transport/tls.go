@@ -132,6 +132,56 @@ func SessionWasUpgraded(err error) bool {
 	return errors.As(err, &upgraded)
 }
 
+type AgentSessionRejectionKind uint8
+
+const (
+	AgentSessionCredentialRejected AgentSessionRejectionKind = iota + 1
+	AgentSessionProtocolRejected
+)
+
+type agentSessionRejectionError struct {
+	nodeID string
+	kind   AgentSessionRejectionKind
+	cause  error
+}
+
+func (err agentSessionRejectionError) Error() string {
+	switch err.kind {
+	case AgentSessionCredentialRejected:
+		return "node credential rejected"
+	case AgentSessionProtocolRejected:
+		return "agent protocol rejected"
+	default:
+		return "agent session rejected"
+	}
+}
+
+func (err agentSessionRejectionError) Unwrap() error { return err.cause }
+
+// AgentSessionRejection extracts only the authenticated, persistence-safe
+// identity and closed rejection class. Raw certificates, frames, and provider
+// errors remain outside the audit boundary.
+func AgentSessionRejection(err error) (string, AgentSessionRejectionKind, bool) {
+	var rejection agentSessionRejectionError
+	if !errors.As(err, &rejection) ||
+		rejection.nodeID == "" ||
+		(rejection.kind != AgentSessionCredentialRejected &&
+			rejection.kind != AgentSessionProtocolRejected) {
+		return "", 0, false
+	}
+	return rejection.nodeID, rejection.kind, true
+}
+
+// AgentProtocolRejection marks a protocol failure after the credential has
+// already passed the Controller's current-credential authority.
+func AgentProtocolRejection(credential enroll.Credential, cause error) error {
+	return agentSessionRejectionError{
+		nodeID: credential.NodeID,
+		kind:   AgentSessionProtocolRejected,
+		cause:  cause,
+	}
+}
+
 type ActiveSessionRegistry struct {
 	mu       sync.Mutex
 	sessions map[string]map[*AuthenticatedSession]struct{}
@@ -224,7 +274,11 @@ func (session *AuthenticatedSession) Credential() enroll.Credential { return ses
 func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error) {
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
 		session.connection.CloseNow()
-		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
+		return Envelope{}, agentSessionRejectionError{
+			nodeID: session.credential.NodeID,
+			kind:   AgentSessionCredentialRejected,
+			cause:  err,
+		}
 	}
 	envelope, err := ReadEnvelope(ctx, session.connection)
 	if err != nil {
@@ -232,7 +286,11 @@ func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error)
 	}
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
 		session.connection.CloseNow()
-		return Envelope{}, fmt.Errorf("node credential rejected: %w", err)
+		return Envelope{}, agentSessionRejectionError{
+			nodeID: session.credential.NodeID,
+			kind:   AgentSessionCredentialRejected,
+			cause:  err,
+		}
 	}
 	return envelope, nil
 }
@@ -240,7 +298,11 @@ func (session *AuthenticatedSession) Read(ctx context.Context) (Envelope, error)
 func (session *AuthenticatedSession) Write(ctx context.Context, envelope Envelope) error {
 	if err := session.authorizer.AuthorizeCredential(ctx, session.credential, time.Now()); err != nil {
 		session.connection.CloseNow()
-		return fmt.Errorf("node credential rejected: %w", err)
+		return agentSessionRejectionError{
+			nodeID: session.credential.NodeID,
+			kind:   AgentSessionCredentialRejected,
+			cause:  err,
+		}
 	}
 	return WriteEnvelope(ctx, session.connection, envelope)
 }
@@ -268,7 +330,11 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 	}
 	credential := enroll.Credential{NodeID: nodeID, Serial: serial, Epoch: epoch, NotBefore: verifiedLeaf.NotBefore, NotAfter: verifiedLeaf.NotAfter}
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
-		return fmt.Errorf("node credential rejected: %w", err)
+		return agentSessionRejectionError{
+			nodeID: credential.NodeID,
+			kind:   AgentSessionCredentialRejected,
+			cause:  err,
+		}
 	}
 	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
 	if err != nil {
@@ -277,13 +343,21 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 	connection.SetReadLimit(MaxEnvelopeBytes)
 	defer connection.CloseNow()
 	if connection.Subprotocol() != "tewake.v1" {
-		return upgradedSessionError{errors.New("missing tewake.v1 subprotocol")}
+		return upgradedSessionError{agentSessionRejectionError{
+			nodeID: credential.NodeID,
+			kind:   AgentSessionProtocolRejected,
+			cause:  errors.New("missing tewake.v1 subprotocol"),
+		}}
 	}
 	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
 	deregister := sessions.Register(session)
 	defer deregister()
 	if err := authorizer.AuthorizeCredential(request.Context(), credential, time.Now()); err != nil {
-		return upgradedSessionError{fmt.Errorf("node credential rejected after upgrade: %w", err)}
+		return upgradedSessionError{agentSessionRejectionError{
+			nodeID: credential.NodeID,
+			kind:   AgentSessionCredentialRejected,
+			cause:  err,
+		}}
 	}
 	if finalizer, ok := authorizer.(EnrollmentFinalizer); ok {
 		if err := finalizer.FinalizeEnrollment(request.Context(), credential); err != nil {

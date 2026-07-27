@@ -20,6 +20,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/genm/tewake/internal/auth"
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
 	"github.com/genm/tewake/internal/reconcile"
@@ -44,15 +45,16 @@ var (
 )
 
 type ControllerState struct {
-	Directory    string
-	Identity     enroll.ControllerIdentity
-	Store        *store.ControllerStore
-	Service      enroll.Service
-	Sessions     *transport.ActiveSessionRegistry
-	AgentBroker  *AgentBroker
-	Reconciler   *reconcile.Controller
-	AdminSession [32]byte
-	Epoch        uint64
+	Directory      string
+	Identity       enroll.ControllerIdentity
+	Store          *store.ControllerStore
+	Service        enroll.Service
+	Sessions       *transport.ActiveSessionRegistry
+	AgentBroker    *AgentBroker
+	Reconciler     *reconcile.Controller
+	TargetVerifier ManagementTargetVerifier
+	AdminSession   [32]byte
+	Epoch          uint64
 }
 
 func (state ControllerState) String() string {
@@ -153,7 +155,11 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 		_ = controllerStore.Close()
 		return "", err
 	}
-	service, err := enroll.NewService(controllerStore, identity, digestKey, uint64(epoch))
+	service, err := enroll.NewService(auditedJoinCodeRegistry{
+		Registry:  controllerStore,
+		store:     controllerStore,
+		requestID: "req_unavailable",
+	}, identity, digestKey, uint64(epoch))
 	if err != nil {
 		_ = controllerStore.Close()
 		return "", err
@@ -222,7 +228,16 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		}
 		epoch = uint64(current)
 	}
-	service, err := enroll.NewService(controllerStore, identity, digestKey, epoch)
+	runtimeEnrollmentRegistry := auditedRuntimeEnrollmentRegistry{
+		Registry: controllerStore,
+		store:    controllerStore,
+	}
+	service, err := enroll.NewService(
+		runtimeEnrollmentRegistry,
+		identity,
+		digestKey,
+		epoch,
+	)
 	if err != nil {
 		_ = controllerStore.Close()
 		return nil, err
@@ -240,6 +255,11 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		if snapshotErr != nil {
 			_ = controllerStore.Close()
 			return nil, snapshotErr
+		}
+		service.Registry = projectingEnrollmentRegistry{
+			Registry:   runtimeEnrollmentRegistry,
+			reader:     controllerStore,
+			controller: reconciler,
 		}
 	}
 	agentConsumers := newStoreBackedAgentConsumers(controllerStore)
@@ -270,6 +290,34 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		AdminSession: adminSession,
 		Epoch:        epoch,
 	}, nil
+}
+
+// LoadManagementBootstrapProof derives the owner proof used by the local CLI to
+// establish an administrator session. The durable root remains behind the
+// Controller's private credential locator and is never returned to the caller.
+func LoadManagementBootstrapProof(
+	directory string,
+	canonicalOrigin string,
+) (string, error) {
+	directory, err := absoluteStateDirectory(directory)
+	if err != nil {
+		return "", err
+	}
+	sessionBytes, err := enroll.LoadPrivateMaterial(
+		filepath.Join(directory, controllerSessionFile),
+	)
+	if err != nil || len(sessionBytes) != 32 {
+		return "", fmt.Errorf("%w: controller admin session", ErrNotInitialized)
+	}
+	defer clear(sessionBytes)
+	var root [32]byte
+	copy(root[:], sessionBytes)
+	proof, err := auth.NewBootstrapProof(root, canonicalOrigin, timeNow(), rand.Reader)
+	clear(root[:])
+	if err != nil {
+		return "", fmt.Errorf("derive management bootstrap proof: %w", err)
+	}
+	return proof, nil
 }
 
 func (state *ControllerState) Close() error {
