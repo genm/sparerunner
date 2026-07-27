@@ -40,6 +40,8 @@ const (
 )
 
 type controllerRunnerStore interface {
+	ManagementAuditHealthy() bool
+	ManagementAuditChange() <-chan struct{}
 	RecordGitHubSessionDemand(context.Context, store.GitHubSessionDemand) error
 	RecordGitHubScaleSetSessionSuccess(context.Context, store.ScaleSetID) (store.GitHubScaleSetSessionHealth, error)
 	RecordGitHubScaleSetSessionFailure(context.Context, store.ScaleSetID, store.GitHubObservationFailureClass) (store.GitHubScaleSetSessionHealth, error)
@@ -311,8 +313,17 @@ func (coordinator *ControllerRunnerCoordinator) CommitMessage(
 			snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
 			admission.AllowsNewCapacity
 	}
+	// Audit health may change while the provider long poll is returning. Check
+	// again at the durable queue boundary so that message evidence is not
+	// committed and acknowledged after management admission has failed closed.
+	if !coordinator.store.ManagementAuditHealthy() {
+		return ErrControllerRunnerAdmission
+	}
 	commit, err := coordinator.store.CommitGitHubQueueMessage(ctx, record, binding)
 	if err != nil {
+		if errors.Is(err, store.ErrManagementAuditPersistence) {
+			return ErrControllerRunnerAdmission
+		}
 		if errors.Is(err, store.ErrGitHubRequeueTerminalPending) ||
 			errors.Is(err, store.ErrGitHubRecoveryAvailabilityPending) {
 			return errors.Join(ErrGitHubAvailableUnclaimed, err)
@@ -450,6 +461,11 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 	if err != nil {
 		return nil, false, err
 	}
+	auditHealthy := coordinator.store.ManagementAuditHealthy()
+	if !auditHealthy {
+		capacity = 0
+	}
+	auditChanged := coordinator.store.ManagementAuditChange()
 	snapshot, online, readinessChanged := coordinator.agents.Readiness(coordinator.config.NodeID)
 	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
 	if err != nil {
@@ -497,7 +513,8 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 	defer coordinator.clearPollAuthority()
 
 	recheckAt := earliestControllerRunnerTime(admission.RecheckAt, runnerRecheckAt)
-	if readinessChanged == nil && admission.Change == nil && recheckAt.IsZero() {
+	if readinessChanged == nil && admission.Change == nil &&
+		(!auditHealthy || auditChanged == nil) && recheckAt.IsZero() {
 		message, err := coordinator.poller.PollOnce(ctx, capacity)
 		if err != nil {
 			err = coordinator.persistProviderFailure(ctx, err)
@@ -519,6 +536,15 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 			}
 		}()
 	}
+	if auditHealthy && auditChanged != nil {
+		go func() {
+			select {
+			case <-auditChanged:
+				cancel()
+			case <-pollContext.Done():
+			}
+		}()
+	}
 	var deadlineTimer *time.Timer
 	if !recheckAt.IsZero() {
 		deadlineTimer = time.AfterFunc(time.Until(recheckAt), cancel)
@@ -533,6 +559,7 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 	message, err := coordinator.poller.PollOnce(pollContext, capacity)
 	invalidated := (readinessChanged != nil && readinessChanged.Err() != nil) ||
 		(admission.Change != nil && channelClosed(admission.Change)) ||
+		(auditHealthy && auditChanged != nil && channelClosed(auditChanged)) ||
 		(!recheckAt.IsZero() && !time.Now().Before(recheckAt))
 	if err != nil && ctx.Err() == nil && invalidated &&
 		errors.Is(err, context.Canceled) {
@@ -1177,6 +1204,9 @@ func (coordinator *ControllerRunnerCoordinator) acquire(ctx context.Context, cla
 func (coordinator *ControllerRunnerCoordinator) requireRunnerAdmission(
 	ctx context.Context,
 ) error {
+	if !coordinator.store.ManagementAuditHealthy() {
+		return ErrControllerRunnerAdmission
+	}
 	snapshot, online, _ := coordinator.agents.Readiness(coordinator.config.NodeID)
 	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
 	if err != nil {

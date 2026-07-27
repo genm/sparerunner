@@ -2486,6 +2486,32 @@ func TestAgentBrokerRejectsHelloThatDoesNotMatchCredential(t *testing.T) {
 	}
 }
 
+func TestAgentSessionReadErrorClassificationPreservesSecurityBoundary(t *testing.T) {
+	t.Parallel()
+
+	credential := enroll.Credential{
+		NodeID: "00112233445566778899aabbccddeeff",
+	}
+	typed := transport.AgentProtocolRejection(
+		credential,
+		transport.ErrProtocolVersion,
+	)
+	if got := classifyAgentSessionError(typed); got != typed {
+		t.Fatalf("typed rejection changed identity: got %v, want %v", got, typed)
+	}
+	protocol := classifyAgentSessionError(transport.ErrProtocolVersion)
+	if !errors.Is(protocol, ErrAgentProtocol) ||
+		!errors.Is(protocol, transport.ErrProtocolVersion) {
+		t.Fatalf("protocol classification = %v", protocol)
+	}
+	if got := classifyAgentSessionError(errors.New("connection reset")); !errors.Is(
+		got,
+		ErrAgentDisconnected,
+	) {
+		t.Fatalf("I/O classification = %v, want disconnected", got)
+	}
+}
+
 func TestAgentBrokerDoesNotAcknowledgeUpdateWithoutConsumer(t *testing.T) {
 	broker := NewAgentBroker(1, acceptingAgentConsumers(nil))
 	session, serveResult := startReadyBrokerSession(t, broker, "node-1")

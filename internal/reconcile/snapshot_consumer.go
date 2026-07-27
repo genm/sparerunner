@@ -13,7 +13,7 @@ type AgentSnapshotRecorder interface {
 	RecordAgentSnapshot(context.Context, store.NodeAgentSnapshot) error
 }
 
-type restartSnapshotReader interface {
+type RestartSnapshotReader interface {
 	RestartSnapshot(context.Context) (store.ControllerRestartSnapshot, error)
 }
 
@@ -84,20 +84,48 @@ func (consumer *SnapshotConsumer) HandleAgentSnapshot(
 	// A node may enroll after this Controller process restored its startup
 	// projection. Add it only from a fresh, post-commit store read; the Agent
 	// payload is never administrative or credential authority.
-	reader, ok := consumer.recorder.(restartSnapshotReader)
+	reader, ok := consumer.recorder.(RestartSnapshotReader)
 	if !ok {
 		return err
+	}
+	if err := EnsureStoreBackedRestartNode(
+		ctx,
+		reader,
+		consumer.controller,
+		snapshot.NodeID,
+	); err != nil {
+		return err
+	}
+	_, err = consumer.controller.ReconcileAgentSnapshot(snapshot)
+	return err
+}
+
+// EnsureStoreBackedRestartNode projects a newly enrolled node from a fresh
+// durable restart snapshot. Enrollment and first-snapshot reconciliation share
+// this boundary so neither path treats Agent-provided identity as authority.
+func EnsureStoreBackedRestartNode(
+	ctx context.Context,
+	reader RestartSnapshotReader,
+	controller *Controller,
+	nodeID domain.NodeID,
+) error {
+	if reader == nil || controller == nil || nodeID == "" {
+		return invalid(
+			"restart_node_dependency_required",
+			"restart_node",
+			"reader, Controller, and node ID must be present",
+		)
 	}
 	restart, readErr := reader.RestartSnapshot(ctx)
 	if readErr != nil {
 		return readErr
 	}
-	if restart.Controller.ControllerEpoch != consumer.controller.Epoch() {
+	if restart.Controller.ControllerEpoch != controller.Epoch() {
 		return invalid("controller_epoch_mismatch", "restart_snapshot.controller_epoch", "changed while adding an enrolled node")
 	}
 	var topology *store.RestartNodeTopology
 	for index := range restart.NodeTopology {
-		if restart.NodeTopology[index].NodeID == snapshot.NodeID {
+		if restart.NodeTopology[index].NodeID == nodeID {
 			candidate := restart.NodeTopology[index]
 			topology = &candidate
 			break
@@ -106,9 +134,5 @@ func (consumer *SnapshotConsumer) HandleAgentSnapshot(
 	if topology == nil {
 		return invalid("node_authority_not_found", "restart_snapshot.node_topology", "does not contain the authenticated Agent node")
 	}
-	if err := consumer.controller.EnsureRestartNode(*topology); err != nil {
-		return err
-	}
-	_, err = consumer.controller.ReconcileAgentSnapshot(snapshot)
-	return err
+	return controller.EnsureRestartNode(*topology)
 }

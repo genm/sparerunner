@@ -1665,6 +1665,11 @@ func TestControllerAgentRuntimeColumnAllowlistRejectsSecretCanaryColumns(t *test
 		"github_target_runtime_bindings",
 		"github_runner_release_state",
 		"github_scale_set_session_health",
+		"management_configuration_state",
+		"management_node_configurations",
+		"management_runner_profiles",
+		"management_github_targets",
+		"management_audit_events",
 	}
 	for _, table := range tables {
 		t.Run(table, func(t *testing.T) {

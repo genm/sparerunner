@@ -98,6 +98,37 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	}
 }
 
+func TestJoinCodeIsEncodedBeforeItsDigestIsPersisted(t *testing.T) {
+	service, registry, _ := testService(t)
+	service.Random = strings.NewReader(strings.Repeat("\x00", 48))
+
+	if _, err := service.CreateJoinCodeDelivery(
+		context.Background(),
+		nil,
+	); !errors.Is(err, ErrInvalidJoinCode) {
+		t.Fatalf("all-zero join-code delivery = %v", err)
+	}
+	registry.mu.Lock()
+	persisted := len(registry.tokens)
+	registry.mu.Unlock()
+	if persisted != 0 {
+		t.Fatalf("unencodable join code persisted %d token digests", persisted)
+	}
+
+	service.Random = rand.Reader
+	delivery, err := service.CreateJoinCodeDelivery(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := DecodeJoinCode(delivery.Encoded())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if decoded.TokenID() != delivery.TokenID {
+		t.Fatal("typed delivery token identity differs from encoded join code")
+	}
+}
+
 func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
 	service, _, _ := testService(t)
 	code, err := NewJoinCode(service.Identity.CAFingerprint(), nil, rand.Reader)
@@ -108,7 +139,8 @@ func TestSecretBearingTypesAreRedactedAcrossFormattingAndJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, rendered := range []string{fmt.Sprint(code), fmt.Sprintf("%#v", code), code.LogValue().String(), service.Identity.String(), fmt.Sprintf("%#v", service.Identity), service.Identity.LogValue().String(), service.String(), fmt.Sprintf("%#v", service), service.LogValue().String()} {
+	delivery := JoinCodeDelivery{TokenID: code.TokenID(), encoded: encoded}
+	for _, rendered := range []string{fmt.Sprint(code), fmt.Sprintf("%#v", code), code.LogValue().String(), fmt.Sprint(delivery), fmt.Sprintf("%#v", delivery), delivery.LogValue().String(), service.Identity.String(), fmt.Sprintf("%#v", service.Identity), service.Identity.LogValue().String(), service.String(), fmt.Sprintf("%#v", service), service.LogValue().String()} {
 		if strings.Contains(rendered, encoded) || strings.Contains(rendered, string(code.secret[:])) {
 			t.Fatalf("secret leaked through representation %q", rendered)
 		}

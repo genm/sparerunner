@@ -57,6 +57,7 @@ type ControllerSnapshot struct {
 // bit remains evidence only; restart admission still begins at capacity zero.
 type RestartNodeTopology struct {
 	NodeID                     domain.NodeID
+	DisplayName                string
 	CertificateSerial          string
 	CredentialEpoch            uint64
 	AdministrativeState        domain.NodeAdministrativeState
@@ -82,10 +83,11 @@ type GitHubReconciliationFence struct {
 // restart read model. It deliberately excludes enrollment secrets, GitHub App
 // credentials, raw command payloads, JIT configuration, and Agent private keys.
 type ControllerRestartSnapshot struct {
-	Controller     ControllerSnapshot
-	NodeTopology   []RestartNodeTopology
-	IssuedCommands []IssuedAgentCommand
-	GitHubFences   []GitHubReconciliationFence
+	Controller      ControllerSnapshot
+	FleetMaxRunners *int
+	NodeTopology    []RestartNodeTopology
+	IssuedCommands  []IssuedAgentCommand
+	GitHubFences    []GitHubReconciliationFence
 }
 
 func (a Assignment) Validate() error {
@@ -458,6 +460,10 @@ func (s *ControllerStore) RestartSnapshot(ctx context.Context) (ControllerRestar
 	if err != nil {
 		return ControllerRestartSnapshot{}, err
 	}
+	_, fleetMaximum, err := readManagementState(ctx, tx)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
 	nodes, err := readRestartNodeTopology(ctx, tx)
 	if err != nil {
 		return ControllerRestartSnapshot{}, err
@@ -471,10 +477,11 @@ func (s *ControllerStore) RestartSnapshot(ctx context.Context) (ControllerRestar
 		return ControllerRestartSnapshot{}, err
 	}
 	result := ControllerRestartSnapshot{
-		Controller:     controller,
-		NodeTopology:   nodes,
-		IssuedCommands: commands,
-		GitHubFences:   fences,
+		Controller:      controller,
+		FleetMaxRunners: cloneOptionalInt(fleetMaximum),
+		NodeTopology:    nodes,
+		IssuedCommands:  commands,
+		GitHubFences:    fences,
 	}
 	if err := tx.Commit(); err != nil {
 		return ControllerRestartSnapshot{}, err
@@ -484,13 +491,15 @@ func (s *ControllerStore) RestartSnapshot(ctx context.Context) (ControllerRestar
 
 func readRestartNodeTopology(ctx context.Context, tx *sql.Tx) ([]RestartNodeTopology, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT
-		n.node_id, n.current_serial, n.credential_epoch, n.revoked,
+		n.node_id, c.display_name, n.current_serial, n.credential_epoch, n.revoked,
 		a.administrative_state,
+		c.max_runners,
 		s.operating_system, s.architecture, s.runner_version,
 		s.native_runner_ready,
 		s.max_controller_epoch, s.received_at_unix_nano
 		FROM enrolled_nodes n
 		JOIN node_administrative_states a ON a.node_id = n.node_id
+		JOIN management_node_configurations c ON c.node_id = n.node_id
 		LEFT JOIN agent_session_snapshots s ON s.node_id = n.node_id
 		ORDER BY n.node_id`)
 	if err != nil {
@@ -506,10 +515,12 @@ func readRestartNodeTopology(ctx context.Context, tx *sql.Tx) ([]RestartNodeTopo
 		var nativeRunnerReady, maxControllerEpoch, receivedAt sql.NullInt64
 		if err := rows.Scan(
 			&node.NodeID,
+			&node.DisplayName,
 			&node.CertificateSerial,
 			&node.CredentialEpoch,
 			&revoked,
 			&node.AdministrativeState,
+			&node.MaxRunners,
 			&operatingSystem,
 			&architecture,
 			&runnerVersion,
@@ -519,7 +530,9 @@ func readRestartNodeTopology(ctx context.Context, tx *sql.Tx) ([]RestartNodeTopo
 		); err != nil {
 			return nil, err
 		}
-		if node.NodeID == "" || node.CertificateSerial == "" || node.CredentialEpoch == 0 {
+		if node.NodeID == "" || node.DisplayName == "" ||
+			node.CertificateSerial == "" || node.CredentialEpoch == 0 ||
+			node.MaxRunners < 1 {
 			return nil, errors.New("stored restart node topology failed validation")
 		}
 		if err := node.AdministrativeState.Validate("restart_snapshot.node.administrative_state"); err != nil {
@@ -528,9 +541,6 @@ func readRestartNodeTopology(ctx context.Context, tx *sql.Tx) ([]RestartNodeTopo
 		if (revoked != 0) != (node.AdministrativeState == domain.NodeRevoked) {
 			return nil, errors.New("stored restart node revocation authority is inconsistent")
 		}
-		// Current storage owns one slot per enrolled host. A later settings
-		// migration can replace this default without changing the read contract.
-		node.MaxRunners = domain.DefaultMaxRunners
 		platformColumns := []bool{
 			operatingSystem.Valid,
 			architecture.Valid,

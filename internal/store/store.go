@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/genm/tewake/internal/enroll"
@@ -86,6 +87,16 @@ type ControllerStore struct {
 	*baseStore
 	revocationMu   sync.RWMutex
 	revocationHook func(enroll.Credential)
+	auditHealthy   atomic.Bool
+	auditChange    chan struct{}
+	auditGate      sync.RWMutex
+
+	// beforeGitHubQueueCommit is a test seam at the audit-gated commit point.
+	// Production stores leave it nil.
+	beforeGitHubQueueCommit func()
+	// beforeManagementMutationCommit is the equivalent deterministic race seam
+	// for audited management transactions. Production stores leave it nil.
+	beforeManagementMutationCommit func()
 }
 
 // AgentStore owns the local journal. It stores identities and allowlisted observed
@@ -100,7 +111,15 @@ func OpenController(ctx context.Context, path string, options Options) (*Control
 	if base == nil {
 		return nil, err
 	}
-	return &ControllerStore{baseStore: base}, err
+	store := &ControllerStore{
+		baseStore:   base,
+		auditChange: make(chan struct{}),
+	}
+	store.auditHealthy.Store(true)
+	if store.Ready() != nil {
+		store.degradeManagementAudit()
+	}
+	return store, err
 }
 
 func OpenAgent(ctx context.Context, path string, options Options) (*AgentStore, error) {
@@ -771,6 +790,23 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"github_target_runtime_bindings":  {"target_id", "scale_set_id", "profile_id"},
 		"github_runner_release_state":     {"singleton", "latest_version", "latest_released_at_unix_nano", "observed_at_unix_nano", "freshness", "failure_class", "failure_at_unix_nano", "generation"},
 		"github_scale_set_session_health": {"scale_set_id", "freshness", "last_success_at_unix_nano", "failure_class", "failure_at_unix_nano", "transition_generation"},
+		"management_configuration_state":  {"singleton", "revision", "fleet_max_runners"},
+		"management_node_configurations":  {"node_id", "display_name", "max_runners"},
+		"management_runner_profiles": {
+			"profile_id", "label", "operating_system", "architecture",
+			"min_available_memory_bytes", "version_policy", "runner_version",
+			"runtime",
+		},
+		"management_github_targets": {
+			"target_id", "installation_id", "scope_kind", "scope",
+			"visibility", "runner_group_access_safe", "scale_set_name",
+			"profile_id", "scale_set_id",
+		},
+		"management_audit_events": {
+			"sequence", "occurred_at_unix_nano", "actor", "action",
+			"outcome", "resource_kind", "resource_id", "error_code",
+			"request_id", "revision",
+		},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
@@ -790,6 +826,9 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 			"github_unpicked_requeue_intents",
 			"runner_profile_update_policies", "github_target_runtime_bindings",
 			"github_runner_release_state", "github_scale_set_session_health",
+			"management_configuration_state",
+			"management_node_configurations", "management_runner_profiles",
+			"management_github_targets", "management_audit_events",
 		)
 	} else {
 		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones", "runner_journal_records", "execution_update_outbox", "accepted_command_types")
@@ -1136,6 +1175,46 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 	if invalid != 0 {
 		return fmt.Errorf(
 			"%w: reconciled replacement dispatch authority failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*) FROM management_configuration_state) != 1
+			OR NOT EXISTS (
+				SELECT 1
+				FROM management_configuration_state
+				WHERE singleton = 1
+					AND revision >= 0
+					AND (
+						fleet_max_runners IS NULL
+						OR fleet_max_runners >= 1
+					)
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM enrolled_nodes node
+				LEFT JOIN management_node_configurations configuration
+					ON configuration.node_id = node.node_id
+				WHERE configuration.node_id IS NULL
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM management_node_configurations configuration
+				LEFT JOIN enrolled_nodes node
+					ON node.node_id = configuration.node_id
+				WHERE node.node_id IS NULL
+			)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate management configuration authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: management configuration authority failed",
 			ErrCorruptBackup,
 		)
 	}

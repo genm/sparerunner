@@ -449,6 +449,172 @@ func TestControllerRunnerOnlineAgentWithoutNativeRuntimeAdvertisesNoCapacity(t *
 	}
 }
 
+func TestControllerRunnerAuditFailureAdvertisesNoCapacityAndBlocksLateAcquire(t *testing.T) {
+	t.Run("failed before poll", func(t *testing.T) {
+		stateStore := newRunnerCoordinatorFakeStore()
+		stateStore.auditHealthy = false
+		session := newRunnerCoordinatorFakeSession(testControllerRunnerMessage())
+		agent := &runnerCoordinatorFakeAgent{
+			prepareState: domain.ExecutionPreparing,
+			startState:   domain.ExecutionRunning,
+		}
+		agent.setNativeRunnerReady(true)
+		coordinator := newControllerRunnerForTest(
+			t, stateStore, session, agent, newRunnerCoordinatorFakeLifecycle())
+
+		if _, err := coordinator.PollAndDriveOnce(context.Background()); !errors.Is(
+			err,
+			ErrControllerRunnerAdmission,
+		) {
+			t.Fatalf("audit-unavailable poll error = %v", err)
+		}
+		if len(session.pollCapacities) != 1 || session.pollCapacities[0] != 0 {
+			t.Fatalf("audit-unavailable capacities = %v, want [0]", session.pollCapacities)
+		}
+		if stateStore.claim != nil || session.acquireCalls != 0 ||
+			agent.prepareCalls != 0 || agent.startCalls != 0 {
+			t.Fatalf(
+				"audit-unavailable claim/acquire/prepare/start = %#v/%d/%d/%d",
+				stateStore.claim,
+				session.acquireCalls,
+				agent.prepareCalls,
+				agent.startCalls,
+			)
+		}
+	})
+
+	t.Run("failed during long poll", func(t *testing.T) {
+		stateStore := newRunnerCoordinatorFakeStore()
+		session := newRunnerCoordinatorFakeSession(nil)
+		started := make(chan int, 1)
+		session.poll = func(ctx context.Context, capacity int) (*github.Message, error) {
+			started <- capacity
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		agent := &runnerCoordinatorFakeAgent{
+			snapshot: AgentSnapshot{
+				NodeID: "00000000000000000000000000000001",
+				OS:     domain.OSLinux,
+				Arch:   domain.ArchAMD64,
+			},
+			snapshotOnline: true,
+		}
+		agent.setNativeRunnerReady(true)
+		coordinator := newControllerRunnerForTest(
+			t, stateStore, session, agent, newRunnerCoordinatorFakeLifecycle())
+
+		result := make(chan error, 1)
+		go func() {
+			_, err := coordinator.PollAndDriveOnce(context.Background())
+			result <- err
+		}()
+		select {
+		case capacity := <-started:
+			if capacity != 1 {
+				t.Fatalf("initial audit-healthy capacity = %d, want 1", capacity)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("GitHub long poll did not start")
+		}
+		stateStore.degradeManagementAudit()
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatalf("intentional audit cancellation = %v", err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("audit change did not interrupt GitHub long poll")
+		}
+		if stateStore.claim != nil || stateStore.commits != 0 ||
+			session.deleteCalls != 0 || session.acquireCalls != 0 {
+			t.Fatalf(
+				"audit cancellation claim/commit/delete/acquire = %#v/%d/%d/%d",
+				stateStore.claim,
+				stateStore.commits,
+				session.deleteCalls,
+				session.acquireCalls,
+			)
+		}
+
+		session.mu.Lock()
+		session.poll = func(context.Context, int) (*github.Message, error) {
+			return nil, nil
+		}
+		session.mu.Unlock()
+		if _, err := coordinator.PollOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		session.mu.Lock()
+		capacities := append([]int(nil), session.pollCapacities...)
+		session.mu.Unlock()
+		if len(capacities) != 2 || capacities[1] != 0 {
+			t.Fatalf("audit-degraded capacities = %v, want [1 0]", capacities)
+		}
+	})
+
+	t.Run("failed after poll before commit", func(t *testing.T) {
+		stateStore := newRunnerCoordinatorFakeStore()
+		session := newRunnerCoordinatorFakeSession(testControllerRunnerMessage())
+		agent := &runnerCoordinatorFakeAgent{
+			prepareState: domain.ExecutionPreparing,
+			startState:   domain.ExecutionRunning,
+		}
+		agent.setNativeRunnerReady(true)
+		coordinator := newControllerRunnerForTest(
+			t, stateStore, session, agent, newRunnerCoordinatorFakeLifecycle())
+		session.afterPoll = stateStore.degradeManagementAudit
+
+		if _, err := coordinator.PollOnce(context.Background()); !errors.Is(
+			err,
+			ErrControllerRunnerAdmission,
+		) {
+			t.Fatalf("post-poll audit failure = %v", err)
+		}
+		if stateStore.claim != nil || stateStore.commits != 0 ||
+			session.deleteCalls != 0 || session.acquireCalls != 0 {
+			t.Fatalf(
+				"post-poll audit failure claim/commit/delete/acquire = %#v/%d/%d/%d",
+				stateStore.claim,
+				stateStore.commits,
+				session.deleteCalls,
+				session.acquireCalls,
+			)
+		}
+	})
+
+	t.Run("failed after claim commit", func(t *testing.T) {
+		stateStore := newRunnerCoordinatorFakeStore()
+		session := newRunnerCoordinatorFakeSession(testControllerRunnerMessage())
+		agent := &runnerCoordinatorFakeAgent{
+			prepareState: domain.ExecutionPreparing,
+			startState:   domain.ExecutionRunning,
+		}
+		agent.setNativeRunnerReady(true)
+		coordinator := newControllerRunnerForTest(
+			t, stateStore, session, agent, newRunnerCoordinatorFakeLifecycle())
+
+		if _, err := coordinator.PollOnce(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		stateStore.mu.Lock()
+		stateStore.auditHealthy = false
+		stateStore.mu.Unlock()
+		drove, err := coordinator.DriveNext(context.Background())
+		if !drove || !errors.Is(err, ErrControllerRunnerAdmission) {
+			t.Fatalf("late audit failure drive = (%t, %v)", drove, err)
+		}
+		if session.acquireCalls != 0 || agent.prepareCalls != 0 || agent.startCalls != 0 {
+			t.Fatalf(
+				"late audit failure acquire/prepare/start = %d/%d/%d",
+				session.acquireCalls,
+				agent.prepareCalls,
+				agent.startCalls,
+			)
+		}
+	})
+}
+
 func TestControllerRunnerReadinessChangesInterruptLongPollAndRefreshCapacity(t *testing.T) {
 	for _, testCase := range []struct {
 		name            string
@@ -2030,6 +2196,7 @@ func TestControllerRunnerRestartRestoresIntentFenceBeforeDrivingReplacement(
 			},
 			NodeTopology: []store.RestartNodeTopology{{
 				NodeID:              intent.Claim.Execution.Slot.NodeID,
+				DisplayName:         string(intent.Claim.Execution.Slot.NodeID),
 				CertificateSerial:   "restart-unpicked-certificate",
 				CredentialEpoch:     1,
 				AdministrativeState: domain.NodeActive,
@@ -3509,6 +3676,8 @@ func (session *runnerCoordinatorFakeSession) AcquireJobs(
 type runnerCoordinatorFakeStore struct {
 	mu                 sync.Mutex
 	capacity           int
+	auditHealthy       bool
+	auditChange        chan struct{}
 	controllerEpoch    domain.ControllerEpoch
 	runtimeFreshness   store.GitHubRuntimeFreshness
 	agentAuthority     store.GitHubAgentPollAuthority
@@ -3541,9 +3710,11 @@ type runnerCoordinatorFakeStore struct {
 
 func newRunnerCoordinatorFakeStore() *runnerCoordinatorFakeStore {
 	return &runnerCoordinatorFakeStore{
-		capacity: 1,
-		issued:   make(map[domain.CommandID]store.IssuedAgentCommand),
-		messages: make(map[store.MessageID]store.GitHubQueueMessage),
+		capacity:     1,
+		auditHealthy: true,
+		auditChange:  make(chan struct{}),
+		issued:       make(map[domain.CommandID]store.IssuedAgentCommand),
+		messages:     make(map[store.MessageID]store.GitHubQueueMessage),
 		runtimeFreshness: store.GitHubRuntimeFreshness{
 			Binding: store.GitHubTargetRuntimeBinding{
 				TargetID:   "target-1",
@@ -3567,6 +3738,28 @@ func newRunnerCoordinatorFakeStore() *runnerCoordinatorFakeStore {
 			},
 		},
 	}
+}
+
+func (state *runnerCoordinatorFakeStore) ManagementAuditHealthy() bool {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.auditHealthy
+}
+
+func (state *runnerCoordinatorFakeStore) ManagementAuditChange() <-chan struct{} {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.auditChange
+}
+
+func (state *runnerCoordinatorFakeStore) degradeManagementAudit() {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if !state.auditHealthy {
+		return
+	}
+	state.auditHealthy = false
+	close(state.auditChange)
 }
 
 func (state *runnerCoordinatorFakeStore) setPollAgentSnapshot(

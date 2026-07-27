@@ -560,7 +560,8 @@ available to the dedicated runner account.
 The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The API
 provides:
 
-- setup and GitHub App Manifest lifecycle
+- setup state; GitHub App Manifest callback support remains unavailable until its
+  one-time signed callback-state contract is implemented
 - node inventory, join-code creation/cancellation, drain/resume, revoke, and the
   node-reported availability intent with its observation age
 - target and runner-profile configuration
@@ -570,10 +571,105 @@ provides:
 
 Live list state uses SSE rather than a second browser WebSocket protocol.
 
-The listener binds loopback by default. A single-admin secure cookie is HttpOnly,
-SameSite, and Secure when TLS is enabled. Every mutation requires authentication,
-CSRF token, matching Origin, and audit persistence. CORS is disabled by default.
-Audit persistence failure blocks new high-impact mutations and runner admission.
+The first-release management mode is `loopback_http`. Its listener accepts only a
+loopback TCP address and derives one canonical `http` origin from the actual listener
+address. Direct TLS and authenticated reverse-proxy modes are intentionally not
+claimed by this release: both need a separate administrator bootstrap authority,
+and the proxy mode additionally needs a verifiable peer boundary. `Forwarded` and
+`X-Forwarded-*` headers are never trusted for Host, scheme, or administrator
+identity.
+
+Every UI and API request first compares the request Host with the canonical
+authority exactly. A mismatch returns 421 and never issues a cookie. Static UI GETs
+do not create an administrator session. Session bootstrap is an explicit
+same-origin `POST /api/v1/session` with an empty body and a mandatory
+`X-Tewake-Admin-Bootstrap` header. The CLI reads the private
+`admin-session.key` through the owning platform credential adapter and derives a
+domain-separated HMAC proof over the canonical origin, issue time, and a fresh
+128-bit nonce. Its `twb1` wire value is valid for two minutes, is consumed once by
+an in-memory replay ledger, is sent only in that request, and is then cleared. The
+root and proof are never placed in argv, environment variables, SQLite, config,
+logs, audit rows, or response bodies.
+
+TWK-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
+browser bootstrap. TWK-013 must add a separate one-time owner-authorized browser
+handoff before the embedded static UI can establish a session; JavaScript cannot
+read the Controller credential and a plain same-origin POST returns 401. After a
+valid proof, the Controller issues a random process-local session nonce signed with
+a separate domain-separated HMAC-SHA-256. The host-only cookie has `Path=/`,
+`HttpOnly`, and `SameSite=Strict`; a future explicit TLS mode must also set
+`Secure`. The session expires after twelve hours and is invalidated by logout or
+Controller restart. The per-session CSRF value is another domain-separated HMAC
+over the session nonce and canonical origin and is returned only by the
+authenticated session API.
+
+Known management operations use this rejection order:
+
+1. incorrect Host: 421;
+2. missing, malformed, or invalid session: 401;
+3. valid session without matching Origin or CSRF on a mutation: 403;
+4. media, size, schema, or domain validation failure: 400, 413, 415, or 422;
+5. stale optimistic configuration revision: 409;
+6. unavailable audit/store authority: 503.
+
+CORS headers are absent. The CLI obtains the same cookie and CSRF value, calls the
+same `/api/v1` contract, and sends `DELETE /session` in a detached bounded context
+after every bootstrapped operation. A logout failure never replaces the primary
+operation error. Only initialization before the Controller starts may write local
+bootstrap state directly.
+
+The OpenAPI source of truth is `api/openapi.yaml`. Generated Go and TypeScript
+contracts are never edited by hand. Transport DTOs are explicit safe projections;
+store and reconciliation structs, certificate data, command or payload digests,
+raw provider errors, and credential material are not serialized directly. GitHub
+IDs, byte counts, and the global configuration revision use decimal JSON strings.
+Timestamps use RFC 3339 with fractional precision. Collection fields are present as
+arrays, including when empty. Provider-backed state carries explicit
+`fresh`, `stale`, or `unknown` metadata, and a provider failure retains the
+last-known value rather than replacing it with an empty healthy value.
+
+Configuration reads return an ETag derived from the global revision. Mutations
+require the corresponding `If-Match`; the JSON or versioned YAML revision must also
+match. A stale value returns 409 and never overwrites newer desired state. One
+SQLite transaction compares the revision, replaces desired settings, inserts an
+allowlisted append-only audit event, and increments the revision. Audit rows never
+contain request bodies, YAML, headers, cookies, CSRF values, join codes, provider
+credentials, or arbitrary detail maps. Audit insertion or commit failure rolls back
+the whole mutation. An audit persistence failure also closes the global admission
+gate: subsequent high-impact mutations return 503 and new GitHub capacity is zero,
+while existing runners continue.
+
+`GET /audit-events` is cursor-paginated with a default of 100 and a hard maximum of
+500 events per response; the store fetches at most `limit + 1` rows to determine
+the next cursor. Authentication rejections on the loopback API and unauthenticated
+enrollment rejections are bounded or coalesced before persistence so an attacker
+cannot turn an error path into unbounded SQLite growth. Enrollment admission is
+also checked before join-code decoding, CSR work, or certificate signing. Agent
+session rejections persist only the authenticated Node ID and a closed reason
+(`node_credential_rejected` or `agent_protocol_rejected`). A client-certificate
+failure rejected by TLS before HTTP is outside this audit hook and remains a
+transport metric or health boundary.
+
+Join-code creation is a deliberately narrower credential-delivery operation. It is
+available only to an authenticated administrator on the loopback origin after an
+explicit user action. The successful response contains the code once; the response
+is never stored for replay, the UI must not persist it after the one-time display,
+and subsequent reads expose only non-secret metadata. Cancellation and consumption
+remain auditable. The database continues to retain only the code digest.
+
+SSE is an authenticated, same-origin, invalidation-only stream. Events contain a
+schema version, opaque cursor, and safe resource names, not resource snapshots.
+`ready`, `invalidate`, and `reset` are the only event kinds. Slow subscribers have
+at most one pending invalidation, and an absent, old, or unknown cursor produces a
+`reset` so the client refetches REST state; the Controller does not retain an
+unbounded event history.
+
+The configuration request-body limit is a transport memory boundary, not a fleet,
+Node, Target, or history quota. It is applied before JSON or YAML decoding and
+protects chunked requests as well as Content-Length requests. Unknown fields,
+trailing documents, and truncated over-limit bodies are rejected. The selected
+budget must be tested against a measured realistic large valid configuration and
+recorded beside the implementation.
 
 The API never returns credential material. Configuration apply uses an optimistic
 revision and fails on stale input rather than silently overwriting newer state.

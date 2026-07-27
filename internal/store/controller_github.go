@@ -490,6 +490,9 @@ func (s *ControllerStore) CommitGitHubQueueMessage(
 	if err := s.requireReady(); err != nil {
 		return GitHubMessageCommit{}, err
 	}
+	if !s.ManagementAuditHealthy() {
+		return GitHubMessageCommit{}, ErrManagementAuditPersistence
+	}
 	if err := validateGitHubQueueMessage(message); err != nil {
 		return GitHubMessageCommit{}, err
 	}
@@ -505,6 +508,9 @@ func (s *ControllerStore) CommitGitHubQueueMessage(
 		return GitHubMessageCommit{}, err
 	}
 	defer tx.Rollback()
+	if !s.ManagementAuditHealthy() {
+		return GitHubMessageCommit{}, ErrManagementAuditPersistence
+	}
 	controllerEpoch, err := readUintMetadata(ctx, tx, "controller_epoch")
 	if err != nil {
 		return GitHubMessageCommit{}, err
@@ -555,6 +561,18 @@ func (s *ControllerStore) CommitGitHubQueueMessage(
 	)
 	if err != nil {
 		return GitHubMessageCommit{}, err
+	}
+	// Take the audit gate only after all SQLite work is complete. Taking it
+	// before BeginTx would invert the single-connection DB/audit lock order when
+	// another transaction is degrading audit authority. A completed degradation
+	// therefore precedes this check, or waits until this commit has completed.
+	s.auditGate.RLock()
+	defer s.auditGate.RUnlock()
+	if !s.ManagementAuditHealthy() {
+		return GitHubMessageCommit{}, ErrManagementAuditPersistence
+	}
+	if s.beforeGitHubQueueCommit != nil {
+		s.beforeGitHubQueueCommit()
 	}
 	if err := tx.Commit(); err != nil {
 		return GitHubMessageCommit{}, err

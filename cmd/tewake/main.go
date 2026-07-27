@@ -27,11 +27,25 @@ func main() {
 }
 
 func run(args []string, stdout, stderr io.Writer) error {
-	return runContext(context.Background(), args, stdout, stderr)
+	return runWithInput(args, os.Stdin, stdout, stderr)
+}
+
+func runWithInput(args []string, stdin io.Reader, stdout, stderr io.Writer) error {
+	return runContextWithInput(context.Background(), args, stdin, stdout, stderr)
 }
 
 func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) error {
+	return runContextWithInput(ctx, args, os.Stdin, stdout, stderr)
+}
+
+func runContextWithInput(
+	ctx context.Context,
+	args []string,
+	stdin io.Reader,
+	stdout, stderr io.Writer,
+) error {
 	root := newRootCommand(stdout, stderr)
+	root.SetIn(stdin)
 	root.SetArgs(args)
 	return root.ExecuteContext(ctx)
 }
@@ -60,6 +74,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newServeCommand())
 	root.AddCommand(newJoinCommand())
 	root.AddCommand(newNodeCommand())
+	root.AddCommand(newConfigCommand())
 	return root
 }
 
@@ -180,34 +195,104 @@ func newJoinCommand() *cobra.Command {
 
 func newNodeCommand() *cobra.Command {
 	node := &cobra.Command{Use: "node", Short: "Manage enrolled nodes"}
-	var stateDirectory string
+	var adminURL, stateDirectory string
 	var hints []string
 	add := &cobra.Command{
 		Use:   "add",
 		Short: "Create a one-time node join code",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			directory, err := resolveStateDirectory(stateDirectory, "controller")
+			client, err := newOwnerManagementAPIClient(adminURL, stateDirectory)
 			if err != nil {
 				return err
 			}
-			state, err := app.OpenController(command.Context(), directory, false)
-			if err != nil {
-				return err
-			}
-			defer state.Close()
-			code, err := state.CreateJoinCode(command.Context(), hints)
-			if err != nil {
-				return err
-			}
-			fmt.Fprintf(command.OutOrStdout(), "tewake join %s\n", code)
-			return nil
+			return client.withSession(command.Context(), func(ctx context.Context) error {
+				code, err := client.createJoinCode(ctx, hints)
+				if err != nil {
+					return err
+				}
+				fmt.Fprintf(command.OutOrStdout(), "tewake join %s\n", code)
+				return nil
+			})
 		},
 	}
-	add.Flags().StringVar(&stateDirectory, "state-dir", "", "controller state directory (default: OS user config directory)")
+	add.Flags().StringVar(&adminURL, "admin-url", defaultAdminURL, "loopback management API URL")
+	add.Flags().StringVar(&stateDirectory, "state-dir", "", "controller state directory used to authorize the local admin session")
 	add.Flags().StringSliceVar(&hints, "hint", nil, "HTTPS controller endpoint hint embedded in the join code")
 	node.AddCommand(add)
 	return node
+}
+
+func newConfigCommand() *cobra.Command {
+	var adminURL, stateDirectory string
+	configuration := &cobra.Command{
+		Use:   "config",
+		Short: "Export or apply the desired controller configuration",
+	}
+	configuration.PersistentFlags().StringVar(
+		&adminURL,
+		"admin-url",
+		defaultAdminURL,
+		"loopback management API URL",
+	)
+	configuration.PersistentFlags().StringVar(
+		&stateDirectory,
+		"state-dir",
+		"",
+		"controller state directory used to authorize the local admin session",
+	)
+	configuration.AddCommand(&cobra.Command{
+		Use:   "export",
+		Short: "Export the non-secret desired configuration as YAML",
+		Args:  cobra.NoArgs,
+		RunE: func(command *cobra.Command, _ []string) error {
+			client, err := newOwnerManagementAPIClient(adminURL, stateDirectory)
+			if err != nil {
+				return err
+			}
+			return client.withSession(command.Context(), func(ctx context.Context) error {
+				payload, err := client.exportConfiguration(ctx)
+				if err != nil {
+					return err
+				}
+				if _, err := command.OutOrStdout().Write(payload); err != nil {
+					return errors.New("write configuration export")
+				}
+				return nil
+			})
+		},
+	})
+	configuration.AddCommand(&cobra.Command{
+		Use:   "apply <file|->",
+		Short: "Atomically apply a versioned configuration document",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(command *cobra.Command, args []string) error {
+			payload, mediaType, revision, err := loadConfigurationPayload(
+				args[0],
+				command.InOrStdin(),
+			)
+			if err != nil {
+				return err
+			}
+			client, err := newOwnerManagementAPIClient(adminURL, stateDirectory)
+			if err != nil {
+				return err
+			}
+			return client.withSession(command.Context(), func(ctx context.Context) error {
+				if err := client.applyConfiguration(
+					ctx,
+					payload,
+					mediaType,
+					revision,
+				); err != nil {
+					return err
+				}
+				fmt.Fprintln(command.OutOrStdout(), "Configuration applied.")
+				return nil
+			})
+		},
+	})
+	return configuration
 }
 
 func resolveStateDirectory(explicit, role string) (string, error) {

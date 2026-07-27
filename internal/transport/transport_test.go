@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -328,6 +329,77 @@ func TestAuthenticatedWSSRejectsPeerLeafThatDiffersFromVerifiedChain(t *testing.
 	})
 	if err == nil || !strings.Contains(err.Error(), "does not match peer leaf") {
 		t.Fatalf("mismatched verified leaf error = %v", err)
+	}
+}
+
+func TestAuthenticatedWSSReturnsTypedSecretFreeRevokedCredentialRejection(t *testing.T) {
+	service, registry := transportService(t)
+	code, err := service.CreateJoinCode(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, _ := transportCSR(t)
+	result, err := service.Enroll(context.Background(), code, csr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(result.CertificateDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.RevokeNode(context.Background(), result.NodeID); err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "https://tewake-controller/", nil)
+	request.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{leaf, service.Identity.CA},
+		VerifiedChains:   [][]*x509.Certificate{{leaf, service.Identity.CA}},
+	}
+	err = UpgradeAuthenticated(
+		httptest.NewRecorder(),
+		request,
+		registry,
+		func(context.Context, *AuthenticatedSession) error {
+			t.Fatal("revoked credential entered session handler")
+			return nil
+		},
+	)
+	nodeID, kind, rejected := AgentSessionRejection(err)
+	if !rejected ||
+		nodeID != result.NodeID ||
+		kind != AgentSessionCredentialRejected ||
+		SessionWasUpgraded(err) {
+		t.Fatalf(
+			"typed credential rejection = (%q, %d, %t, upgraded=%t), err=%v",
+			nodeID,
+			kind,
+			rejected,
+			SessionWasUpgraded(err),
+			err,
+		)
+	}
+	if strings.Contains(err.Error(), result.NodeID) ||
+		strings.Contains(err.Error(), leaf.SerialNumber.String()) {
+		t.Fatalf("credential rejection error leaked identity material: %v", err)
+	}
+}
+
+func TestAgentProtocolRejectionExposesOnlyAuthenticatedNodeAndClass(t *testing.T) {
+	credential := enroll.Credential{
+		NodeID: "00112233445566778899aabbccddeeff",
+	}
+	providerSecret := errors.New("protocol provider secret-canary")
+	err := AgentProtocolRejection(credential, providerSecret)
+	nodeID, kind, rejected := AgentSessionRejection(err)
+	if !rejected ||
+		nodeID != credential.NodeID ||
+		kind != AgentSessionProtocolRejected ||
+		!errors.Is(err, providerSecret) {
+		t.Fatalf("typed protocol rejection = (%q, %d, %t), err=%v", nodeID, kind, rejected, err)
+	}
+	if strings.Contains(err.Error(), credential.NodeID) ||
+		strings.Contains(err.Error(), "secret-canary") {
+		t.Fatalf("protocol rejection error leaked detail: %v", err)
 	}
 }
 

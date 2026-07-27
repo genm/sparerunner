@@ -356,9 +356,16 @@ tasks:
       - internal/api
       - internal/auth
       - internal/config
+      - internal/store
+      - internal/app
+      - cmd/tewake
     ci_targets: [lint, typecheck, test, build]
     pr_order: 12
-    status: todo
+    status: done
+    notes:
+      - "2026-07-26: The first-release management authority is fixed to explicit same-origin loopback session bootstrap. Join codes are one-time loopback credential-delivery responses and GitHub Manifest callback routes remain unavailable until a signed one-time callback-state contract exists."
+      - "2026-07-26: The OpenAPI-generated Go and TypeScript contracts now own the loopback REST/SSE surface. Process-local owner sessions, exact Host/Origin/CSRF checks, immediate logout revocation even during audit failure, optimistic configuration revisions, bounded JSON/YAML transport, one-time join-code delivery, typed enrollment and Agent rejection audit, and cursor-bounded audit reads all fail closed under focused race and integration tests."
+      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until twk-013; live GitHub and three-OS authority remain twk-014 release gates."
     acceptance:
       - Generated Go and TypeScript contracts match the checked OpenAPI source.
       - Unauthenticated, unauthorized, and cross-origin mutations return 401 or 403.

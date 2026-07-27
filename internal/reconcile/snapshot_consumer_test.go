@@ -88,6 +88,7 @@ func TestSnapshotConsumerAddsPostStartupEnrollmentOnlyAfterStoreCommit(t *testin
 			},
 			NodeTopology: []store.RestartNodeTopology{{
 				NodeID:              "node-late",
+				DisplayName:         "Late node",
 				CertificateSerial:   "certificate-late",
 				CredentialEpoch:     1,
 				AdministrativeState: domain.NodeActive,

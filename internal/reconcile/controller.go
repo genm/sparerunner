@@ -31,6 +31,14 @@ type NodeDefinition struct {
 	RunnerUpdate         RunnerUpdateStatus
 }
 
+// NodeConfiguration is the live, operator-controlled subset of node topology.
+// Credential, platform, observation, and cleanup authority remain untouched.
+type NodeConfiguration struct {
+	NodeID      domain.NodeID
+	DisplayName string
+	MaxRunners  int
+}
+
 type IssuedCommand struct {
 	NodeID  domain.NodeID
 	Type    domain.CommandType
@@ -177,9 +185,10 @@ type Controller struct {
 	// clearedFences retains only inactive high-water tokens. Without that
 	// tombstone, a delayed Apply could resurrect an older ambiguity after its
 	// exact clear already completed in this Controller process.
-	clearedFences map[domain.ExecutionID]GitHubFence
-	now           func() time.Time
-	change        chan struct{}
+	clearedFences               map[domain.ExecutionID]GitHubFence
+	now                         func() time.Time
+	change                      chan struct{}
+	managementProjectionHealthy bool
 }
 
 // Start establishes a new process epoch before reading desired state. No
@@ -217,16 +226,17 @@ func Restore(
 		return nil, invalid("controller_epoch_mismatch", "controller_snapshot.controller_epoch", "does not match the supplied process epoch")
 	}
 	controller := &Controller{
-		epoch:              epoch,
-		nodes:              make(map[domain.NodeID]nodeRuntime, len(config.Nodes)),
-		executions:         make(map[domain.ExecutionID]domain.ExecutionSnapshot, len(snapshot.Executions)),
-		reservations:       make(map[domain.ExecutionID]scheduler.RestoredReservation, len(snapshot.Reservations)),
-		commands:           make(map[domain.CommandID]IssuedCommand, len(config.Commands)),
-		commandByExecution: make(map[domain.ExecutionID][]IssuedCommand),
-		fences:             make(map[domain.ExecutionID]GitHubFence, len(config.GitHubFences)),
-		clearedFences:      make(map[domain.ExecutionID]GitHubFence),
-		now:                config.Now,
-		change:             make(chan struct{}),
+		epoch:                       epoch,
+		nodes:                       make(map[domain.NodeID]nodeRuntime, len(config.Nodes)),
+		executions:                  make(map[domain.ExecutionID]domain.ExecutionSnapshot, len(snapshot.Executions)),
+		reservations:                make(map[domain.ExecutionID]scheduler.RestoredReservation, len(snapshot.Reservations)),
+		commands:                    make(map[domain.CommandID]IssuedCommand, len(config.Commands)),
+		commandByExecution:          make(map[domain.ExecutionID][]IssuedCommand),
+		fences:                      make(map[domain.ExecutionID]GitHubFence, len(config.GitHubFences)),
+		clearedFences:               make(map[domain.ExecutionID]GitHubFence),
+		now:                         config.Now,
+		change:                      make(chan struct{}),
+		managementProjectionHealthy: true,
 	}
 	if controller.now == nil {
 		controller.now = time.Now
@@ -290,6 +300,7 @@ func RestoreRestart(
 
 func restartNodeDefinition(topology store.RestartNodeTopology) (NodeDefinition, error) {
 	if topology.NodeID == "" ||
+		topology.DisplayName == "" ||
 		topology.CertificateSerial == "" ||
 		topology.CredentialEpoch == 0 ||
 		topology.MaxRunners < 1 {
@@ -297,7 +308,7 @@ func restartNodeDefinition(topology store.RestartNodeTopology) (NodeDefinition, 
 	}
 	node := domain.Node{
 		ID:                  topology.NodeID,
-		DisplayName:         string(topology.NodeID),
+		DisplayName:         topology.DisplayName,
 		CertificateSerial:   topology.CertificateSerial,
 		CredentialEpoch:     topology.CredentialEpoch,
 		MaxRunners:          topology.MaxRunners,
@@ -339,6 +350,7 @@ func (controller *Controller) EnsureRestartNode(
 	if current, exists := controller.nodes[topology.NodeID]; exists {
 		node := current.scheduler.Node
 		if node.CertificateSerial != topology.CertificateSerial ||
+			node.DisplayName != topology.DisplayName ||
 			node.CredentialEpoch != topology.CredentialEpoch ||
 			node.MaxRunners != topology.MaxRunners ||
 			node.AdministrativeState != topology.AdministrativeState ||
@@ -678,6 +690,38 @@ func (controller *Controller) Change() <-chan struct{} {
 	controller.mu.RLock()
 	defer controller.mu.RUnlock()
 	return controller.change
+}
+
+// ManagementProjectionHealthy reports whether the in-memory operator
+// projection is still known to match durable SQLite authority. A post-commit
+// projection failure makes this process unhealthy until restart; silently
+// re-enabling from a partial update could advertise stale capacity.
+func (controller *Controller) ManagementProjectionHealthy() bool {
+	if controller == nil {
+		return false
+	}
+	controller.mu.RLock()
+	defer controller.mu.RUnlock()
+	return controller.managementProjectionHealthy
+}
+
+// MarkManagementProjectionUnavailable globally suppresses new capacity after a
+// durable management mutation cannot be reflected in memory. Recovery actions
+// for already-owned executions remain available; a clean Controller restart
+// restores the complete projection from SQLite.
+func (controller *Controller) MarkManagementProjectionUnavailable() {
+	if controller == nil {
+		return
+	}
+	controller.applyMu.Lock()
+	defer controller.applyMu.Unlock()
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+	if !controller.managementProjectionHealthy {
+		return
+	}
+	controller.managementProjectionHealthy = false
+	controller.signalChangeLocked()
 }
 
 func (controller *Controller) signalChangeLocked() {
@@ -1181,6 +1225,84 @@ func (controller *Controller) SetAdministrativeState(
 	return nil
 }
 
+// ApplyNodeConfigurations replaces the complete operator-controlled node
+// configuration atomically in the in-memory projection after the store commits
+// the same revision. A shrink that would strand a concrete reservation is
+// rejected without mutating any node.
+func (controller *Controller) ApplyNodeConfigurations(
+	configurations []NodeConfiguration,
+) error {
+	if controller == nil {
+		return invalid("controller_unavailable", "controller", "is nil")
+	}
+	controller.applyMu.Lock()
+	defer controller.applyMu.Unlock()
+	controller.mu.Lock()
+	defer controller.mu.Unlock()
+
+	if len(configurations) != len(controller.nodes) {
+		return invalid(
+			"node_configuration_set_mismatch",
+			"nodes",
+			"must describe every configured node exactly once",
+		)
+	}
+	byNode := make(map[domain.NodeID]NodeConfiguration, len(configurations))
+	for _, configuration := range configurations {
+		if strings.TrimSpace(string(configuration.NodeID)) == "" ||
+			strings.TrimSpace(configuration.DisplayName) == "" ||
+			configuration.MaxRunners < 1 {
+			return invalid(
+				"invalid_node_configuration",
+				"nodes",
+				"contains an invalid node configuration",
+			)
+		}
+		if _, duplicate := byNode[configuration.NodeID]; duplicate {
+			return invalid(
+				"duplicate_node_configuration",
+				"nodes",
+				"contains a duplicate node ID",
+			)
+		}
+		if _, exists := controller.nodes[configuration.NodeID]; !exists {
+			return invalid(
+				"node_configuration_set_mismatch",
+				"nodes",
+				"contains a node outside the current projection",
+			)
+		}
+		byNode[configuration.NodeID] = configuration
+	}
+	for _, reservation := range controller.reservations {
+		configuration := byNode[reservation.Slot.NodeID]
+		if reservation.Slot.Index >= configuration.MaxRunners {
+			return invalid(
+				"node_capacity_below_reservation",
+				"nodes.max_runners",
+				"would strand an existing concrete slot reservation",
+			)
+		}
+	}
+
+	changed := false
+	for nodeID, configuration := range byNode {
+		node := controller.nodes[nodeID]
+		if node.scheduler.Node.DisplayName == configuration.DisplayName &&
+			node.scheduler.Node.MaxRunners == configuration.MaxRunners {
+			continue
+		}
+		node.scheduler.Node.DisplayName = configuration.DisplayName
+		node.scheduler.Node.MaxRunners = configuration.MaxRunners
+		controller.nodes[nodeID] = node
+		changed = true
+	}
+	if changed {
+		controller.signalChangeLocked()
+	}
+	return nil
+}
+
 // SetRunnerUpdateStatus applies a newly observed release state without
 // restarting the Controller. Degradation is immediate; recovery still requires
 // a fresh Agent snapshot so package readiness is re-observed after an update.
@@ -1286,6 +1408,7 @@ func (controller *Controller) Admission(
 		Change:         controller.change,
 	}
 	result.AllowsNewCapacity = transportReady &&
+		controller.managementProjectionHealthy &&
 		schedulerNode.Reconciled &&
 		status.Phase == NodeReady &&
 		len(result.Actions) == 0 &&

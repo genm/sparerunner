@@ -46,7 +46,14 @@ func EnrollmentHandler(service enroll.Service) http.Handler {
 		}
 		result, err := service.Enroll(request.Context(), encodedCode, csr)
 		if err != nil {
-			http.Error(writer, "enrollment rejected", http.StatusUnauthorized)
+			switch enroll.EnrollmentFailureOf(err) {
+			case enroll.EnrollmentFailureMalformed:
+				http.Error(writer, "invalid enrollment request", http.StatusBadRequest)
+			case enroll.EnrollmentFailureRejected:
+				http.Error(writer, "enrollment rejected", http.StatusUnauthorized)
+			default:
+				http.Error(writer, "enrollment unavailable", http.StatusServiceUnavailable)
+			}
 			return
 		}
 		writer.Header().Set("Content-Type", "application/json")

@@ -201,6 +201,113 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 	assertCount(t, controller.db, "SELECT count(*) FROM github_message_jobs", 4)
 }
 
+func TestGitHubQueueCommitFailsClosedAfterManagementAuditDegrades(t *testing.T) {
+	ctx := context.Background()
+	controller := openController(t, "controller-github-audit-degraded.db")
+	defer controller.Close()
+	nodeID, _ := enrollControllerAgentNode(t, controller, 3)
+	binding := SingleSlotBinding{
+		TargetID:     "target-github",
+		NodeID:       domain.NodeID(nodeID),
+		Slot:         0,
+		ClaimEnabled: true,
+	}
+	enableGitHubClaimForTest(t, controller, &binding, 7, domain.ArchAMD64)
+	auditChanged := controller.ManagementAuditChange()
+	controller.degradeManagementAudit()
+	select {
+	case <-auditChanged:
+	default:
+		t.Fatal("management audit change was not signaled")
+	}
+
+	if _, err := controller.CommitGitHubQueueMessage(
+		ctx,
+		githubQueueMessageForTest(7, 102, 505),
+		binding,
+	); !errors.Is(err, ErrManagementAuditPersistence) {
+		t.Fatalf("degraded audit queue commit error = %v", err)
+	}
+	assertCount(t, controller.db, "SELECT count(*) FROM github_queue_messages", 0)
+	assertCount(t, controller.db, "SELECT count(*) FROM github_job_claims", 0)
+	assertCount(t, controller.db, "SELECT count(*) FROM executions", 0)
+	assertCount(t, controller.db, "SELECT count(*) FROM slot_reservations", 0)
+}
+
+func TestGitHubQueueCommitLinearizesWithManagementAuditDegradation(t *testing.T) {
+	ctx := context.Background()
+	controller := openController(t, "controller-github-audit-linearized.db")
+	defer controller.Close()
+	nodeID, _ := enrollControllerAgentNode(t, controller, 3)
+	binding := SingleSlotBinding{
+		TargetID:     "target-github",
+		NodeID:       domain.NodeID(nodeID),
+		Slot:         0,
+		ClaimEnabled: true,
+	}
+	enableGitHubClaimForTest(t, controller, &binding, 7, domain.ArchAMD64)
+
+	commitEntered := make(chan struct{})
+	releaseCommit := make(chan struct{})
+	controller.beforeGitHubQueueCommit = func() {
+		close(commitEntered)
+		<-releaseCommit
+	}
+	commitResult := make(chan error, 1)
+	go func() {
+		_, err := controller.CommitGitHubQueueMessage(
+			ctx,
+			githubQueueMessageForTest(7, 103, 506),
+			binding,
+		)
+		commitResult <- err
+	}()
+	select {
+	case <-commitEntered:
+	case <-time.After(time.Second):
+		t.Fatal("queue commit did not reach the audit-gated commit point")
+	}
+
+	degradeStarted := make(chan struct{})
+	degradeDone := make(chan struct{})
+	go func() {
+		close(degradeStarted)
+		controller.degradeManagementAudit()
+		close(degradeDone)
+	}()
+	<-degradeStarted
+	select {
+	case <-degradeDone:
+		t.Fatal("audit degradation crossed an in-progress gated commit")
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(releaseCommit)
+	if err := <-commitResult; err != nil {
+		t.Fatalf("commit linearized before audit degradation = %v", err)
+	}
+	select {
+	case <-degradeDone:
+	case <-time.After(time.Second):
+		t.Fatal("audit degradation did not complete after prior commit")
+	}
+	controller.beforeGitHubQueueCommit = nil
+	if controller.ManagementAuditHealthy() {
+		t.Fatal("audit authority remained healthy after degradation")
+	}
+	assertCount(t, controller.db, "SELECT count(*) FROM github_queue_messages", 1)
+	assertCount(t, controller.db, "SELECT count(*) FROM github_job_claims", 1)
+
+	if _, err := controller.CommitGitHubQueueMessage(
+		ctx,
+		githubQueueMessageForTest(7, 104, 507),
+		binding,
+	); !errors.Is(err, ErrManagementAuditPersistence) {
+		t.Fatalf("post-degradation queue commit error = %v", err)
+	}
+	assertCount(t, controller.db, "SELECT count(*) FROM github_queue_messages", 1)
+	assertCount(t, controller.db, "SELECT count(*) FROM github_job_claims", 1)
+}
+
 func TestGitHubSingleSlotRejectsInactiveNodeAndNeverDoubleClaims(t *testing.T) {
 	ctx := context.Background()
 	for _, state := range []domain.NodeAdministrativeState{
