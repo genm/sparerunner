@@ -3,6 +3,7 @@
 package windows_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,7 +82,11 @@ function Get-TreeSnapshot([string] $root) {
                     "d|$relative|$sddl"
                 }
                 else {
-                    $hash = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash
+                    $hash = [Convert]::ToHexString(
+                        [System.Security.Cryptography.SHA256]::HashData(
+                            [System.IO.File]::ReadAllBytes($_.FullName)
+                        )
+                    )
                     "f|$relative|$($_.Length)|$hash|$sddl"
                 }
             }
@@ -294,7 +299,7 @@ func runPowerShell(t *testing.T, script string, arguments ...string) {
 func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
-	prefix := "$args = 0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") }\n"
+	prefix := "$args = @(0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") })\n"
 	if err := os.WriteFile(scriptPath, []byte(prefix+script), 0o600); err != nil {
 		t.Fatal(err)
 	}
