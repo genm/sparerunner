@@ -29,7 +29,8 @@ defined by the design.
 - Use one task ID per pull request and open it as Draft.
 - Describe which acceptance clauses are proven and attach machine-readable or live
   evidence where relevant.
-- Use English Conventional Commit messages.
+- Use English Conventional Commit messages. Pull request titles, descriptions, and
+  review comments are English too, as are issue titles and bodies.
 - Do not add generated-by or AI co-author trailers.
 - Do not send public fork PR workloads to Tewake self-hosted nodes.
 - Do not reduce types, skip tests, or change expected output merely to make CI green.
