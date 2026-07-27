@@ -78,9 +78,9 @@ func (credential AppCredential) GoString() string { return credential.String() }
 
 // AppCredentialStore is the only persistence boundary for the App private key.
 // Implementations must keep the raw key outside SQLite, logs, diagnostics, and
-// API DTOs. The default file implementation is service-user-owned and mode 0600
-// on Unix; native Keychain/DPAPI adapters can implement this interface later
-// without changing the GitHub authority contract.
+// API DTOs. NewPlatformAppCredentialStore selects the service-user file store on
+// Linux and the native Keychain/DPAPI-backed store on macOS/Windows without
+// changing the GitHub authority contract.
 type AppCredentialStore interface {
 	Load() (AppCredential, bool, error)
 	Save(AppCredential) error
@@ -113,16 +113,7 @@ func (store FileAppCredentialStore) Load() (AppCredential, bool, error) {
 	if err != nil {
 		return AppCredential{}, false, ErrSecretStoreUnavailable
 	}
-	decoder := json.NewDecoder(bytes.NewReader(contents))
-	decoder.DisallowUnknownFields()
-	var persisted fileAppCredential
-	if err := decoder.Decode(&persisted); err != nil || persisted.Version != 1 || persisted.AppID <= 0 || persisted.ClientID == "" || persisted.PrivateKey == "" {
-		return AppCredential{}, false, ErrAppCredentialInvalid
-	}
-	if err := requireJSONEOF(decoder); err != nil {
-		return AppCredential{}, false, ErrAppCredentialInvalid
-	}
-	credential, err := NewAppCredential(persisted.AppID, persisted.ClientID, persisted.PrivateKey)
+	credential, err := decodeAppCredential(contents)
 	if err != nil {
 		return AppCredential{}, false, err
 	}
@@ -143,8 +134,7 @@ func (store FileAppCredentialStore) Save(credential AppCredential) error {
 	if info, err := os.Lstat(parent); err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() || info.Mode().Perm() != 0o700 {
 		return ErrSecretStoreUnavailable
 	}
-	persisted := fileAppCredential{Version: 1, AppID: credential.AppID, ClientID: credential.ClientID, PrivateKey: credential.privateKey}
-	contents, err := json.Marshal(persisted)
+	contents, err := encodeAppCredential(credential)
 	if err != nil {
 		return ErrSecretStoreUnavailable
 	}

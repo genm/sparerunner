@@ -230,7 +230,7 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		return nil, err
 	}
 	githubAuthority, err := github.NewAuthority(github.AuthorityOptions{
-		CredentialStore: github.FileAppCredentialStore{Path: filepath.Join(directory, "github-app-credential.json")},
+		CredentialStore: github.NewPlatformAppCredentialStore(filepath.Join(directory, "github-app-credential.json")),
 	})
 	if err != nil {
 		_ = controllerStore.Close()
