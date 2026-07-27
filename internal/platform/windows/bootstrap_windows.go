@@ -42,6 +42,13 @@ var (
 	ErrBootstrapEnrollment  = errors.New("Windows service enrollment failed")
 )
 
+func bootstrapIdentityError(reason string) error {
+	if os.Getenv("TEWAKE_WINDOWS_DEBUG") == "1" {
+		return fmt.Errorf("%w: %s", ErrBootstrapIdentity, reason)
+	}
+	return ErrBootstrapIdentity
+}
+
 // BootstrapJoinOptions is the one request accepted by the service bootstrap
 // pipe. StateDirectory is deliberately absent: the SCM-owned service config is
 // the only authority for where DPAPI-protected node state is written.
@@ -527,21 +534,25 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 		syswindows.OWNER_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION,
 	)
 	if err != nil || descriptor == nil || !descriptor.IsValid() {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("security descriptor err=%v", err))
 	}
 	owner, defaulted, err := descriptor.Owner()
 	current, currentErr := currentProcessSID()
 	if err != nil || owner == nil || defaulted || currentErr != nil ||
 		!strings.EqualFold(owner.String(), current) {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("owner owner=%v current=%q defaulted=%t err=%v currentErr=%v", owner, current, defaulted, err, currentErr))
 	}
 	control, _, err := descriptor.Control()
 	if err != nil || control&syswindows.SE_DACL_PROTECTED == 0 {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("dacl protection control=0x%x err=%v", control, err))
 	}
 	dacl, defaulted, err := descriptor.DACL()
+	var aceCount uint32
+	if dacl != nil {
+		aceCount = dacl.AceCount
+	}
 	if err != nil || dacl == nil || defaulted || dacl.AceCount != 2 {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("dacl count=%d defaulted=%t err=%v", aceCount, defaulted, err))
 	}
 	expected := map[string]syswindows.ACCESS_MASK{
 		"S-1-5-18":     syswindows.GENERIC_ALL,
@@ -554,21 +565,21 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 			ace == nil ||
 			ace.Header.AceType != syswindows.ACCESS_ALLOWED_ACE_TYPE ||
 			ace.Header.AceFlags != 0 {
-			return ErrBootstrapIdentity
+			return bootstrapIdentityError(fmt.Sprintf("ace %d header err=%v ace=%v", index, err, ace))
 		}
 		sid := (*syswindows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid == nil || !sid.IsValid() {
-			return ErrBootstrapIdentity
+			return bootstrapIdentityError(fmt.Sprintf("ace %d sid", index))
 		}
 		text := strings.ToUpper(sid.String())
 		mask, found := expected[text]
 		if !found || seen[text] || ace.Mask != mask {
-			return ErrBootstrapIdentity
+			return bootstrapIdentityError(fmt.Sprintf("ace %d sid=%s mask=0x%x expected=0x%x found=%t duplicate=%t", index, text, ace.Mask, mask, found, seen[text]))
 		}
 		seen[text] = true
 	}
 	if !seen["S-1-5-18"] || !seen["S-1-5-32-544"] {
-		return ErrBootstrapIdentity
+		return bootstrapIdentityError(fmt.Sprintf("sid set system=%t administrators=%t", seen["S-1-5-18"], seen["S-1-5-32-544"]))
 	}
 	return nil
 }

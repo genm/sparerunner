@@ -40,33 +40,33 @@ func ValidatePrivateFile(path string) error {
 // ACL. It never repairs a non-empty or foreign-owned directory.
 func SecureEmptyPrivateDirectory(path string) error {
 	if !NoReparseComponents(path) {
-		return ErrUnsafePrivatePath
+		return privatePathError("reparse path")
 	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return ErrUnsafePrivatePath
+		return privatePathError("directory lstat")
 	}
 	if err := ValidatePrivateDirectory(path); err == nil {
 		return nil
 	}
 	current, err := CurrentProcessSID()
 	if err != nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("current sid")
 	}
 	owner, err := pathOwner(path, true)
 	if err != nil || !strings.EqualFold(owner, current) {
-		return ErrUnsafePrivatePath
+		return privatePathError(fmt.Sprintf("owner before acl owner=%q err=%v", owner, err))
 	}
 	entries, err := os.ReadDir(path)
 	if err != nil || len(entries) != 0 {
-		return ErrUnsafePrivatePath
+		return privatePathError(fmt.Sprintf("directory not empty err=%v entries=%d", err, len(entries)))
 	}
 	if err := setPrivateACL(path, true, current); err != nil {
-		return ErrUnsafePrivatePath
+		return err
 	}
 	entries, err = os.ReadDir(path)
 	if err != nil || len(entries) != 0 {
-		return ErrUnsafePrivatePath
+		return privatePathError(fmt.Sprintf("directory changed after acl err=%v entries=%d", err, len(entries)))
 	}
 	return ValidatePrivateDirectory(path)
 }
@@ -75,11 +75,11 @@ func SecureEmptyPrivateDirectory(path string) error {
 // ciphertext is written.
 func SecurePrivateFile(path string) error {
 	if !NoReparseComponents(path) {
-		return ErrUnsafePrivatePath
+		return privatePathError("reparse path")
 	}
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return ErrUnsafePrivatePath
+		return privatePathError("file lstat")
 	}
 	current, err := CurrentProcessSID()
 	if err != nil {
@@ -87,10 +87,10 @@ func SecurePrivateFile(path string) error {
 	}
 	owner, err := pathOwner(path, false)
 	if err != nil || !strings.EqualFold(owner, current) {
-		return ErrUnsafePrivatePath
+		return privatePathError(fmt.Sprintf("file owner owner=%q err=%v", owner, err))
 	}
 	if err := setPrivateACL(path, false, current); err != nil {
-		return ErrUnsafePrivatePath
+		return err
 	}
 	return ValidatePrivateFile(path)
 }
@@ -149,7 +149,7 @@ func validatePrivatePath(path string, directory bool) error {
 	}
 	current, err := CurrentProcessSID()
 	if err != nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("current sid")
 	}
 	owner, defaulted, err := descriptor.Owner()
 	if err != nil || owner == nil || defaulted ||
@@ -183,7 +183,7 @@ func validatePrivatePath(path string, directory bool) error {
 			expectedFlags = syswindows.OBJECT_INHERIT_ACE | syswindows.CONTAINER_INHERIT_ACE
 		}
 		if ace.Header.AceFlags != expectedFlags {
-			return ErrUnsafePrivatePath
+			return privatePathError(fmt.Sprintf("ace %d inheritance flags", index))
 		}
 		sid := (*syswindows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid == nil || !sid.IsValid() {
@@ -243,15 +243,15 @@ func setPrivateACL(path string, directory bool, ownerText string) error {
 	}
 	descriptor, err := syswindows.SecurityDescriptorFromString(builder.String())
 	if err != nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("build acl descriptor")
 	}
 	owner, _, err := descriptor.Owner()
 	if err != nil || owner == nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("build acl owner")
 	}
 	dacl, _, err := descriptor.DACL()
 	if err != nil || dacl == nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("build acl dacl")
 	}
 	if err := syswindows.SetNamedSecurityInfo(
 		path,
@@ -264,7 +264,7 @@ func setPrivateACL(path string, directory bool, ownerText string) error {
 		dacl,
 		nil,
 	); err != nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("set acl")
 	}
 	return nil
 }
