@@ -21,6 +21,9 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "safe-tree.ps1")
+. (Join-Path $PSScriptRoot "ownership.ps1")
+
 $AgentService = "TewakeAgent"
 $RunnerService = "TewakeRunnerIdentity"
 $SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
@@ -55,28 +58,6 @@ function Get-CanonicalScopedPath {
     return $Canonical
 }
 
-function Assert-NoReparsePath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Path
-    )
-
-    $Current = [System.IO.Path]::GetFullPath($Path)
-    while ($Current) {
-        if (Test-Path -LiteralPath $Current) {
-            $Item = Get-Item -LiteralPath $Current -Force
-            if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "A Tewake path contains a reparse point."
-            }
-        }
-        $Parent = [System.IO.Directory]::GetParent($Current)
-        if ($null -eq $Parent) {
-            break
-        }
-        $Current = $Parent.FullName
-    }
-}
-
 function Assert-SourceBinary {
     param(
         [Parameter(Mandatory = $true)]
@@ -86,7 +67,7 @@ function Assert-SourceBinary {
     if (-not [System.IO.Path]::IsPathRooted($Path)) {
         throw "A source binary path must be absolute."
     }
-    Assert-NoReparsePath -Path $Path
+    Assert-TewakeNoReparsePath -Path $Path
     $Item = Get-Item -LiteralPath $Path -Force
     if ($Item.PSIsContainer -or $Item.Length -le 0) {
         throw "A source binary is not a non-empty regular file."
@@ -141,7 +122,7 @@ function Set-ProtectedDirectory {
     )
 
     [void] [System.IO.Directory]::CreateDirectory($Path)
-    Assert-NoReparsePath -Path $Path
+    Assert-TewakeNoReparsePath -Path $Path
     $Acl = New-ProtectedDirectoryAcl -RunnerSid $RunnerSid -RunnerReadOnly:$RunnerReadOnly
     Set-Acl -LiteralPath $Path -AclObject $Acl
 }
@@ -218,7 +199,7 @@ function Install-FileNoClobber {
     ) (".{0}.{1}.staging" -f [System.IO.Path]::GetFileName($Destination), [Guid]::NewGuid().ToString("N"))
     Copy-Item -LiteralPath $Source -Destination $Staging
     try {
-        Assert-NoReparsePath -Path $Staging
+        Assert-TewakeNoReparsePath -Path $Staging
         Move-Item -LiteralPath $Staging -Destination $Destination
     }
     finally {
@@ -233,6 +214,10 @@ $DataRoot = Get-CanonicalScopedPath -Path $DataRoot -AllowedParent $env:ProgramD
 $AgentBinary = Assert-SourceBinary -Path $AgentBinary
 $CliBinary = Assert-SourceBinary -Path $CliBinary
 
+if ((Test-Path -LiteralPath $InstallRoot) -or
+    (Test-Path -LiteralPath $DataRoot)) {
+    throw "A Tewake root already exists; the first release does not support upgrades."
+}
 if ((Get-Service -Name $AgentService -ErrorAction SilentlyContinue) -or
     (Get-Service -Name $RunnerService -ErrorAction SilentlyContinue)) {
     throw "A Tewake Windows service already exists; installation will not overwrite it."
@@ -245,14 +230,26 @@ $CacheRoot = Join-Path $DataRoot "cache"
 $RuntimeRoot = Join-Path $DataRoot "runtime"
 $CreatedRunnerService = $false
 $CreatedAgentService = $false
-$InstalledFiles = [System.Collections.Generic.List[string]]::new()
+$CreatedInstallRoot = $false
+$CreatedDataRoot = $false
+$InstallationId = [Guid]::NewGuid().ToString("D")
 
 try {
+    [void] (New-TewakeOwnedRoot `
+        -Path $InstallRoot `
+        -Role "install" `
+        -InstallationId $InstallationId `
+        -OwnerSid $SystemSid)
+    $CreatedInstallRoot = $true
+    [void] (New-TewakeOwnedRoot `
+        -Path $DataRoot `
+        -Role "data" `
+        -InstallationId $InstallationId `
+        -OwnerSid $SystemSid)
+    $CreatedDataRoot = $true
     Set-ProtectedDirectory -Path $InstallRoot
     Install-FileNoClobber -Source $AgentBinary -Destination $InstalledAgent
-    $InstalledFiles.Add($InstalledAgent)
     Install-FileNoClobber -Source $CliBinary -Destination $InstalledCli
-    $InstalledFiles.Add($InstalledCli)
 
     $RunnerCommand = (Quote-ServiceArgument $InstalledAgent) +
         " windows-service --role runner-identity --service-name $RunnerService"
@@ -279,6 +276,7 @@ try {
     Set-ProtectedDirectory -Path $InstallRoot -RunnerSid $RunnerSid -RunnerReadOnly
     Set-ProtectedBinary -Path $InstalledAgent -RunnerSid $RunnerSid -RunnerReadOnly
     Set-ProtectedBinary -Path $InstalledCli
+    Set-ProtectedDirectory -Path $DataRoot -RunnerSid $RunnerSid -RunnerReadOnly
     Set-ProtectedDirectory -Path $StateRoot
     Set-ProtectedDirectory -Path $CacheRoot
     Set-ProtectedDirectory -Path $RuntimeRoot -RunnerSid $RunnerSid -RunnerReadOnly
@@ -308,6 +306,16 @@ try {
     Invoke-ServiceControl -Arguments @("failureflag", $AgentService, "1")
     Invoke-ServiceControl -Arguments @("start", $RunnerService)
     Invoke-ServiceControl -Arguments @("start", $AgentService)
+    [void] (Assert-TewakeOwnershipMarker `
+        -ActualRoot $InstallRoot `
+        -ExpectedBoundRoot $InstallRoot `
+        -ExpectedRole "install" `
+        -OwnerSid $SystemSid)
+    [void] (Assert-TewakeOwnershipMarker `
+        -ActualRoot $DataRoot `
+        -ExpectedBoundRoot $DataRoot `
+        -ExpectedRole "data" `
+        -OwnerSid $SystemSid)
 }
 catch {
     $InstallFailure = $_
@@ -319,13 +327,28 @@ catch {
         Stop-Service -Name $RunnerService -Force -ErrorAction SilentlyContinue
         & (Join-Path $env:SystemRoot "System32\sc.exe") delete $RunnerService | Out-Null
     }
-    foreach ($File in $InstalledFiles) {
-        if (Test-Path -LiteralPath $File) {
-            Remove-Item -LiteralPath $File -Force
+    $CleanupFailures = [System.Collections.Generic.List[string]]::new()
+    if ($CreatedDataRoot -and (Test-Path -LiteralPath $DataRoot)) {
+        try {
+            Remove-TewakeTreeNoReparse -Root $DataRoot
         }
+        catch {
+            $CleanupFailures.Add("data root: $($_.Exception.Message)")
+        }
+    }
+    if ($CreatedInstallRoot -and (Test-Path -LiteralPath $InstallRoot)) {
+        try {
+            Remove-TewakeTreeNoReparse -Root $InstallRoot
+        }
+        catch {
+            $CleanupFailures.Add("install root: $($_.Exception.Message)")
+        }
+    }
+    if ($CleanupFailures.Count -gt 0) {
+        throw "Tewake installation failed and owned-root cleanup also failed: $($CleanupFailures -join '; ')"
     }
     throw $InstallFailure
 }
 
 Write-Output "Tewake services are installed and waiting for enrollment."
-Write-Output "Run this elevated command once: $InstalledCli join twk_..."
+Write-Output "Run this elevated command once: & `"$InstalledCli`" join twk_..."

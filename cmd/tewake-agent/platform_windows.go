@@ -100,7 +100,22 @@ func platformCommandRuntime(
 			_ = jobRuntime.Close()
 			return nil, err
 		}
-		return app.NewAgentCommandRuntime(state.NodeID, state.Store, manager, pkg)
+		lifecycle, err := bindNativeRunnerCredential(manager, state.CredentialReady)
+		if err != nil {
+			_ = jobRuntime.Close()
+			return nil, err
+		}
+		commandRuntime, err := app.NewAgentCommandRuntime(
+			state.NodeID,
+			state.Store,
+			lifecycle,
+			pkg,
+		)
+		if err != nil {
+			_ = jobRuntime.Close()
+			return nil, err
+		}
+		return commandRuntime, nil
 	}
 	return optionalWindowsNativeRunnerFactory(options.Required, build), nil
 }
@@ -179,7 +194,7 @@ func platformCommands() []*cobra.Command {
 						ReconnectDelay:    reconnectDelay,
 						CommandRuntime:    factory,
 					},
-					bootstrap: platformwindows.ReceiveBootstrapRequest,
+					bootstrap: receiveWindowsBootstrapRequest,
 				})
 			case "runner-identity":
 				if serviceName == "" {
@@ -226,7 +241,12 @@ func platformCommands() []*cobra.Command {
 type agentServiceHandler struct {
 	parent    context.Context
 	options   app.AgentServeOptions
-	bootstrap func(context.Context) (*platformwindows.BootstrapRequest, error)
+	bootstrap windowsAgentBootstrap
+	serve     func(
+		context.Context,
+		app.AgentServeOptions,
+		windowsAgentBootstrap,
+	) error
 }
 
 func (handler *agentServiceHandler) Execute(
@@ -242,8 +262,12 @@ func (handler *agentServiceHandler) Execute(
 	defer cancel()
 	changes <- svc.Status{State: svc.StartPending}
 	done := make(chan error, 1)
+	serve := handler.serve
+	if serve == nil {
+		serve = serveWindowsAgent
+	}
 	go func() {
-		done <- serveWindowsAgent(ctx, handler.options, handler.bootstrap)
+		done <- serve(ctx, handler.options, handler.bootstrap)
 	}()
 	running := svc.Status{
 		State:   svc.Running,
@@ -273,23 +297,85 @@ func (handler *agentServiceHandler) Execute(
 	}
 }
 
+type windowsBootstrapRequest interface {
+	JoinOptions() platformwindows.BootstrapJoinOptions
+	Disconnected() <-chan struct{}
+	Complete(string, error) error
+}
+
+type windowsAgentBootstrap func(
+	context.Context,
+) (windowsBootstrapRequest, error)
+
+type windowsAgentOperations struct {
+	initialized func(context.Context, string) (bool, error)
+	join        func(context.Context, app.JoinOptions) (string, error)
+	serve       func(context.Context, app.AgentServeOptions) error
+}
+
+func receiveWindowsBootstrapRequest(
+	ctx context.Context,
+) (windowsBootstrapRequest, error) {
+	return platformwindows.ReceiveBootstrapRequest(ctx)
+}
+
+func defaultWindowsAgentOperations() windowsAgentOperations {
+	return windowsAgentOperations{
+		initialized: func(
+			ctx context.Context,
+			directory string,
+		) (bool, error) {
+			state, err := app.OpenAgent(ctx, directory)
+			if errors.Is(err, app.ErrNotInitialized) {
+				return false, nil
+			}
+			if err != nil {
+				return false, err
+			}
+			if err := state.Close(); err != nil {
+				return false, err
+			}
+			return true, nil
+		},
+		join:  app.JoinAgent,
+		serve: app.ServeAgent,
+	}
+}
+
 func serveWindowsAgent(
 	ctx context.Context,
 	options app.AgentServeOptions,
-	bootstrap func(context.Context) (*platformwindows.BootstrapRequest, error),
+	bootstrap windowsAgentBootstrap,
 ) error {
-	state, err := app.OpenAgent(ctx, options.StateDirectory)
-	if err == nil {
-		if err := state.Close(); err != nil {
-			return err
+	return serveWindowsAgentWithOperations(
+		ctx,
+		options,
+		bootstrap,
+		defaultWindowsAgentOperations(),
+	)
+}
+
+func serveWindowsAgentWithOperations(
+	ctx context.Context,
+	options app.AgentServeOptions,
+	bootstrap windowsAgentBootstrap,
+	operations windowsAgentOperations,
+) error {
+	initialized, err := operations.initialized(ctx, options.StateDirectory)
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
 		}
-		return app.ServeAgent(ctx, options)
+		return err
+	}
+	if initialized {
+		return operations.serve(ctx, options)
 	}
 	if ctx.Err() != nil {
 		return nil
 	}
-	if !errors.Is(err, app.ErrNotInitialized) || bootstrap == nil {
-		return err
+	if bootstrap == nil {
+		return app.ErrNotInitialized
 	}
 	request, err := bootstrap(ctx)
 	if err != nil {
@@ -301,30 +387,49 @@ func serveWindowsAgent(
 	if request == nil {
 		return platformwindows.ErrBootstrapProtocol
 	}
-	joinTimeout := request.Options.ConnectionTimeout
+	joinOptions := request.JoinOptions()
+	joinTimeout := joinOptions.ConnectionTimeout
 	if joinTimeout <= 0 {
 		joinTimeout = options.ConnectionTimeout
 	}
-	nodeID, joinErr := app.JoinAgent(ctx, app.JoinOptions{
+	joinContext, cancelJoin := context.WithCancel(ctx)
+	joinFinished := make(chan struct{})
+	go func() {
+		select {
+		case <-request.Disconnected():
+			cancelJoin()
+		case <-joinFinished:
+		}
+	}()
+	nodeID, joinErr := operations.join(joinContext, app.JoinOptions{
 		StateDirectory:    options.StateDirectory,
-		JoinCode:          request.Options.JoinCode,
-		Controller:        request.Options.Controller,
-		DiscoveryTimeout:  request.Options.DiscoveryTimeout,
+		JoinCode:          joinOptions.JoinCode,
+		Controller:        joinOptions.Controller,
+		DiscoveryTimeout:  joinOptions.DiscoveryTimeout,
 		ConnectionTimeout: joinTimeout,
 	})
-	if request.Options.ConnectionTimeout > 0 {
+	joinOptions.JoinCode = ""
+	close(joinFinished)
+	cancelJoin()
+	if joinOptions.ConnectionTimeout > 0 {
 		// The initiating CLI's explicit deadline belongs to this enrollment,
 		// while subsequent service reconnects keep the SCM configuration.
-		options.ConnectionTimeout = request.Options.ConnectionTimeout
+		options.ConnectionTimeout = joinOptions.ConnectionTimeout
 	}
 	ackErr := request.Complete(nodeID, joinErr)
 	if joinErr != nil {
 		return joinErr
 	}
-	if ackErr != nil && ctx.Err() != nil {
-		return nil
+	if ackErr != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		// Enrollment is durable, but the initiating CLI did not observe it.
+		// Exiting non-zero lets SCM recovery restart from that durable state
+		// instead of reporting a synthetic successful bootstrap.
+		return ackErr
 	}
-	return app.ServeAgent(ctx, options)
+	return operations.serve(ctx, options)
 }
 
 type runnerIdentityServiceHandler struct{}

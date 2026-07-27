@@ -7,6 +7,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -71,8 +72,11 @@ type bootstrapResponseFrame struct {
 type BootstrapRequest struct {
 	Options BootstrapJoinOptions
 
-	file *os.File
-	once sync.Once
+	file         *os.File
+	once         sync.Once
+	disconnected chan struct{}
+	finished     chan struct{}
+	monitorDone  chan struct{}
 }
 
 // ReceiveBootstrapRequest accepts one local elevated client. Production calls
@@ -99,8 +103,12 @@ func receiveBootstrapRequest(
 	if err != nil {
 		return nil, ErrBootstrapUnavailable
 	}
+	owner, err := currentProcessSID()
+	if err != nil {
+		return nil, ErrBootstrapIdentity
+	}
 	descriptor, err := syswindows.SecurityDescriptorFromString(
-		"D:P(A;;GA;;;SY)(A;;GRGW;;;BA)",
+		fmt.Sprintf("O:%sD:P(A;;GA;;;SY)(A;;GRGW;;;BA)", owner),
 	)
 	if err != nil {
 		return nil, ErrBootstrapUnavailable
@@ -174,15 +182,38 @@ func receiveBootstrapRequest(
 		_ = file.Close()
 		return nil, ErrBootstrapProtocol
 	}
-	return &BootstrapRequest{
+	request := &BootstrapRequest{
 		Options: BootstrapJoinOptions{
 			JoinCode:          frame.JoinCode,
 			Controller:        frame.Controller,
 			DiscoveryTimeout:  time.Duration(frame.DiscoveryTimeoutNanos),
 			ConnectionTimeout: time.Duration(frame.ConnectionTimeoutNanos),
 		},
-		file: file,
-	}, nil
+		file:         file,
+		disconnected: make(chan struct{}),
+		finished:     make(chan struct{}),
+		monitorDone:  make(chan struct{}),
+	}
+	go request.monitorClient()
+	return request, nil
+}
+
+func (request *BootstrapRequest) Disconnected() <-chan struct{} {
+	if request == nil || request.disconnected == nil {
+		closed := make(chan struct{})
+		close(closed)
+		return closed
+	}
+	return request.disconnected
+}
+
+// JoinOptions returns a copy so the service wrapper can consume bootstrap
+// requests through a narrow interface without exposing transport internals.
+func (request *BootstrapRequest) JoinOptions() BootstrapJoinOptions {
+	if request == nil {
+		return BootstrapJoinOptions{}
+	}
+	return request.Options
 }
 
 // Complete sends only a fixed error class on failure. It never serializes an
@@ -193,11 +224,13 @@ func (request *BootstrapRequest) Complete(nodeID string, enrollmentErr error) er
 	}
 	var completeErr error = ErrBootstrapProtocol
 	request.once.Do(func() {
+		close(request.finished)
 		defer func() {
 			request.Options.JoinCode = ""
 			if err := request.file.Close(); completeErr == nil && err != nil {
 				completeErr = ErrBootstrapUnavailable
 			}
+			<-request.monitorDone
 		}()
 		response := bootstrapResponseFrame{
 			Version: bootstrapProtocolV1,
@@ -219,6 +252,18 @@ func (request *BootstrapRequest) Complete(nodeID string, enrollmentErr error) er
 		completeErr = nil
 	})
 	return completeErr
+}
+
+func (request *BootstrapRequest) monitorClient() {
+	defer close(request.monitorDone)
+	var extra [1]byte
+	_, _ = request.file.Read(extra[:])
+	select {
+	case <-request.finished:
+		return
+	default:
+		close(request.disconnected)
+	}
 }
 
 // SubmitBootstrapJoin sends the capability only after verifying that the pipe
@@ -272,7 +317,12 @@ func submitBootstrapJoin(
 	if _, err := file.Write(payload); err != nil {
 		return "", ErrBootstrapUnavailable
 	}
-	responsePayload, err := readPipeMessage(ctx, file, handle, maxBootstrapFrame)
+	responsePayload, err := readPipeMessage(
+		connectContext,
+		file,
+		handle,
+		maxBootstrapFrame,
+	)
 	if err != nil {
 		return "", err
 	}
@@ -307,6 +357,16 @@ func connectBootstrapPipe(ctx context.Context) (*os.File, syswindows.Handle, err
 			file := os.NewFile(uintptr(handle), BootstrapPipeName)
 			if file == nil {
 				syswindows.CloseHandle(handle)
+				return nil, 0, ErrBootstrapUnavailable
+			}
+			mode := uint32(syswindows.PIPE_READMODE_MESSAGE)
+			if err := syswindows.SetNamedPipeHandleState(
+				handle,
+				&mode,
+				nil,
+				nil,
+			); err != nil {
+				_ = file.Close()
 				return nil, 0, ErrBootstrapUnavailable
 			}
 			return file, handle, nil
@@ -461,9 +521,15 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 	descriptor, err := syswindows.GetSecurityInfo(
 		handle,
 		syswindows.SE_KERNEL_OBJECT,
-		syswindows.DACL_SECURITY_INFORMATION,
+		syswindows.OWNER_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION,
 	)
 	if err != nil || descriptor == nil || !descriptor.IsValid() {
+		return ErrBootstrapIdentity
+	}
+	owner, defaulted, err := descriptor.Owner()
+	current, currentErr := currentProcessSID()
+	if err != nil || owner == nil || defaulted || currentErr != nil ||
+		!strings.EqualFold(owner.String(), current) {
 		return ErrBootstrapIdentity
 	}
 	control, _, err := descriptor.Control()
@@ -474,13 +540,17 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 	if err != nil || dacl == nil || defaulted || dacl.AceCount != 2 {
 		return ErrBootstrapIdentity
 	}
+	expected := map[string]syswindows.ACCESS_MASK{
+		"S-1-5-18":     syswindows.GENERIC_ALL,
+		"S-1-5-32-544": syswindows.GENERIC_READ | syswindows.GENERIC_WRITE,
+	}
 	seen := map[string]bool{}
 	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
 		var ace *syswindows.ACCESS_ALLOWED_ACE
 		if err := syswindows.GetAce(dacl, index, &ace); err != nil ||
 			ace == nil ||
 			ace.Header.AceType != syswindows.ACCESS_ALLOWED_ACE_TYPE ||
-			ace.Header.AceFlags&syswindows.INHERITED_ACE != 0 {
+			ace.Header.AceFlags != 0 {
 			return ErrBootstrapIdentity
 		}
 		sid := (*syswindows.SID)(unsafe.Pointer(&ace.SidStart))
@@ -488,7 +558,8 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 			return ErrBootstrapIdentity
 		}
 		text := strings.ToUpper(sid.String())
-		if text != "S-1-5-18" && text != "S-1-5-32-544" {
+		mask, found := expected[text]
+		if !found || seen[text] || ace.Mask != mask {
 			return ErrBootstrapIdentity
 		}
 		seen[text] = true

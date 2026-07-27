@@ -222,7 +222,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			writeJoinServiceHint(command.OutOrStdout(), goos, directory)
+			printPlatformJoinNextStep(command.OutOrStdout(), directory)
 			return nil
 		},
 	}
@@ -231,21 +231,6 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 	command.Flags().DurationVar(&discoveryTimeout, "discovery-timeout", app.DefaultDiscoveryTimeout, "mDNS discovery deadline")
 	command.Flags().DurationVar(&connectionTimeout, "connection-timeout", app.DefaultConnectTimeout, "per-controller enrollment and confirmation deadline")
 	return command
-}
-
-func writeJoinServiceHint(output io.Writer, goos, stateDirectory string) {
-	const macOSServiceState = "/Library/Application Support/Tewake/agent"
-	// The path is a platform contract, not a host path to normalize. Comparing
-	// it verbatim keeps cross-compiled CLI tests from treating a macOS path as a
-	// Windows drive-relative path while preserving the Darwin service hint.
-	if goos == "darwin" && stateDirectory == macOSServiceState {
-		fmt.Fprintln(
-			output,
-			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
-		)
-		return
-	}
-	fmt.Fprintf(output, "Start it with: tewake-agent serve --state-dir %s\n", stateDirectory)
 }
 
 func newNodeCommand() *cobra.Command {

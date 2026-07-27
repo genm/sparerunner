@@ -15,8 +15,12 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+. (Join-Path $PSScriptRoot "safe-tree.ps1")
+. (Join-Path $PSScriptRoot "ownership.ps1")
+
 $AgentService = "TewakeAgent"
 $RunnerService = "TewakeRunnerIdentity"
+$SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
 
 function Get-CanonicalScopedPath {
     param(
@@ -45,28 +49,6 @@ function Get-CanonicalScopedPath {
         throw "A Tewake uninstall path escaped its owning Windows directory."
     }
     return $Canonical
-}
-
-function Assert-NoReparsePath {
-    param(
-        [Parameter(Mandatory = $true)]
-        [string] $Path
-    )
-
-    $Current = [System.IO.Path]::GetFullPath($Path)
-    while ($Current) {
-        if (Test-Path -LiteralPath $Current) {
-            $Item = Get-Item -LiteralPath $Current -Force
-            if (($Item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "A Tewake uninstall path contains a reparse point."
-            }
-        }
-        $Parent = [System.IO.Directory]::GetParent($Current)
-        if ($null -eq $Parent) {
-            break
-        }
-        $Current = $Parent.FullName
-    }
 }
 
 function Invoke-ServiceControlIfPresent {
@@ -99,11 +81,57 @@ function Invoke-ServiceControlIfPresent {
 
 $InstallRoot = Get-CanonicalScopedPath -Path $InstallRoot -AllowedParent $env:ProgramFiles
 $DataRoot = Get-CanonicalScopedPath -Path $DataRoot -AllowedParent $env:ProgramData
-Assert-NoReparsePath -Path $InstallRoot
-Assert-NoReparsePath -Path $DataRoot
+$AgentPresent = $null -ne (
+    Get-Service -Name $AgentService -ErrorAction SilentlyContinue
+)
+$RunnerPresent = $null -ne (
+    Get-Service -Name $RunnerService -ErrorAction SilentlyContinue
+)
+$Authority = Get-TewakeUninstallAuthority `
+    -InstallRoot $InstallRoot `
+    -DataRoot $DataRoot `
+    -ServicesPresent ($AgentPresent -or $RunnerPresent) `
+    -PurgeData:$PurgeData `
+    -OwnerSid $SystemSid
+$InstallRoot = $Authority.InstallRoot
+$DataRoot = $Authority.DataRoot
+Assert-TewakeNoReparsePath -Path $InstallRoot
+Assert-TewakeNoReparsePath -Path $DataRoot
+if (Test-Path -LiteralPath $InstallRoot) {
+    Assert-TewakeNoReparseTree -Root $InstallRoot
+}
+if ($PurgeData -and (Test-Path -LiteralPath $DataRoot)) {
+    # Validate every descendant before changing SCM state. A nested junction
+    # must not turn an uninstall request into a partial uninstall.
+    Assert-TewakeNoReparseTree -Root $DataRoot
+}
 
-if (-not $PSCmdlet.ShouldProcess("Tewake Windows services", "Stop and delete")) {
+$PrimaryTargets = [System.Collections.Generic.List[string]]::new()
+$PrimaryActions = [System.Collections.Generic.List[string]]::new()
+if ($AgentPresent) {
+    $PrimaryTargets.Add("service $AgentService")
+}
+if ($RunnerPresent) {
+    $PrimaryTargets.Add("service $RunnerService")
+}
+if ($AgentPresent -or $RunnerPresent) {
+    $PrimaryActions.Add("stop and delete the listed services")
+}
+if ($Authority.InstallExists) {
+    $PrimaryTargets.Add("verified install root $InstallRoot")
+    $PrimaryActions.Add("remove the listed install root")
+}
+if ($PrimaryTargets.Count -gt 0 -and -not $PSCmdlet.ShouldProcess(
+    ($PrimaryTargets -join ", "),
+    ($PrimaryActions -join "; ")
+)) {
     return
+}
+if ($PurgeData -and $Authority.DataExists -and -not $PSCmdlet.ShouldProcess(
+    $DataRoot,
+    "Permanently remove enrollment state, journal, cache, and quarantined workspaces"
+)) {
+    throw "Tewake data purge was not confirmed."
 }
 
 Invoke-ServiceControlIfPresent -Name $AgentService -Operation "stop"
@@ -112,18 +140,12 @@ Invoke-ServiceControlIfPresent -Name $AgentService -Operation "delete"
 Invoke-ServiceControlIfPresent -Name $RunnerService -Operation "delete"
 
 if (Test-Path -LiteralPath $InstallRoot) {
-    Remove-Item -LiteralPath $InstallRoot -Recurse -Force
+    Remove-TewakeTreeNoReparse -Root $InstallRoot
 }
 
 if ($PurgeData) {
-    if (-not $PSCmdlet.ShouldProcess(
-        $DataRoot,
-        "Permanently remove enrollment state, journal, cache, and quarantined workspaces"
-    )) {
-        throw "Tewake data purge was not confirmed."
-    }
     if (Test-Path -LiteralPath $DataRoot) {
-        Remove-Item -LiteralPath $DataRoot -Recurse -Force
+        Remove-TewakeTreeNoReparse -Root $DataRoot
     }
 }
 else {

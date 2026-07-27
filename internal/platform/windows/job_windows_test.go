@@ -15,6 +15,7 @@ import (
 	"unsafe"
 
 	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/tewake/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -74,6 +75,26 @@ func TestJobRuntimeBindsExactlyOneCoreFenceAfterContainmentPreparation(t *testin
 	if err := fence.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if err := winacl.ValidatePrivateDirectory(
+		filepath.Join(runtime.runtimeRoot, ".tewake-fences"),
+	); err != nil {
+		t.Fatalf("fence root authority: %v", err)
+	}
+	if err := winacl.ValidatePrivateDirectory(
+		filepath.Join(runtime.runtimeRoot, ".tewake-fences", owner),
+	); err != nil {
+		t.Fatalf("execution fence authority: %v", err)
+	}
+	if err := winacl.ValidatePrivateFile(
+		filepath.Join(
+			runtime.runtimeRoot,
+			".tewake-fences",
+			owner,
+			ref.FenceToken+".fence",
+		),
+	); err != nil {
+		t.Fatalf("fence file authority: %v", err)
+	}
 	handle, err := runtime.duplicateJob(ref)
 	if err != nil {
 		t.Fatal(err)
@@ -117,7 +138,16 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 		FenceToken:   "abcdef0123456789abcdef0123456789",
 		InvocationID: "",
 	}
-	if err := runtime.EnsureJob(context.Background(), ref); err != nil {
+	prepared := ref
+	prepared.FenceToken = ""
+	if err := runtime.EnsureJob(context.Background(), prepared); err != nil {
+		t.Fatal(err)
+	}
+	fence, err := runtime.LockFence(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := fence.Close(); err != nil {
 		t.Fatal(err)
 	}
 	defer runtime.Close()
@@ -227,9 +257,35 @@ func TestWindowsJobHelperProcess(t *testing.T) {
 	select {}
 }
 
-func TestLockedFileProducesWindowsSharingViolation(t *testing.T) {
-	root := t.TempDir()
-	path := filepath.Join(root, "locked.txt")
+func TestLockedWorkspaceProducesCleanupFailureUntilLockIsReleased(t *testing.T) {
+	runtimeRoot := filepath.Clean(t.TempDir())
+	executions := filepath.Join(runtimeRoot, "executions")
+	if err := os.Mkdir(executions, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	root, err := os.OpenRoot(executions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	name := strings.Repeat("a", sha256HexLength)
+	if err := root.Mkdir(name, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	current, err := currentProcessSID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspace := &OSWorkspace{
+		runtimeRoot: runtimeRoot,
+		serviceSID:  "S-1-5-18",
+		runnerSID:   current,
+	}
+	expected, err := workspace.Prepare(context.Background(), root, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(executions, name, "locked.txt")
 	pointer, err := syswindows.UTF16PtrFromString(path)
 	if err != nil {
 		t.Fatal(err)
@@ -246,13 +302,83 @@ func TestLockedFileProducesWindowsSharingViolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer syswindows.CloseHandle(handle)
-	if err := os.RemoveAll(root); err == nil {
-		t.Fatal("locked workspace was reported removed")
+	if err := workspace.Remove(context.Background(), root, name); !errors.Is(
+		err,
+		runner.ErrCleanupFailed,
+	) {
+		_ = syswindows.CloseHandle(handle)
+		t.Fatalf("locked workspace error = %v", err)
 	}
 	if _, err := os.Stat(path); err != nil {
-		t.Fatalf("locked file disappeared: %v", err)
+		_ = syswindows.CloseHandle(handle)
+		t.Fatalf("locked workspace locator disappeared: %v", err)
 	}
+	observed, err := workspace.Observe(context.Background(), root, name)
+	if err != nil || observed != expected {
+		_ = syswindows.CloseHandle(handle)
+		t.Fatalf("recoverable workspace = %+v, err=%v", observed, err)
+	}
+	if err := syswindows.CloseHandle(handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := workspace.Remove(context.Background(), root, name); err != nil {
+		t.Fatalf("cleanup retry after lock release: %v", err)
+	}
+}
+
+func TestDisposableRunnerEnvironmentDoesNotInheritAgentSecrets(t *testing.T) {
+	t.Setenv("TEWAKE_AGENT_SECRET_CANARY", "must-not-cross-identity.example.test")
+	root := t.TempDir()
+	var token syswindows.Token
+	if err := syswindows.OpenProcessToken(
+		syswindows.CurrentProcess(),
+		syswindows.TOKEN_QUERY,
+		&token,
+	); err != nil {
+		t.Fatal(err)
+	}
+	defer token.Close()
+	block, err := disposableRunnerEnvironment(token, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer clear(block)
+	entries := decodeEnvironmentBlock(block)
+	if _, found := entries["TEWAKE_AGENT_SECRET_CANARY"]; found {
+		t.Fatal("Agent process environment crossed into the runner")
+	}
+	for name, expected := range map[string]string{
+		"HOME":         filepath.Join(root, "_tewake-home"),
+		"USERPROFILE":  filepath.Join(root, "_tewake-home"),
+		"TEMP":         filepath.Join(root, "_tewake-tmp"),
+		"TMP":          filepath.Join(root, "_tewake-tmp"),
+		"RUNNER_TEMP":  filepath.Join(root, "_tewake-tmp"),
+		"APPDATA":      filepath.Join(root, "_tewake-home", "AppData", "Roaming"),
+		"LOCALAPPDATA": filepath.Join(root, "_tewake-home", "AppData", "Local"),
+	} {
+		if entries[name] != expected {
+			t.Fatalf("%s = %q, want %q", name, entries[name], expected)
+		}
+	}
+}
+
+func decodeEnvironmentBlock(block []uint16) map[string]string {
+	result := make(map[string]string)
+	start := 0
+	for index, value := range block {
+		if value != 0 {
+			continue
+		}
+		if index == start {
+			break
+		}
+		entry := syswindows.UTF16ToString(block[start:index])
+		if separator := strings.IndexByte(entry, '='); separator > 0 {
+			result[strings.ToUpper(entry[:separator])] = entry[separator+1:]
+		}
+		start = index + 1
+	}
+	return result
 }
 
 func waitForPIDFile(t *testing.T, path string) int {

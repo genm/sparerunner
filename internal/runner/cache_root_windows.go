@@ -77,7 +77,8 @@ func requirePrivateCacheRoot(root string) error {
 	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
 		var ace *windows.ACCESS_ALLOWED_ACE
 		if err := windows.GetAce(dacl, index, &ace); err != nil || ace == nil ||
-			ace.Header.AceFlags&windows.INHERITED_ACE != 0 ||
+			ace.Header.AceFlags !=
+				windows.OBJECT_INHERIT_ACE|windows.CONTAINER_INHERIT_ACE ||
 			ace.Header.AceType != windows.ACCESS_ALLOWED_ACE_TYPE {
 			return ErrStrongOwnershipUnavailable
 		}
@@ -90,7 +91,7 @@ func requirePrivateCacheRoot(root string) error {
 			return ErrStrongOwnershipUnavailable
 		}
 		if _, duplicate := seen[text]; duplicate ||
-			ace.Mask&windowsFileFullControl != windowsFileFullControl {
+			ace.Mask != windowsFileFullControl {
 			return ErrStrongOwnershipUnavailable
 		}
 		seen[text] = struct{}{}

@@ -35,6 +35,27 @@ type windowsPrewarmPrepared struct {
 	closeErr error
 }
 
+type fakeWindowsBootstrapRequest struct {
+	options      platformwindows.BootstrapJoinOptions
+	disconnected chan struct{}
+	complete     func(string, error) error
+}
+
+func (request *fakeWindowsBootstrapRequest) JoinOptions() platformwindows.BootstrapJoinOptions {
+	return request.options
+}
+
+func (request *fakeWindowsBootstrapRequest) Disconnected() <-chan struct{} {
+	return request.disconnected
+}
+
+func (request *fakeWindowsBootstrapRequest) Complete(
+	nodeID string,
+	err error,
+) error {
+	return request.complete(nodeID, err)
+}
+
 func (windowsPrewarmPrepared) Materialize(*os.Root) error {
 	return errors.New("prewarm must not materialize")
 }
@@ -162,7 +183,7 @@ func TestAgentServiceFailsClosedWhenBootstrapFails(t *testing.T) {
 		options: app.AgentServeOptions{
 			StateDirectory: filepath.Join(t.TempDir(), "missing"),
 		},
-		bootstrap: func(context.Context) (*platformwindows.BootstrapRequest, error) {
+		bootstrap: func(context.Context) (windowsBootstrapRequest, error) {
 			return nil, bootstrapErr
 		},
 	}
@@ -195,7 +216,7 @@ func TestAgentServiceStopCancelsBootstrapWait(t *testing.T) {
 		options: app.AgentServeOptions{
 			StateDirectory: filepath.Join(t.TempDir(), "missing"),
 		},
-		bootstrap: func(ctx context.Context) (*platformwindows.BootstrapRequest, error) {
+		bootstrap: func(ctx context.Context) (windowsBootstrapRequest, error) {
 			<-ctx.Done()
 			return nil, ctx.Err()
 		},
@@ -221,6 +242,148 @@ func TestAgentServiceStopCancelsBootstrapWait(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("agent service did not cancel bootstrap wait")
+	}
+}
+
+func TestWindowsEnrollmentAckFailureExitsAndRestartUsesDurableState(
+	t *testing.T,
+) {
+	stateDirectory := t.TempDir()
+	durableState := filepath.Join(stateDirectory, "durable-enrollment")
+	ackErr := platformwindows.ErrBootstrapUnavailable
+	serveAfterRestart := errors.New("serve after restart")
+	bootstrapCalls := 0
+	joinCalls := 0
+	serveCalls := 0
+	disconnected := make(chan struct{})
+	request := &fakeWindowsBootstrapRequest{
+		options: platformwindows.BootstrapJoinOptions{
+			JoinCode:          "twk_test",
+			Controller:        "https://controller.example.test:7443",
+			DiscoveryTimeout:  time.Second,
+			ConnectionTimeout: 2 * time.Second,
+		},
+		disconnected: disconnected,
+		complete: func(nodeID string, joinErr error) error {
+			if nodeID != "durable-node" || joinErr != nil {
+				t.Fatalf("completion = (%q, %v)", nodeID, joinErr)
+			}
+			if _, err := os.Stat(durableState); err != nil {
+				t.Fatalf("completion preceded durable state: %v", err)
+			}
+			return ackErr
+		},
+	}
+	operations := windowsAgentOperations{
+		initialized: func(
+			context.Context,
+			string,
+		) (bool, error) {
+			_, err := os.Stat(durableState)
+			if errors.Is(err, os.ErrNotExist) {
+				return false, nil
+			}
+			return err == nil, err
+		},
+		join: func(
+			_ context.Context,
+			options app.JoinOptions,
+		) (string, error) {
+			joinCalls++
+			if options.StateDirectory != stateDirectory ||
+				options.JoinCode != request.options.JoinCode ||
+				options.Controller != request.options.Controller {
+				t.Fatalf("join options = %+v", options)
+			}
+			if err := os.WriteFile(durableState, []byte("durable"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return "durable-node", nil
+		},
+		serve: func(
+			context.Context,
+			app.AgentServeOptions,
+		) error {
+			serveCalls++
+			return serveAfterRestart
+		},
+	}
+	bootstrap := func(context.Context) (windowsBootstrapRequest, error) {
+		bootstrapCalls++
+		return request, nil
+	}
+	options := app.AgentServeOptions{StateDirectory: stateDirectory}
+	if err := serveWindowsAgentWithOperations(
+		context.Background(),
+		options,
+		bootstrap,
+		operations,
+	); !errors.Is(err, ackErr) {
+		t.Fatalf("acknowledgement failure = %v", err)
+	}
+	if bootstrapCalls != 1 || joinCalls != 1 || serveCalls != 0 {
+		t.Fatalf(
+			"first start calls bootstrap=%d join=%d serve=%d",
+			bootstrapCalls,
+			joinCalls,
+			serveCalls,
+		)
+	}
+	if err := serveWindowsAgentWithOperations(
+		context.Background(),
+		options,
+		func(context.Context) (windowsBootstrapRequest, error) {
+			t.Fatal("restart requested enrollment after durable state")
+			return nil, nil
+		},
+		operations,
+	); !errors.Is(err, serveAfterRestart) {
+		t.Fatalf("restart serve error = %v", err)
+	}
+	if bootstrapCalls != 1 || joinCalls != 1 || serveCalls != 1 {
+		t.Fatalf(
+			"restart calls bootstrap=%d join=%d serve=%d",
+			bootstrapCalls,
+			joinCalls,
+			serveCalls,
+		)
+	}
+}
+
+func TestAgentServiceReportsHelperFailureToSCM(t *testing.T) {
+	helperErr := platformwindows.ErrBootstrapUnavailable
+	changes := make(chan svc.Status, 4)
+	done := make(chan uint32, 1)
+	handler := &agentServiceHandler{
+		parent: context.Background(),
+		options: app.AgentServeOptions{
+			StateDirectory: t.TempDir(),
+		},
+		serve: func(
+			context.Context,
+			app.AgentServeOptions,
+			windowsAgentBootstrap,
+		) error {
+			return helperErr
+		},
+	}
+	go func() {
+		_, code := handler.Execute(nil, make(chan svc.ChangeRequest), changes)
+		done <- code
+	}()
+	if status := receiveServiceStatus(t, changes); status.State != svc.StartPending {
+		t.Fatalf("first status = %+v", status)
+	}
+	if status := receiveServiceStatus(t, changes); status.State != svc.Running {
+		t.Fatalf("running status = %+v", status)
+	}
+	select {
+	case code := <-done:
+		if code == 0 {
+			t.Fatal("helper failure reported SCM success")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("agent service hid helper failure")
 	}
 }
 

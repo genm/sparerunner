@@ -44,6 +44,12 @@ Run an elevated Windows PowerShell 5.1 or newer session from an unpacked release
 
 The installer:
 
+- refuses both install and data roots if either already exists; the first
+  release has no in-place upgrade path and never claims or rewrites a foreign
+  directory;
+- atomically publishes a protected ownership marker in each newly created
+  root. Both markers bind the same random installation ID to an exact canonical
+  path and distinct `install`/`data` roles;
 - copies the binaries with a staging rename and refuses to clobber an existing
   installation;
 - creates protected, non-reparse directories under `%ProgramFiles%\Tewake` and
@@ -65,8 +71,10 @@ pipe instance. In the same elevated session, run:
 On Windows, `tewake join` does not write Agent state as the interactive user. It
 verifies that `\\.\pipe\TewakeEnroll` belongs to the running LocalSystem
 `TewakeAgent` SCM PID, submits one versioned request, and reports success only
-after the service has durably persisted and reloaded the node credential. The
-server pipe:
+after the service has durably persisted and reloaded the node credential. If
+that durable join succeeds but the acknowledgement cannot reach the CLI, the
+Agent exits non-zero so SCM recovery restarts from the durable state; it never
+reports bootstrap success or performs a second join. The server pipe:
 
 - has a protected DACL for LocalSystem and elevated Administrators only;
 - rejects remote clients;
@@ -86,6 +94,7 @@ capacity instead of falling back to plaintext.
 | Path | Protected ACL |
 |---|---|
 | `%ProgramFiles%\Tewake` | LocalSystem/Administrators full; runner service SID read/execute |
+| `%ProgramData%\Tewake` | LocalSystem/Administrators full; runner service SID read/execute for traversal |
 | `%ProgramData%\Tewake\agent-state` | LocalSystem/Administrators only |
 | `%ProgramData%\Tewake\cache` | LocalSystem/Administrators only |
 | `%ProgramData%\Tewake\runtime` | LocalSystem/Administrators full; runner service SID read/execute |
@@ -95,7 +104,9 @@ Every authoritative path rejects reparse points. Workspace cleanup validates
 the volume/file ID and protected DACL before removal. A sharing violation from a
 locked file is a cleanup failure: the locator remains in the Agent journal and
 the Node becomes quarantined. Tewake never reports an empty/healthy workspace
-in that state.
+in that state. Durable execution fences live below `runtime\.tewake-fences`
+with a separate LocalSystem/Administrators-only DACL; the runner identity can
+read its execution tree but cannot inspect or modify its cleanup authority.
 
 ## Service inspection
 
@@ -111,8 +122,12 @@ Get-Acl "$env:ProgramData\Tewake\agent-state" |
 ```
 
 Use [`test/live/windows/run.ps1`](../../test/live/windows/run.ps1) to capture the
-machine-readable platform tests, service preflight, controlled service
-recovery, and two-phase reboot evidence.
+machine-readable platform tests, service preflight, DPAPI cross-identity
+rejection, controlled service recovery, and two-phase reboot evidence. The
+live harness parses each SCM `PathName` with Windows `CommandLineToArgvW` and
+requires the exact executable, service name, role, state/cache/runtime paths,
+runner identity, and native-runner flag; duplicate, missing, reordered, or
+unknown arguments fail.
 
 ## Uninstall
 
@@ -129,8 +144,31 @@ Permanent data removal is a separate, explicitly confirmed action:
 .\packaging\windows\uninstall.ps1 -PurgeData
 ```
 
+The primary confirmation names the effective services and verified install
+root that will be removed. `-PurgeData` remains a second independent
+confirmation for enrollment state, journal, cache, and quarantined workspaces.
+
 The uninstaller rejects paths outside the owning Program Files/ProgramData
-trees and rejects reparse-point targets.
+trees. Before it changes SCM state, it validates each marker as a regular,
+non-reparse, LocalSystem/Administrators-only file with canonical version, role,
+path, and cross-root installation ID. A normal uninstall removes the install
+root but deliberately retains the data marker, so a later `-PurgeData` can
+establish authority without the binary root. Foreign, cross-role,
+cross-installation, or tampered markers fail without stopping services or
+deleting files.
+
+Owned-root publication also fails closed across the atomic rename boundary. If
+post-publish validation fails, the installer removes only a destination whose
+exact marker, role, path, installation ID, and ACL can be re-established. A
+changed marker, changed ACL, or any extra directory content makes the
+destination ambiguous; it is retained for operator inspection rather than
+being deleted under an unproven rollback authority.
+
+After ownership is established, the uninstaller inventories every descendant
+that would be removed and rejects any junction, symlink, or other reparse
+point. Removal then deletes explicit files and directories bottom-up without a
+recursive filesystem API; an entry raced into the tree makes removal fail
+closed.
 
 ## Release acceptance still required
 

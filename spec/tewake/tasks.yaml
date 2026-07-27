@@ -277,16 +277,23 @@ tasks:
       ownership, package selection, and locked-file cleanup handling.
     depends_on: [twk-005, twk-006, twk-007]
     paths:
+      - cmd/tewake
       - cmd/tewake-agent
       - internal/app
       - internal/enroll
       - internal/runner
+      - internal/winacl
       - packaging/windows
       - internal/platform/windows
       - test/live/windows
     ci_targets: [lint, test, build, e2e]
     pr_order: 9
     status: in_progress
+    notes:
+      - "2026-07-27: Windows implementation now includes LocalSystem SCM ownership, a distinct virtual-service runner token, suspended-process Job Object assignment, durable private execution fences, DPAPI user-scope node material, exact protected ACLs, one-shot elevated named-pipe enrollment, and no-clobber persistence."
+      - "2026-07-27: Package ownership markers bind one installation ID to canonical install/data roots before any content is published. Existing or foreign roots are never claimed; uninstall validates marker ACL/schema/role/path/cross-root identity and rejects nested junctions before SCM mutation, preserving external canaries and using explicit non-recursive deletion."
+      - "2026-07-27: A lost bootstrap acknowledgement now exits non-zero only after durable enrollment, so SCM recovery reopens the saved state without replaying join. Live evidence roots are atomically owned and config-bound, and SCM command lines are parsed into exact Windows argv contracts."
+      - "2026-07-27: Cross-compilation and hosted contract tests do not satisfy the remaining real Windows amd64/arm64, reboot, recovery, DPAPI identity, locked-workspace quarantine, and private GitHub job gates."
     acceptance:
       - The service reconnects after reboot and recovery without duplicate runtimes.
       - DPAPI-protected material is inaccessible outside the service identity.
@@ -294,6 +301,11 @@ tasks:
       - A failed locked-file removal retains recoverable locator evidence.
       - Job Object cleanup terminates descendant processes.
       - A locked workspace file causes quarantine instead of false success.
+      - Purge rejects a nested junction before changing SCM state and leaves its external target untouched.
+      - Existing roots are never ACL-modified, and foreign, cross-role, cross-installation, or tampered ownership markers leave services and files unchanged.
+      - A successful durable join with a failed CLI acknowledgement exits non-zero and the SCM restart serves the saved identity without a second join.
+      - Live evidence rejects path overlap and foreign existing directories without changing contents or security descriptors, while exact config-bound scenario reuse succeeds.
+      - SCM evidence rejects duplicate, missing, unknown, wrong-role, wrong-service, or wrong-path command-line arguments after native Windows parsing.
 
   - id: twk-010
     title: Implement node-affined scheduling
