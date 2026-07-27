@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -218,13 +219,15 @@ func windowsPrivateDirectory(t *testing.T) string {
 	directory := filepath.Clean(t.TempDir())
 	if err := winacl.SecureEmptyPrivateDirectory(directory); err != nil {
 		currentSID, _ := winacl.CurrentProcessSID()
+		aclOutput, _ := exec.Command("icacls.exe", directory).CombinedOutput()
 		t.Fatalf(
-			"secure Windows private directory %q: %v (noReparse=%t currentSID=%q existingACL=%v)",
+			"secure Windows private directory %q: %v (noReparse=%t currentSID=%q existingACL=%v icacls=%q)",
 			directory,
 			err,
 			winacl.NoReparseComponents(directory),
 			currentSID,
 			winacl.ValidatePrivateDirectory(directory),
+			aclOutput,
 		)
 	}
 	return directory

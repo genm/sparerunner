@@ -1,6 +1,7 @@
 package windows_test
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,12 +131,18 @@ func TestPowerShellPackagingParsesOnWindows(t *testing.T) {
 func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
 	t.Helper()
 	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
-	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+	prefix := "$args = 0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") }\n"
+	if err := os.WriteFile(scriptPath, []byte(prefix+script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
 	commandArguments = append(commandArguments, arguments...)
-	return exec.Command("powershell.exe", commandArguments...)
+	command := exec.Command("powershell.exe", commandArguments...)
+	command.Env = append(os.Environ(), fmt.Sprintf("TEWAKE_TEST_PS_ARG_COUNT=%d", len(arguments)))
+	for index, argument := range arguments {
+		command.Env = append(command.Env, fmt.Sprintf("TEWAKE_TEST_PS_ARG_%d=%s", index, argument))
+	}
+	return command
 }
 
 func TestOwnershipMarkersRejectForeignCrossRoleCrossInstallAndTamperedRoots(
@@ -144,12 +151,7 @@ func TestOwnershipMarkersRejectForeignCrossRoleCrossInstallAndTamperedRoots(
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows ACL and ownership marker semantics require Windows")
 	}
-	command := exec.Command(
-		"powershell.exe",
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		`
+	command := powershellFileCommand(t, `
 . $args[0]
 . $args[1]
 $ErrorActionPreference = "Stop"
@@ -162,7 +164,12 @@ function Get-Sddl([string] $path) {
         [System.Security.AccessControl.AccessControlSections]::Group -bor
         [System.Security.AccessControl.AccessControlSections]::Access
     )
-    return (Get-Acl -LiteralPath $path).GetSecurityDescriptorSddlForm(
+    $security = if ((Get-Item -LiteralPath $path).PSIsContainer) {
+        [System.IO.Directory]::GetAccessControl($path)
+    } else {
+        [System.IO.File]::GetAccessControl($path)
+    }
+    return $security.GetSecurityDescriptorSddlForm(
         $sections
     )
 }
@@ -177,7 +184,12 @@ function Get-TreeSnapshot([string] $root) {
                     [System.Security.AccessControl.AccessControlSections]::Group -bor
                     [System.Security.AccessControl.AccessControlSections]::Access
                 )
-                $sddl = (Get-Acl -LiteralPath $_.FullName).GetSecurityDescriptorSddlForm(
+                $security = if ($_.PSIsContainer) {
+                    [System.IO.Directory]::GetAccessControl($_.FullName)
+                } else {
+                    [System.IO.File]::GetAccessControl($_.FullName)
+                }
+                $sddl = $security.GetSecurityDescriptorSddlForm(
                     $sections
                 )
                 if ($_.PSIsContainer) {
@@ -296,12 +308,7 @@ func TestOwnedRootPostPublishFailureRollsBackOnlyVerifiedPublication(
 	if runtime.GOOS != "windows" {
 		t.Skip("Windows ACL and ownership marker semantics require Windows")
 	}
-	command := exec.Command(
-		"powershell.exe",
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		`
+	command := powershellFileCommand(t, `
 . $args[0]
 . $args[1]
 $ErrorActionPreference = "Stop"
@@ -436,12 +443,7 @@ func TestSafeTreePurgeRejectsNestedJunctionWithoutDeletingExternalCanary(t *test
 	if err != nil {
 		t.Fatalf("create test junction: %v\n%s", err, output)
 	}
-	command := exec.Command(
-		"powershell.exe",
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		`. $args[0]; try { Remove-TewakeTreeNoReparse -Root $args[1]; exit 10 } catch { if (Test-Path -LiteralPath $args[2]) { exit 0 }; exit 11 }`,
+	command := powershellFileCommand(t, `. $args[0]; try { Remove-TewakeTreeNoReparse -Root $args[1]; exit 10 } catch { if (Test-Path -LiteralPath $args[2]) { exit 0 }; exit 11 }`,
 		packagingPath(t, "safe-tree.ps1"),
 		root,
 		canary,

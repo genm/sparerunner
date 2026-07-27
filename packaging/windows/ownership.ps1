@@ -70,6 +70,33 @@ function Get-TewakePrivateSids {
     return ,$Required
 }
 
+function Get-TewakePathSecurity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+        [switch] $Directory
+    )
+    if ($Directory) {
+        return [System.IO.Directory]::GetAccessControl($Path)
+    }
+    return [System.IO.File]::GetAccessControl($Path)
+}
+
+function Set-TewakePathSecurity {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string] $Path,
+        [Parameter(Mandatory = $true)]
+        [System.Security.AccessControl.FileSystemSecurity] $Security,
+        [switch] $Directory
+    )
+    if ($Directory) {
+        [System.IO.Directory]::SetAccessControl($Path, [System.Security.AccessControl.DirectorySecurity] $Security)
+        return
+    }
+    [System.IO.File]::SetAccessControl($Path, [System.Security.AccessControl.FileSecurity] $Security)
+}
+
 function Set-TewakePrivateAcl {
     param(
         [Parameter(Mandatory = $true)]
@@ -104,7 +131,7 @@ function Set-TewakePrivateAcl {
         )
         [void] $Security.AddAccessRule($Rule)
     }
-    Set-Acl -LiteralPath $Path -AclObject $Security -ErrorAction Stop
+    Set-TewakePathSecurity -Path $Path -Security $Security -Directory:$Directory
 }
 
 function Assert-TewakePrivateAcl {
@@ -123,7 +150,7 @@ function Assert-TewakePrivateAcl {
         throw "A Tewake private path has the wrong filesystem identity."
     }
     $Required = Get-TewakePrivateSids -OwnerSid $OwnerSid
-    $Observed = Get-Acl -LiteralPath $Path -ErrorAction Stop
+    $Observed = Get-TewakePathSecurity -Path $Path -Directory:$Directory
     $ObservedOwner = $Observed.GetOwner(
         [System.Security.Principal.SecurityIdentifier]
     )
