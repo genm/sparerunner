@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -32,11 +33,12 @@ func testCredential(t *testing.T) AppCredential {
 }
 
 type authorityRoundTripper struct {
-	t             *testing.T
-	private       bool
-	unsafeGroup   bool
-	createdGroup  bool
-	scaleSetCalls int
+	t                *testing.T
+	private          bool
+	unsafeGroup      bool
+	createdGroup     bool
+	scaleSetCalls    int
+	runnerGroupPages map[string]string
 }
 
 func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.Response, error) {
@@ -56,7 +58,12 @@ func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.
 			body = `{"private":false,"visibility":"public"}`
 		}
 	case strings.HasSuffix(path, "/actions/runner-groups") && request.Method == http.MethodGet:
-		if transport.unsafeGroup {
+		if transport.runnerGroupPages != nil {
+			body = transport.runnerGroupPages[request.URL.Query().Get("page")]
+			if body == "" {
+				body = `{"runner_groups":[]}`
+			}
+		} else if transport.unsafeGroup {
 			body = `{"runner_groups":[{"id":7,"name":"Default","visibility":"all","allows_public_repositories":true}]}`
 		} else {
 			body = `{"runner_groups":[{"id":7,"name":"Default","visibility":"private","allows_public_repositories":false}]}`
@@ -149,6 +156,61 @@ func TestAuthorityCreatesPrivateOrganizationGroupAndScaleSet(t *testing.T) {
 	}
 	if result.ScaleSetID != 99 || result.RunnerGroupID != 8 || !transport.createdGroup {
 		t.Fatalf("verified target = %+v groupCreated=%v", result, transport.createdGroup)
+	}
+}
+
+func TestAuthorityPaginatesRunnerGroupsBeforeProvisioning(t *testing.T) {
+	credential := testCredential(t)
+	store := &MemoryAppCredentialStore{}
+	if err := store.Save(credential); err != nil {
+		t.Fatal(err)
+	}
+	pageOne := make([]map[string]any, 100)
+	for index := range pageOne {
+		pageOne[index] = map[string]any{
+			"id":                         index + 100,
+			"name":                       fmt.Sprintf("group-%d", index),
+			"visibility":                 "private",
+			"allows_public_repositories": false,
+		}
+	}
+	pageOneJSON, err := json.Marshal(map[string]any{"runner_groups": pageOne})
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := &authorityRoundTripper{
+		t:       t,
+		private: true,
+		runnerGroupPages: map[string]string{
+			"1": string(pageOneJSON),
+			"2": `{"runner_groups":[{"id":777,"name":"tewake-target","visibility":"private","allows_public_repositories":false}]}`,
+		},
+	}
+	authority, err := NewAuthority(AuthorityOptions{
+		CredentialStore: store,
+		HTTPClient:      &http.Client{Transport: transport},
+		CreateScaleSet: func(context.Context, AppClientConfig, ScaleSet) (ScaleSet, error) {
+			transport.scaleSetCalls++
+			return ScaleSet{ID: 99, Name: "tewake", RunnerGroupID: 777, Labels: []string{"tewake"}}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{
+		TargetID:           "target",
+		InstallationID:     "42",
+		ScopeKind:          "organization",
+		Scope:              "acme",
+		ScaleSetName:       "tewake",
+		RunnerProfileID:    "profile-tewake",
+		RunnerProfileLabel: "tewake",
+	})
+	if !errors.Is(err, ErrGitHubTargetConflict) {
+		t.Fatalf("paginated conflict error = %v", err)
+	}
+	if transport.scaleSetCalls != 0 || transport.createdGroup {
+		t.Fatalf("provider was mutated after paginated conflict: scaleSets=%d createdGroup=%v", transport.scaleSetCalls, transport.createdGroup)
 	}
 }
 

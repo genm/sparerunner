@@ -448,6 +448,7 @@ tasks:
     status: in_progress
     notes:
       - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows credential adapters remain pending for TWK-014/008/009."
+      - "2026-07-27: Runner-group authority now paginates every provider page and rejects a truncated 100-page view before provisioning; a second-page conflict test proves no scale set or group mutation occurs after the complete private-scope check."
     acceptance:
       - One user-owned GitHub App can be installed into and managed across two or more accounts.
       - Manifest callback state is signed, single-use, bounded, and never leaks the App key or installation token.
