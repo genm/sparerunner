@@ -502,7 +502,9 @@ tasks:
       - output/release-evidence
     ci_targets: [lint, test, build, e2e, deploy-check]
     pr_order: 17
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-27: Added the TWK-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `tewake.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
     acceptance:
       - Private generic and OS-specific jobs route correctly across all three OSes.
       - Public target creation and unsafe runner-group access fail closed.
