@@ -83,6 +83,9 @@ parallelism, and re-registering broken runners.
 3. Create a GitHub Target for a private repository or organization scope.
 4. Reject public scopes, unverifiable visibility, unsafe runner-group access, and
    overlapping repository-/organization-level routing.
+5. Create a new Tewake-owned scale set for that Target. Reject attaching a
+   pre-existing/shared scale set, and reject binding one scale set to multiple
+   Targets.
 
 ### Run a job
 
@@ -218,6 +221,58 @@ parallelism, and re-registering broken runners.
   local authority failure behind a reconnect loop.
 - If GitHub returns a 5xx response, the UI and API shall retain last-known data and
   mark it stale instead of returning an empty healthy collection.
+- A JIT generation or accepted-start ambiguity with no proof that the official
+  runner reached `Running` or `Cleaning` shall remain fenced until the exact
+  provider runner has been queried, removed when present, and then observed absent
+  twice. The two post-removal absence observations shall be separated by the
+  durable confirmation interval and bound to the same Agent snapshot authority.
+- An Agent `Running` update shall prove only local process start. GitHub pickup
+  shall require an exact matching `JobStarted`, or an exact matching
+  `JobCompleted` with a known non-`canceled` result, over scale set, runner ID,
+  and runner name. When GitHub supplies a non-zero runner request ID it shall
+  also match the JIT attempt. A zero runner request ID may fall back only to a
+  provider runner ID and name that identify exactly one durable JIT attempt in
+  that scale set. Availability and assignment events shall always require a
+  non-zero runner request ID. `JobCompleted(result: "canceled")` shall not prove
+  pickup because it is also emitted for an assignment that timed out before
+  runner acquisition.
+- Reconciled provider absence shall never rewind or reuse the old terminal
+  execution. After the exact terminal outbox update, a fresh, non-replayed
+  `JobAvailable` message under current poll authority shall first persist only a
+  zero-capacity cleanup intent and proposed replacement ID. It shall not create
+  the replacement execution, reservation, acquire attempt, or JIT configuration
+  until the old provider runner is removed and observed absent twice. A
+  `JobAvailable` that races ahead of the terminal outbox shall remain
+  unacknowledged and create no durable message or intent. The same transaction
+  rollback shall apply while recovery admission is disabled, the concrete slot is
+  occupied, or the message's poll authority is stale, so a later redelivery
+  remains fresh enough to create or rearm recovery state.
+- A zero-capacity poll shall separate intent acknowledgement from provider
+  deletion and every provider absence step so late exact pickup evidence can be
+  committed first. Late pickup shall discard the proposed replacement and keep
+  the old claim. Final confirmed absence shall atomically create one replacement
+  execution, reservation, and acquire attempt with a durable reconciled marker,
+  then dispatch it without another long poll. After a Controller crash, only a
+  Pending claim carrying that exact marker and validated lineage may resume
+  before the first long poll; an ordinary pre-acknowledgement Pending claim shall
+  remain poll-first.
+- A terminal Agent snapshot alone shall not release a Controller slot or prove
+  that a runner started. The exact durable terminal outbox update owns terminal
+  execution mutation and slot release. An authenticated `CleanupFailed` or
+  `Quarantined` snapshot or tombstone may latch node quarantine earlier so
+  capacity remains zero while the outbox is replayed.
+- A replacement Agent snapshot shall be rejected before durable projection when
+  its capture interval overlaps any command dispatch for the same Node. Snapshot
+  commit and command dispatch shall revalidate one current Agent incarnation under
+  the same per-Node lifecycle boundary. This applies to ordinary Prepare, Start,
+  and Cancel as well as Prepare replay and reconciliation Cancel; recovery replay
+  shall also require the exact current snapshot digest and Controller epoch in
+  durable storage.
+- Snapshot ACK and disconnect persistence shall not hold the per-Node lifecycle
+  lock. A stalled ACK shall remain unavailable for commands but be supersedable
+  by a newer authenticated handshake. Reconnect during unresolved disconnect
+  persistence shall fail closed explicitly and become retryable after commit;
+  Controller shutdown shall cancel the persistence operation.
 - After a controller restart, capacity shall begin at zero and return independently
   for each reconciled online node without waiting for offline nodes.
 

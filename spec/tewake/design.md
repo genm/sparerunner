@@ -118,6 +118,14 @@ Target creation verifies private visibility and safe runner-group access. A
 repository-level target and organization-level target may not route the same
 repository/label pair.
 
+Each scale set is created and exclusively managed by exactly one Tewake Target;
+attaching an arbitrary pre-existing or shared scale set is not supported. The
+Controller store enforces a unique scale-set-to-Target binding. This ownership
+contract is required because GitHub runner records do not expose
+`RunnerRequestID`: generation-ambiguity cleanup may use only the deterministic
+Tewake runner name inside that exclusively owned scale set, followed by two
+durable absence reads before clearing the fence.
+
 ### Runner Profile
 
 A profile owns the externally visible scale-set label and internal platform
@@ -425,6 +433,94 @@ snapshot before activating the session or acknowledging it. This is the evidence
 used to resolve an ambiguous secret-bearing command write; absence is never
 inferred from a connection alone, and a new JIT configuration is not generated
 until the previous command is proven unaccepted or terminal.
+
+An Agent snapshot and its durable outbox have distinct authority. A terminal
+snapshot may prove that the local runtime no longer exists, but it does not mutate
+the Controller execution to a terminal state or release its slot. The exact
+`execution_update` outbox record is the sole owner of those mutations and is
+processed in Agent sequence order. Authenticated `CleanupFailed` or `Quarantined`
+snapshot evidence may latch the node quarantine before the matching outbox record;
+this is a deliberate fail-closed capacity guard, not an alternate terminal-state
+owner. A `Released` or `Failed` snapshot without its exact terminal outbox record
+does not make the node idle.
+
+Snapshot capture and command dispatch are linearized per Node. The Controller
+records a command-sequence baseline before acknowledging `hello`, because the
+Agent constructs its journal snapshot only after that acknowledgement. A snapshot
+is rejected before the durable snapshot consumer when any command was in flight
+at capture start, began during capture, or remains in flight at commit. Snapshot
+commit and command dispatch share the same Node lifecycle lock and revalidate the
+current projected Agent actor. Therefore a replacement snapshot cannot erase a
+command accepted by an older overlapping Agent process, and an older actor cannot
+receive a command after a replacement snapshot wins. A newer valid handshake
+supersedes an older incomplete capture. Recovery-only Prepare replay additionally
+requires the same exact current snapshot digest and Controller epoch in both the
+broker and SQLite transaction.
+
+The lifecycle lock covers the atomic full-snapshot store transition, but does not
+extend into protocol ACK I/O or disconnect persistence. After snapshot commit
+and actor replacement, the snapshot ACK is written without the lock; the actor
+remains unavailable for commands until that ACK succeeds, and another handshake
+can supersede a stalled write. Disconnect projection records an in-flight fence
+under the lock, performs the SQLite consumer call outside it using the Controller
+lifetime context, then clears the fence under the lock. A reconnect that arrives
+while this projection is unresolved receives an explicit fail-closed error and
+may retry; it never waits behind the store call. Controller shutdown cancels the
+lifetime context.
+
+For an accepted `start`, only an exact durable `Running` or `Cleaning` Agent update
+proves that the official runner actually started. A later `Released`, `Failed`, or
+`CleanupFailed` observation without that history instead identifies a lost-JIT
+case: local recovery cleaned a prepared runtime after accepting the command but
+before a process start was proven. Controller restart and Agent acknowledgement may
+prune the Agent-side command and runner journal, so the Controller retains issued
+command and execution-update history as the durable source for this distinction.
+
+Lost-JIT provider cleanup is exact and ordered. Tewake queries the runner identity
+bound to the original scale set and attempt, removes that runner when present, then
+requires two post-removal absence reads separated by the durable confirmation
+interval under unchanged Controller, GitHub-session, and Agent-snapshot authority.
+The DELETE response itself and any pre-DELETE absence never count as absence
+confirmation. Cleanup failure keeps the slot reserved, the node quarantined, and
+advertised capacity at zero even after provider absence is proven.
+
+An Agent `Running` update proves that the local runner process started; it does
+not prove that GitHub assigned work to that process. Pickup authority is an exact
+`JobStarted`, or an exact `JobCompleted` with a known non-`canceled` result, whose
+scale set, runner ID, and runner name all match the JIT attempt. Availability and
+assignment require a non-zero runner request ID. GitHub lifecycle events may omit
+that ID; a non-zero value must match the attempt, while zero may fall back only
+when the exact provider runner ID and name identify one durable attempt in the
+scale set. A partial unique index on provider runner identity and a single
+read-transaction correlation query make ambiguity fail closed.
+`JobCompleted(result: "canceled")` is not pickup authority because GitHub emits
+that event when a scale-set assignment times out and the job is requeued.
+
+Provider reconciliation never rewinds the old terminal execution or delivers a
+second JIT configuration for it. Once the exact terminal outbox update is durable,
+a fresh, non-replayed `JobAvailable` from the current poll session persists only
+an unpicked-requeue intent: the old terminal execution remains the claim identity,
+the proposed replacement ID has no execution row or reservation, and capacity
+stays zero. If the fresh availability races ahead of the terminal outbox update,
+the whole message transaction is rolled back and left unacknowledged for
+redelivery. The same rollback applies while recovery admission is temporarily
+disabled, the concrete slot is occupied, or the poll authority is stale; none of
+those conditions may consume the one fresh message needed to create or rearm
+recovery state.
+
+The Controller commits and acknowledges that intent before touching the provider.
+It then performs a zero-capacity poll before the first exact query/delete and
+between every destructive or absence-confirmation step. A late exact pickup event
+keeps the old claim and discards the proposed replacement. Only two post-removal
+absence reads under unchanged Controller, GitHub-session, and Agent-snapshot
+authority atomically create the replacement execution, reservation, and next
+acquire attempt. That acquire is durably marked `reconciled_pending`, and startup
+validates its exact claim, source availability, old JIT absence, and attempt
+lineage before driving it ahead of the first long poll. An ordinary pre-ACK
+`pending` acquire remains poll-first. This distinction preserves immediate
+dispatch even if the Controller stops after the final absence transaction commits
+but before the in-memory projection advances. Replayed availability cannot create
+an intent or rearm the claim.
 
 The JIT lease records the required verify-then-deliver order. Delivery before the
 exec-boundary workspace check invokes no consumer, a failed check permanently
