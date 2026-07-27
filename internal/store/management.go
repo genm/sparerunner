@@ -123,6 +123,11 @@ const (
 	AuditActionNodeDrained              AuditAction = "node_drained"
 	AuditActionNodeResumed              AuditAction = "node_resumed"
 	AuditActionNodeRevoked              AuditAction = "node_revoked"
+	// Node-owner availability changes are adopted from an authenticated Agent
+	// session rather than a management mutation, so their actor is always the
+	// node itself.
+	AuditActionNodeAvailabilityChanged    AuditAction = "node_availability_changed"
+	AuditActionNodeTargetExclusionChanged AuditAction = "node_target_exclusion_changed"
 
 	AuditOutcomeSucceeded AuditOutcome = "succeeded"
 	AuditOutcomeRejected  AuditOutcome = "rejected"
@@ -2138,7 +2143,9 @@ func validateAuditRecord(record AuditRecord) error {
 		AuditActionNodeEnrolled,
 		AuditActionNodeDrained,
 		AuditActionNodeResumed,
-		AuditActionNodeRevoked:
+		AuditActionNodeRevoked,
+		AuditActionNodeAvailabilityChanged,
+		AuditActionNodeTargetExclusionChanged:
 	default:
 		return fmt.Errorf("%w: action is not allowlisted", ErrManagementAuditRecord)
 	}
@@ -2244,6 +2251,18 @@ func validateAuditActorOutcome(record AuditRecord) error {
 				ErrManagementAuditRecord,
 			)
 		}
+	case AuditActionNodeAvailabilityChanged,
+		AuditActionNodeTargetExclusionChanged:
+		// The node owner edits this state on their own computer and the
+		// controller only adopts what the authenticated session reported, so a
+		// management admin can never be the actor for it.
+		if record.Actor != AuditActorNode ||
+			record.Outcome != AuditOutcomeSucceeded {
+			return fmt.Errorf(
+				"%w: node availability adoption actor or outcome is invalid",
+				ErrManagementAuditRecord,
+			)
+		}
 	case AuditActionNodeEnrolled:
 		if record.Actor != AuditActorJoinCode ||
 			record.Outcome != AuditOutcomeSucceeded {
@@ -2281,7 +2300,9 @@ func validateAuditActionResource(record AuditRecord) error {
 		AuditActionAgentSessionRejected,
 		AuditActionNodeDrained,
 		AuditActionNodeResumed,
-		AuditActionNodeRevoked:
+		AuditActionNodeRevoked,
+		AuditActionNodeAvailabilityChanged,
+		AuditActionNodeTargetExclusionChanged:
 		expected = AuditResourceNode
 	default:
 		return fmt.Errorf(

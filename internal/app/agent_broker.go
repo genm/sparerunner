@@ -28,6 +28,7 @@ var (
 	ErrAgentSnapshotConsumerRequired   = errors.New("agent snapshot consumer is required")
 	ErrAgentReadinessConsumerRequired  = errors.New("agent readiness consumer is required")
 	ErrExecutionUpdateConsumerRequired = errors.New("execution update consumer is required")
+	ErrAgentOwnerStateConsumerRequired = errors.New("agent owner state consumer is required")
 	ErrAgentCommandCommit              = errors.New("agent command commit failed")
 	ErrAgentSnapshotCommit             = errors.New("agent snapshot commit failed")
 	ErrExecutionUpdateCommit           = errors.New("execution update commit failed")
@@ -168,6 +169,11 @@ func (consumer AgentDisconnectConsumerFunc) HandleAgentDisconnect(
 // Eligibility is deliberately not mandatory: it is informational display data,
 // not a correctness or security boundary, so its absence degrades a heartbeat
 // ack to carrying no eligible-target list rather than failing the session.
+//
+// OwnerState is optional in the same sense as Disconnects — a broker without a
+// durable projection has nothing to adopt into — but it is not best-effort: a
+// heartbeat that reports an owner change with no consumer configured fails
+// closed rather than silently dropping the change.
 type AgentConsumers struct {
 	Commands         AgentCommandConsumer
 	Snapshot         AgentSnapshotConsumer
@@ -175,30 +181,68 @@ type AgentConsumers struct {
 	ExecutionUpdates ExecutionUpdateConsumer
 	Disconnects      AgentDisconnectConsumer
 	Eligibility      AgentEligibilityConsumer
+	OwnerState       AgentOwnerStateConsumer
+}
+
+// AgentOwnerStateRecord binds one mid-session node-owner availability change to
+// the exact full Agent journal that activated this session. Intent "" and a nil
+// ExcludedTargets each mean "no change reported"; a non-nil ExcludedTargets is
+// the authoritative full set, including an empty one.
+type AgentOwnerStateRecord struct {
+	NodeID             domain.NodeID
+	SnapshotDigest     string
+	AvailabilityIntent domain.AvailabilityIntent
+	ExcludedTargets    []domain.TargetID
+}
+
+// AgentOwnerStateConsumer owns the durable adoption of node-owner availability
+// state reported on a heartbeat. It runs under the per-node lifecycle lock
+// before the acknowledgement, so a failed adoption fails the heartbeat instead
+// of leaving the owner's change unrecorded but acknowledged.
+type AgentOwnerStateConsumer interface {
+	HandleAgentOwnerState(context.Context, AgentOwnerStateRecord) error
+}
+
+type AgentOwnerStateConsumerFunc func(context.Context, AgentOwnerStateRecord) error
+
+func (consumer AgentOwnerStateConsumerFunc) HandleAgentOwnerState(
+	ctx context.Context,
+	record AgentOwnerStateRecord,
+) error {
+	if consumer == nil {
+		return ErrAgentOwnerStateConsumerRequired
+	}
+	return consumer(ctx, record)
 }
 
 // AgentEligibilityConsumer reports which configured GitHub Targets currently
 // match a node's platform. It is read-only display data derived from
-// configuration, never a scheduling decision or a capacity guarantee.
+// configuration, never a scheduling decision or a capacity guarantee. The node
+// identity is required because each entry also reports whether the controller
+// has durably adopted that Target as excluded for this node.
 type AgentEligibilityConsumer interface {
 	EligibleTargets(
 		ctx context.Context,
+		nodeID domain.NodeID,
 		os domain.OperatingSystem,
 		architecture domain.Architecture,
 	) ([]transport.EligibleTarget, error)
 }
 
 type AgentEligibilityConsumerFunc func(
-	context.Context, domain.OperatingSystem, domain.Architecture,
+	context.Context, domain.NodeID, domain.OperatingSystem, domain.Architecture,
 ) ([]transport.EligibleTarget, error)
 
 func (consumer AgentEligibilityConsumerFunc) EligibleTargets(
-	ctx context.Context, os domain.OperatingSystem, architecture domain.Architecture,
+	ctx context.Context,
+	nodeID domain.NodeID,
+	os domain.OperatingSystem,
+	architecture domain.Architecture,
 ) ([]transport.EligibleTarget, error) {
 	if consumer == nil {
 		return nil, nil
 	}
-	return consumer(ctx, os, architecture)
+	return consumer(ctx, nodeID, os, architecture)
 }
 
 // AgentSnapshot is the authenticated, non-secret journal evidence used to
@@ -1147,6 +1191,9 @@ func cloneAgentSnapshot(snapshot AgentSnapshot) AgentSnapshot {
 	snapshot.Commands = append([]domain.Command(nil), snapshot.Commands...)
 	snapshot.Observations = append([]transport.AgentExecutionObservation(nil), snapshot.Observations...)
 	snapshot.CleanupTombstones = append([]transport.AgentCleanupTombstone(nil), snapshot.CleanupTombstones...)
+	// append to a nil slice preserves nil, which is load-bearing here: nil
+	// ExcludedTargets means "no change reported", distinct from an empty set.
+	snapshot.ExcludedTargets = append([]domain.TargetID(nil), snapshot.ExcludedTargets...)
 	return snapshot
 }
 
@@ -1196,8 +1243,94 @@ func (actor *agentSessionActor) handleHeartbeat(envelope transport.Envelope) err
 		actor.armReadinessLeaseLocked(receivedAt)
 	}
 	actor.stateMu.Unlock()
+	if err := actor.adoptOwnerStateUnderLifecycle(heartbeat); err != nil {
+		lifecycle.Unlock()
+		return err
+	}
 	lifecycle.Unlock()
 	return actor.acknowledgeHeartbeat(envelope.MessageID)
+}
+
+// adoptOwnerStateUnderLifecycle commits a mid-session node-owner availability
+// change before the heartbeat is acknowledged. Excluding is subtractive and is
+// already locally effective on the node; adopting it here is what makes the
+// controller stop advertising that Target's capacity. A failed commit fails the
+// heartbeat rather than acknowledging a change that was never recorded.
+//
+// The caller holds the per-node lifecycle lock and has already proven this actor
+// is the currently projected session.
+func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
+	heartbeat transport.AgentHeartbeat,
+) error {
+	actor.stateMu.Lock()
+	intent := heartbeat.AvailabilityIntent
+	if intent == actor.snapshot.AvailabilityIntent {
+		intent = ""
+	}
+	var exclusions []domain.TargetID
+	// A nil heartbeat field is "no change reported". A present set that already
+	// matches the last-known one is a steady-state repeat, not a change. A nil
+	// last-known set is "this session never reported one", which is not the same
+	// as an empty set: adopt so a stale durable row cannot outlive the session
+	// that stopped reporting it.
+	if heartbeat.ExcludedTargets != nil &&
+		(actor.snapshot.ExcludedTargets == nil ||
+			!sameTargetIDSet(actor.snapshot.ExcludedTargets, heartbeat.ExcludedTargets)) {
+		exclusions = append([]domain.TargetID{}, heartbeat.ExcludedTargets...)
+	}
+	if intent == "" && exclusions == nil {
+		actor.stateMu.Unlock()
+		return nil
+	}
+	snapshot := cloneAgentSnapshot(actor.snapshot)
+	actor.stateMu.Unlock()
+
+	if actor.broker.consumers.OwnerState == nil {
+		return ErrAgentOwnerStateConsumerRequired
+	}
+	snapshotDigest, err := transport.AgentSnapshotDigest(snapshot)
+	if err != nil {
+		return ErrAgentProtocol
+	}
+	if err := actor.broker.consumers.OwnerState.HandleAgentOwnerState(
+		actor.ctx,
+		AgentOwnerStateRecord{
+			NodeID:             actor.nodeID,
+			SnapshotDigest:     snapshotDigest,
+			AvailabilityIntent: intent,
+			ExcludedTargets:    exclusions,
+		},
+	); err != nil {
+		return ErrAgentSnapshotCommit
+	}
+	actor.stateMu.Lock()
+	if intent != "" {
+		actor.snapshot.AvailabilityIntent = intent
+	}
+	if exclusions != nil {
+		actor.snapshot.ExcludedTargets = append([]domain.TargetID{}, exclusions...)
+	}
+	actor.stateMu.Unlock()
+	return nil
+}
+
+// sameTargetIDSet compares two exclusion sets by membership. Both sides are
+// duplicate-free by transport validation, so equal length plus containment is a
+// set equality test and does not depend on the order the owner edited them in.
+func sameTargetIDSet(left, right []domain.TargetID) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	members := make(map[domain.TargetID]struct{}, len(left))
+	for _, targetID := range left {
+		members[targetID] = struct{}{}
+	}
+	for _, targetID := range right {
+		if _, found := members[targetID]; !found {
+			return false
+		}
+	}
+	return true
 }
 
 // acknowledgeHeartbeat piggybacks the current eligible-target list onto the
@@ -1218,7 +1351,7 @@ func (actor *agentSessionActor) acknowledgeHeartbeat(messageID string) error {
 		nodeOS, nodeArch := actor.snapshot.OS, actor.snapshot.Arch
 		actor.stateMu.Unlock()
 		if targets, err := actor.broker.consumers.Eligibility.EligibleTargets(
-			actor.ctx, nodeOS, nodeArch,
+			actor.ctx, actor.nodeID, nodeOS, nodeArch,
 		); err == nil {
 			if targets == nil {
 				targets = []transport.EligibleTarget{}

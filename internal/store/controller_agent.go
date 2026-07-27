@@ -26,7 +26,17 @@ type NodeAgentSnapshot struct {
 	Architecture      domain.Architecture
 	RunnerVersion     string
 	NativeRunnerReady bool
-	Journal           AgentSnapshot
+	// AvailabilityIntent and ExcludedTargets are node-owner-owned observed
+	// state, adopted inside the snapshot transaction. Claim authority is keyed
+	// to the accepted snapshot digest, so persisting them here makes adoption
+	// strictly precede any capacity advertisement after a reconnect.
+	//
+	// An empty intent and a nil ExcludedTargets both mean "no change reported"
+	// and keep whatever was previously adopted; a non-nil ExcludedTargets is the
+	// authoritative full set, including an empty one.
+	AvailabilityIntent domain.AvailabilityIntent
+	ExcludedTargets    []domain.TargetID
+	Journal            AgentSnapshot
 }
 
 // AgentExecutionUpdate is the persistence-safe form of one durable Agent outbox
@@ -409,6 +419,13 @@ func (s *ControllerStore) RecordAgentSnapshot(ctx context.Context, snapshot Node
 	if err := validateNodeAgentSnapshot(snapshot); err != nil {
 		return err
 	}
+	// Adopting owner state can append audit evidence, which is fail-closed
+	// authority. A snapshot that actually carries owner state must not be
+	// accepted while audit persistence is degraded.
+	if (snapshot.AvailabilityIntent != "" || snapshot.ExcludedTargets != nil) &&
+		!s.ManagementAuditHealthy() {
+		return ErrManagementAuditPersistence
+	}
 	snapshotDigest, err := nodeAgentSnapshotDigest(snapshot)
 	if err != nil {
 		return err
@@ -534,7 +551,24 @@ func (s *ControllerStore) RecordAgentSnapshot(ctx context.Context, snapshot Node
 			return err
 		}
 	}
-	return tx.Commit()
+	// Owner-editable observed state is adopted in this same transaction. A nil
+	// ExcludedTargets is "no change reported" and keeps the previously adopted
+	// rows; a non-nil set replaces them wholesale.
+	var exclusions *[]domain.TargetID
+	if snapshot.ExcludedTargets != nil {
+		set := snapshot.ExcludedTargets
+		exclusions = &set
+	}
+	adoption, err := adoptNodeOwnerState(
+		ctx, tx, snapshot.NodeID, snapshot.AvailabilityIntent, exclusions,
+		receivedAt)
+	if err != nil {
+		return err
+	}
+	if !adoption.audited() {
+		return tx.Commit()
+	}
+	return s.commitWithManagementAudit(tx, s.beforeManagementMutationCommit)
 }
 
 func nodeAgentSnapshotDigest(snapshot NodeAgentSnapshot) (string, error) {
@@ -895,6 +929,15 @@ func validateNodeAgentSnapshot(snapshot NodeAgentSnapshot) error {
 		(strings.TrimSpace(snapshot.RunnerVersion) != snapshot.RunnerVersion ||
 			len(snapshot.RunnerVersion) > 64) {
 		return errors.New("agent snapshot runner version is invalid")
+	}
+	var exclusions *[]domain.TargetID
+	if snapshot.ExcludedTargets != nil {
+		set := snapshot.ExcludedTargets
+		exclusions = &set
+	}
+	if err := validateNodeOwnerState(
+		snapshot.AvailabilityIntent, exclusions); err != nil {
+		return err
 	}
 	commandIDs := make(map[domain.CommandID]struct{}, len(snapshot.Journal.Commands))
 	for _, command := range snapshot.Journal.Commands {
