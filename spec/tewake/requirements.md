@@ -10,7 +10,10 @@ Audience: individual developers and small trusted teams
 
 Tewake shall let a user join Windows, macOS, and Linux computers they already own
 to one LAN-first fleet, then distribute GitHub Actions jobs from multiple private
-repositories and organizations across the available computers.
+repositories and organizations across the available computers. A stock self-hosted
+runner registers against exactly one org or repo; Tewake's distinguishing value is
+one fleet that waits on many private scopes at once while each machine's owner
+casually controls which of those scopes it serves.
 
 The product replaces the repeated manual workflow of SSHing into each computer,
 downloading and registering a runner per scope, installing a service, tuning
@@ -58,6 +61,10 @@ parallelism, and re-registering broken runners.
 - As a Node owner who lives in a keyboard launcher, I want the same stop and resume
   control from Raycast so that I do not have to reach for the tray, and so that the
   launcher gives me no privilege and no credential the tray does not have.
+- As a Node owner, I want to see which org/repo scopes my computer currently waits
+  on and exclude specific ones from the tray, the Raycast launcher, or the CLI, so
+  that I can casually keep this machine out of one project without stopping the
+  rest of the fleet or asking the Administrator to reconfigure anything.
 - As an Administrator, I want a one-job runner identity and disposable workspace so
   that jobs do not leave ordinary runner state behind.
 
@@ -126,6 +133,16 @@ parallelism, and re-registering broken runners.
 5. A job that is already running continues to completion and normal verified cleanup.
 6. The owner selects "Resume accepting jobs", and admission returns only after the
    controller confirms the node is otherwise active, reconciled, and not quarantined.
+7. The tray also lists every GitHub Target whose Runner Profile matches this node's
+   platform, so the owner sees exactly which org/repo scopes the node currently
+   waits on.
+8. The owner excludes one Target from that list. Exclusion is subtractive, so it is
+   locally effective the moment the agent durably records it; the tray shows it as
+   "excluded" once the controller's adoption is echoed back, and "excluded —
+   syncing" until then.
+9. The owner later re-includes that Target. Inclusion is additive, so it stays
+   pending and ineffective until the controller's adopted echo confirms it, exactly
+   like resuming acceptance.
 
 The same status and the same two actions are available from the Raycast launcher on
 macOS and from `tewake node` on every supported OS. Every desktop surface performs the
@@ -157,6 +174,16 @@ identical operation against the local agent, so none of them is a privileged pat
 - If a launcher integration cannot find an installed, compatible Tewake CLI on the
   computer, it presents an actionable installation error instead of a silent no-op or
   an assumed state.
+- If the node owner excludes a Target while disconnected from the controller, the
+  exclusion still records locally and takes effect immediately, because it has no
+  session to command and already advertises zero capacity for that scope; the
+  agent reports and syncs it on reconnect. Excluding an unknown or malformed
+  Target ID offline is a safe no-op rendered as not-currently-eligible rather than
+  an error.
+- If a stale controller still dispatches a start for a Target the node owner has
+  since excluded, the agent refuses the start at the exec boundary as an explicit
+  classified failure (`target_excluded`) rather than a transport rejection, and a
+  job whose JIT has already crossed that boundary is left running untouched.
 
 ## Constraints
 
@@ -214,6 +241,18 @@ identical operation against the local agent, so none of them is a privileged pat
 - The agent's local control endpoint shall be reachable only from the same computer,
   shall verify the peer's OS identity, and shall expose only non-secret node status
   and the availability intent operation.
+- Per-Target availability is a node-owner-owned deny-list, durable in the agent's
+  local store, editable only through the same-host control endpoint. A node serves
+  a Target iff the controller administrative state allows it, the global intent is
+  `Accepting`, the Target is not in the node's local exclusion set, and the
+  platform matches. Exclusions only subtract capacity: like the global intent, they
+  are monotonically restrictive, never override `Draining`, `Quarantined`, or
+  `Revoked`, and never grant admission the controller denies.
+- The eligible-Target list the controller reports to each agent is bounded to 256
+  entries. This bound exists only to reject a malformed or hostile payload; it is
+  not a product quota on the number of GitHub Targets a fleet or node may serve,
+  and Tewake shall not otherwise invent a narrower limit without a measured
+  resource boundary or platform contract.
 
 ## Acceptance
 
@@ -290,6 +329,22 @@ identical operation against the local agent, so none of them is a privileged pat
   explicit error and no state change.
 - Every availability change shall persist an audit event containing the node, the
   requesting surface, the previous and next value, and the result.
+- When a node owner excludes one GitHub Target, that node shall receive no new
+  execution for it while it continues to serve every other eligible Target
+  unchanged.
+- An excluded Target shall remain excluded after an agent service restart or an OS
+  reboot.
+- Re-including a previously excluded Target shall remain pending, and ineffective,
+  until the controller's adopted echo confirms it.
+- When the agent is asked to start a job for a Target it has since excluded, it
+  shall refuse the start at the exec boundary with a durable classified
+  `target_excluded` failure rather than a transport rejection, and shall never
+  touch a job whose JIT has already crossed that boundary.
+- The eligible-Target list, its excluded flags, and the pending/synced state of a
+  change shall be visible and identical across the tray, the Raycast launcher, and
+  the CLI.
+- Every exclusion or inclusion change shall persist an audit event containing the
+  node, the requesting surface, the previous and next value, and the result.
 
 ### Recovery and degraded state
 

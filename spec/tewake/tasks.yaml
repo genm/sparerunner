@@ -480,6 +480,7 @@ tasks:
     notes:
       - "2026-07-27: Durable intent, the same-host endpoint with kernel-verified peer authorization, agent readiness conjunction, transport reporting, and the versioned CLI document are implemented. `scripts/test-node-availability-linux.sh` proves stop, restart durability, pending resume until controller acknowledgement, offline stop, and endpoint refusal without --local-control against real controller, agent, and CLI binaries in a restricted container."
       - "2026-07-27: Remaining for acceptance: the Windows named-pipe endpoint with an explicit DACL fails closed today, the controller does not yet persist an audit event per availability change, and the management API and Web UI do not yet expose the reported intent as a distinct field."
+      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as twk-019, not part of this task's acceptance."
     acceptance:
       - A stopped node receives no execution and remains stopped across agent service restart and reboot.
       - Stopping during a running job leaves the job running and passes normal verified cleanup.
@@ -507,6 +508,7 @@ tasks:
     notes:
       - "2026-07-27: `cmd/tewake-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
       - "2026-07-27: Remaining for acceptance: StatusNotifierItem Linux and Windows runs, login-item packaging, and reviewed screenshots of each rendered state."
+      - "2026-07-28: Per-target control/display is specified and tracked as twk-019; this task ships only the global accept/stop toggle."
     acceptance:
       - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
@@ -514,19 +516,55 @@ tasks:
       - Removing, stopping, or never installing the tray changes no fleet behavior.
       - Tray build failure does not gate controller or agent artifacts, and the support matrix states which packages include it.
 
+  - id: twk-019
+    title: Implement per-target node availability
+    type: backend
+    description: >
+      Add the node-owner-owned per-Target exclusion set, the controller-reported
+      eligible-Target list on heartbeat acknowledgement, controller adoption and
+      slot-availability enforcement, the agent-side fail-closed exec-boundary
+      backstop, target attribution in the agent journal, and the nodectl protocol
+      v2 exclude/include/list surface shared by the tray, CLI, and Raycast.
+    depends_on: [twk-016, twk-020]
+    paths:
+      - spec/tewake
+      - internal/domain
+      - internal/transport
+      - internal/store
+      - internal/app
+      - internal/nodectl
+      - internal/scheduler
+      - cmd/tewake
+      - cmd/tewake-agent
+      - cmd/tewake-tray
+      - extensions/raycast
+      - api
+      - web
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 17
+    status: todo
+    acceptance:
+      - When a node owner excludes one GitHub Target, that node receives no new execution for it while every other eligible Target on that node continues unaffected.
+      - An excluded Target remains excluded after an agent service restart or an OS reboot.
+      - Re-including a previously excluded Target remains pending, and ineffective, until the controller's adopted echo confirms it.
+      - The agent refuses a start for an excluded Target at the exec boundary with a durable classified `target_excluded` failure, and never touches a job whose JIT already crossed that boundary.
+      - The eligible-Target list, its excluded flags, and pending/synced state are visible and identical across the tray, the Raycast launcher, and the CLI.
+      - Excluding a Target while disconnected, including an unknown Target ID, records locally as a safe no-op and syncs on reconnect.
+      - Every exclusion or inclusion change persists an audit event with the node, the requesting surface, the previous and next value, and the result.
+
   - id: twk-014
     title: Validate cross-platform security and release behavior
     type: verification
     description: >
       Run real three-OS, two-installation E2E and publish the threat model, security
       contract, support matrix, native-isolation limitations, and machine-readable evidence.
-    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017, twk-020]
+    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017, twk-020, twk-019]
     paths:
       - docs/security
       - test/live
       - output/release-evidence
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 17
+    pr_order: 18
     status: in_progress
     notes:
       - "2026-07-27: Added the TWK-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `tewake.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
@@ -555,7 +593,7 @@ tasks:
       - scripts/generate-license-bundle.sh
       - scripts/validate-release-evidence.sh
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 18
+    pr_order: 19
     status: in_progress
     notes:
       - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
@@ -590,7 +628,7 @@ tasks:
       - extensions/raycast
       - docs/integrations
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 19
+    pr_order: 20
     status: in_progress
     notes:
       - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no Tewake artifact."

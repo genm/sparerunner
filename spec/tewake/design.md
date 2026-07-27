@@ -15,6 +15,13 @@ The first release is LAN-first, single-admin, and optimized for trusted private
 workflows. It deliberately stays smaller than ARC or GARM while reusing GitHub's
 official scale-set and runner implementations.
 
+GitHub self-hosted runner registration is inherently single-scope: one runner
+registers against exactly one repository or organization. Tewake's distinguishing
+value is the opposite shape — one fleet of computers waiting on many private
+org/repo scopes at once, with each machine's owner able to casually decide which
+of those scopes their own computer serves, without touching the rest of the fleet
+or the Administrator's configuration.
+
 ## Architecture
 
 ```mermaid
@@ -189,7 +196,8 @@ Weighted fairness, aging, and resource vectors are intentionally absent.
 Node selection:
 
 1. retain online, reconciled, active, non-quarantined nodes that currently
-   advertise native readiness and whose OS/architecture matches;
+   advertise native readiness and whose OS/architecture matches, and whose owner
+   has not excluded the target;
 2. enforce optional minimum available memory;
 3. sort by active runner count ascending;
 4. sort by available memory descending;
@@ -302,6 +310,16 @@ cannot later acquire authority merely by being classified as a replay. A
 previously admitted identical command may resume its idempotent operation after a
 crash; a changed payload or a second command whose state precondition is stale is
 rejected before JIT delivery, process start, or cleanup.
+
+`prepare` and `start` also carry the target identity for the execution: `targetId`
+is mandatory once per-Target availability is introduced, and `scope`/`scopeKind`
+travel alongside it purely for display. The heartbeat and the agent snapshot both
+carry the node owner's exclusion set, and the heartbeat acknowledgement echoes
+back the controller's adopted eligible-Target list with each entry's excluded
+flag; the exclusion set is persisted with the snapshot but deliberately excluded
+from the canonical snapshot digest, for the same reason the availability intent
+is — the readiness lease CAS is keyed to that digest, and owner-editable observed
+state must not strand it.
 
 Runner admission is a two-command exchange. `prepare` carries only the pinned
 runner version and non-secret runtime options, expects Controller state
@@ -568,8 +586,9 @@ provides:
   callback state and controller-owned credential-store boundary. Native
   Keychain/DPAPI adapters remain platform-task work; Linux uses the service-user
   private credential file boundary until those adapters land
-- node inventory, join-code creation/cancellation, drain/resume, revoke, and the
-  node-reported availability intent with its observation age
+- node inventory, join-code creation/cancellation, drain/resume, revoke, the
+  node-reported availability intent with its observation age, and each node's
+  eligible-Target list with its controller-adopted excluded flags
 - target and runner-profile configuration
 - execution history and audit events
 - controller settings and non-secret YAML export/apply
@@ -735,8 +754,9 @@ revision and fails on stale input rather than silently overwriting newer state.
 ## Node Availability Control and Desktop Clients
 
 The tray and the Raycast extension are presentation surfaces, not new authorities.
-They show the node's own state and toggle one value: whether this computer accepts
-new jobs.
+They show the node's own state and control two things: whether this computer
+accepts new jobs at all, and — since one node can be eligible for many GitHub
+Targets simultaneously — which of those Targets it currently excludes.
 
 ```mermaid
 flowchart LR
@@ -767,6 +787,84 @@ then.
 Stopping never touches a running execution. The agent advertises no further capacity,
 the running job completes, and normal verified cleanup releases the slot. Cancelling
 a running job stays a separate, explicit controller-side operation.
+
+### Per-Target availability
+
+The global intent decides whether a node serves the fleet at all; a second,
+node-owner-owned deny-list decides which GitHub Targets it serves once it does. A
+node serves a Target iff: the controller administrative state allows it, the
+global intent is `Accepting`, the Target is not in the node's local exclusion set,
+and the Runner Profile matches the node's platform. Exclusions only subtract
+capacity, exactly like the global intent — they are monotonically restrictive, and
+an excluded Target never overrides `Draining`, `Quarantined`, or `Revoked`, and
+never grants admission the controller denies.
+
+The exclusion set is owned by the node owner and durable in the agent's local
+store, editable only through the same-host control endpoint (tray, CLI, Raycast).
+The controller adopts it as observed state; it never invents or overrides an
+entry the owner did not set.
+
+To let an owner decide what to exclude, the controller piggybacks the non-secret
+list of Targets whose Runner Profile matches that node's platform on every
+heartbeat acknowledgement: `targetId`, `scopeKind`, `scope`, and `scaleSetName` for
+each entry, plus whether the controller has adopted that Target as excluded for
+this node. Installation IDs and credentials never appear in this list. Desktop
+surfaces render it directly. An absent list on a given heartbeat means "no
+refresh, keep what you have"; an empty list is a distinct, explicit "no eligible
+targets for this node." The list is capped at 256 entries; the cap exists only to
+reject a malformed or hostile payload, not as a product quota on how many Targets
+a node may serve (the same non-quota posture already applied to node counts and
+fleet maxima elsewhere in this spec).
+
+Exclusion and inclusion share the same pending/echo asymmetry as the global
+intent. Excluding is subtractive, so it is locally effective the instant the agent
+durably records it — before the controller has seen it. Including (re-allowing) is
+additive, so it stays pending and ineffective until the controller's durable
+adoption is echoed back on a later heartbeat or snapshot acknowledgement. The echo
+always reflects the controller's durable table rather than an in-memory guess, so
+display state self-heals across reconnects instead of drifting from what was
+actually adopted.
+
+Exclusions travel to the controller on both the agent snapshot and the heartbeat.
+Snapshot-carried exclusions are persisted in the same transaction that records the
+snapshot, so adoption strictly precedes any capacity advertisement after a
+reconnect. Heartbeat-carried changes are adopted under the per-node lifecycle lock
+before the heartbeat is acknowledged; a failed adoption fails the heartbeat rather
+than silently dropping the change. Enforcement itself lives in one place — the
+slot-availability predicate that already backs advertised capacity — so the same
+predicate also gates the claim boundary and recovery admission, and all three stay
+consistent by construction. The Node-selection filter in Scheduling gains the
+matching clause.
+
+Because a stale controller can still dispatch a start for a Target the owner has
+since excluded, the agent is also a fail-closed backstop, not merely a display.
+`prepare` and `start` commands carry the target identity — `targetId` is mandatory
+once this is introduced, and `scope`/`scopeKind` travel for display. Immediately
+before JIT delivery at the exec boundary, the agent re-reads its durable exclusion
+set; if the target is excluded, the start is refused as a durable classified
+execution failure (`target_excluded`), never a bare transport rejection. This
+mirrors the existing distinction between "new work" and "already running": a job
+whose JIT already crossed the exec boundary is running and is never touched,
+exactly like the global stop. This backstop is what keeps exclusion fail-closed
+even when the controller's adopted state is stale or unreachable.
+
+Like the availability intent, the exclusion set stays out of the canonical
+snapshot digest even though it is persisted in the same snapshot transaction: the
+readiness lease CAS is keyed to the exact digest, and owner-editable display/
+observed state must not strand that lease.
+
+The agent journal records the target identity for each execution, so desktop
+surfaces can show which org/repo scope a running job belongs to.
+
+Excluding a Target while disconnected is trivially safe: there is no session to
+carry a command, and that Target's capacity is already zero from this node's
+perspective. It is still recorded locally and synced on reconnect. Excluding an
+unknown Target ID while offline is a safe no-op, rendered as not-currently-
+eligible rather than as an error.
+
+Every adopted availability or exclusion change persists an audit event with the
+node, the requesting surface, the previous and next value, and the result; the
+actor is always the node.
 
 ### Local control endpoint
 
@@ -816,6 +914,13 @@ running executions. A non-zero exit code always carries a machine-readable error
 class. This keeps one implementation of the local protocol, peer authorization, and
 degraded-state semantics; a launcher cannot invent a second dialect of them.
 
+Per-Target availability adds `tewake node targets [--exclude|--include] <targetId>`
+and a `targets` field to the status document, so the nodectl local-control contract's
+version advances from 1 to 2: it strictly decodes, and pre-1.0 carries no
+backward-compatibility shim, exactly like the Agent-Controller protocol version.
+Each execution entry in the status document also carries its target's `scope` and
+`scopeKind` so a desktop surface can show which org/repo a running job belongs to.
+
 The Raycast extension is a macOS-only, unprivileged TypeScript client of that
 contract. It provides a status view and two commands, invokes the installed CLI as
 the logged-in user, and renders exactly the returned document. It stores no
@@ -836,7 +941,9 @@ optional step that gates no Tewake artifact.
 The availability mutation exists once in `/api/v1` and is used by the Web UI, by
 `tewake node pause`/`tewake node resume`, by the tray through the agent, and by the
 Raycast extension through the CLI. Each change persists an audit event with node ID,
-requesting surface, actor identity, previous and next value, and result.
+requesting surface, actor identity, previous and next value, and result. The
+per-Target exclude/include mutation and the eligible-Target list follow the same
+single-implementation, every-surface-identical rule and the same audit shape.
 
 ## Secret Storage
 
@@ -898,8 +1005,9 @@ prevents new starts but does not turn known running jobs into an empty state.
   cleanup failures
 - append-only audit events for enrollment, credential lifecycle, GitHub App/Target
   changes, scheduling decisions, node administrative changes, node availability
-  changes with their requesting surface, local control authorization failures, and
-  authentication failures
+  changes with their requesting surface, per-Target exclusion/inclusion changes with
+  their requesting surface, local control authorization failures, and authentication
+  failures
 - last-known state contains observation timestamps and explicit stale/offline flags
 
 Logs never include JIT payloads, tokens, keys, authorization headers, workflow

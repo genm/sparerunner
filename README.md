@@ -19,16 +19,19 @@ the accepted specification, durable domain/store foundations, the isolated GitHu
 scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
 work for development, including pinned enrollment, mTLS WebSockets, reconnect,
-the signed GitHub App Manifest flow, installation discovery, private Target
-verification, generated management UI/API, node-affined scheduling, native runner
-lifecycle, verified cleanup, node availability control, the desktop tray, and
-the Raycast extension. Those core paths have local and fault-injection
-coverage, but OS service installation, a real private GitHub job, and live
-three-OS sandbox evidence remain release gates; the Windows local control
-endpoint fails closed. A tag now produces a draft, checksummed six-platform
-bundle with CycloneDX SBOM and GitHub attestation steps; it is not a supported
-release until the real-machine gate and platform signing prerequisites pass.
-Do not install it on a production runner fleet.
+the signed GitHub App Manifest flow, installation discovery across multiple
+private org/repo scopes, private Target verification, generated management
+UI/API, node-affined scheduling, native runner lifecycle, verified cleanup, node
+availability control, the desktop tray, and the Raycast extension. Those core
+paths have local and fault-injection coverage, but OS service installation, a
+real private GitHub job, and live three-OS sandbox evidence remain release gates;
+the Windows local control endpoint fails closed. Per-Target availability —
+letting a node owner casually exclude one org/repo scope while the node keeps
+serving the rest — is specified and planned as twk-019, not yet implemented.
+A tag now produces a draft, checksummed six-platform bundle with CycloneDX SBOM
+and GitHub attestation steps; it is not a supported release until the
+real-machine gate and platform signing prerequisites pass. Do not install it on
+a production runner fleet.
 
 The specification is the project source of truth:
 
@@ -58,10 +61,12 @@ runs-on: tewake
 OS-specific labels are `tewake-linux`, `tewake-macos`, and `tewake-windows`.
 
 On a computer you also use yourself, an optional tray client sits in the system tray
-or menu bar. It shows what that computer is running and stops or resumes accepting
-new jobs in one click. Stopping never cancels the job already running, and the same
-switch is available from Raycast on macOS, and as `tewake node pause` /
-`tewake node resume`:
+or menu bar. It shows every private org/repo scope that computer currently waits on
+and what is running right now, and stops or resumes accepting new jobs in one
+click. A planned per-Target control (twk-019) will let the owner casually exclude
+one of those scopes without stopping the rest. Stopping never cancels the job
+already running, and the same switch is available from Raycast on macOS, and as
+`tewake node pause` / `tewake node resume`:
 
 ```bash
 tewake-agent serve --local-control
