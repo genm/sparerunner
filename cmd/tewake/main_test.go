@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/genm/tewake/internal/app"
 )
 
 func TestRunVersionPrintsBuildInformation(t *testing.T) {
@@ -31,6 +34,44 @@ func TestJoinRejectsInvalidCodeBeforeCreatingState(t *testing.T) {
 	}
 	if _, err := os.Lstat(stateDirectory); !os.IsNotExist(err) {
 		t.Fatalf("invalid join created state: %v", err)
+	}
+}
+
+func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	const stateDirectory = "/Library/Application Support/Tewake/agent"
+	command := newJoinCommandForPlatform(
+		"darwin",
+		func(_ context.Context, options app.JoinOptions) (string, error) {
+			if options.StateDirectory != stateDirectory {
+				t.Fatalf("join state directory = %q, want %q", options.StateDirectory, stateDirectory)
+			}
+			return "node-macos", nil
+		},
+	)
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{
+		"twk_test-code",
+		"--state-dir",
+		stateDirectory,
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("packaged macOS join returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Node node-macos joined successfully") ||
+		!strings.Contains(
+			output,
+			"sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+		) {
+		t.Fatalf("packaged macOS join output = %q", output)
+	}
+	if strings.Contains(output, "tewake-agent serve") {
+		t.Fatalf("packaged macOS join suggested a second Agent process: %q", output)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("packaged macOS join stderr = %q, want empty", stderr.String())
 	}
 }
 

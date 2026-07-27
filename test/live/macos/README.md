@@ -32,6 +32,11 @@ limit accidental residue but are not a hostile-code sandbox.
 - The root service must load the node key through `enroll.LoadPrivateMaterial`.
   A copy of this exact harness then drops to `tewake-runner-0` and must fail to
   load it. The locator itself must not contain PEM/private-key bytes.
+- The configured `TrustAll` ACL permits any process in the root service-user
+  Keychain context; code signing is not the credential boundary. The live gate
+  proves same-user access and denial after the real UID drop. Repository
+  persistence tests use a fake credential store and cannot prove either native
+  Keychain result.
 - Evidence files are allowlisted by phase, mode `0600`, write-once, and stored
   in a mode-`0700` directory outside Agent state, runtime, fence, and cache
   roots. A second capture cannot replace the first result.
@@ -40,6 +45,12 @@ The service-load check fails closed when Keychain is locked, denied, missing,
 or inconsistent. The runner-denial child is considered valid only when it
 starts successfully under the dedicated UID and returns the expected denial
 status; an exec failure is not synthetic success.
+
+This check must run from the root LaunchDaemon context because a successful
+interactive-user Keychain read does not prove that the service's default
+Keychain is available after boot without a login session. A locked or
+interaction-required root Keychain is a failed gate and leaves native capacity
+at zero. The harness does not unlock or create a fallback Keychain.
 
 ## Prepare a protected build
 
@@ -138,4 +149,5 @@ but they are not real reboot, sleep, Keychain ACL, Intel hardware, or private
 GitHub job evidence. TWK-008 remains `in_progress` until protected arm64 and
 amd64 hosts produce these manifests and Controller-side evidence confirms the
 post-wake/post-reboot authenticated session rather than only local launchd
-recovery.
+recovery. The same live run must prove root LaunchDaemon Keychain access before
+and after reboot with no interactive login and must retain `maxRunners: 1`.

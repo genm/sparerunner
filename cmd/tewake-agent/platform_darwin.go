@@ -102,6 +102,12 @@ func platformCommandRuntime(
 		if err != nil {
 			return nil, err
 		}
+		if adapter.MaxRunners() != 1 {
+			// AgentSnapshot.nativeRunnerReady currently represents the one
+			// concrete slot-0 vertical. Never let platform capacity drift ahead
+			// of that Controller contract.
+			return nil, runner.ErrStrongOwnershipUnavailable
+		}
 		manager, err := runner.NewManager(runner.Options{
 			RuntimeRoot: options.RuntimeRoot,
 			Cache:       cache,
@@ -112,7 +118,11 @@ func platformCommandRuntime(
 		if err != nil {
 			return nil, err
 		}
-		return app.NewAgentCommandRuntime(state.NodeID, state.Store, manager, pkg)
+		lifecycle, err := bindNativeRunnerCredential(manager, state.CredentialReady)
+		if err != nil {
+			return nil, err
+		}
+		return app.NewAgentCommandRuntime(state.NodeID, state.Store, lifecycle, pkg)
 	}
 	return optionalDarwinNativeRunnerFactory(options.Required, build), nil
 }
@@ -197,4 +207,3 @@ func canonicalAbsolutePath(path string) bool {
 }
 
 func platformCommands() []*cobra.Command { return nil }
-

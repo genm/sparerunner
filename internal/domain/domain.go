@@ -9,7 +9,19 @@ import (
 	"strings"
 )
 
-const DefaultMaxRunners = 1
+const (
+	DefaultMaxRunners = 1
+
+	// MacOSNativeRunnerMaxRunners is the Controller-side physical-capability
+	// ceiling for the first macOS native adapter. That adapter provisions one
+	// exclusive runner UID and therefore owns exactly slot 0.
+	//
+	// The current Agent protocol reports readiness as a boolean. When it grows a
+	// reconciled nativeRunnerCapacity observation, that authenticated snapshot
+	// becomes the physical-capability SSOT and configured MaxRunners must be
+	// validated against it before slot topology is built.
+	MacOSNativeRunnerMaxRunners = 1
+)
 
 type (
 	NodeID          string
@@ -140,6 +152,13 @@ func (n Node) Validate() error {
 	}
 	if n.MaxRunners < 1 {
 		return invalid("invalid_max_runners", "node.max_runners", "must be at least one")
+	}
+	if n.OS == OSMacOS && n.MaxRunners > MacOSNativeRunnerMaxRunners {
+		return invalid(
+			"native_runner_capacity_exceeded",
+			"node.max_runners",
+			"macOS native mode currently owns exactly one runner slot",
+		)
 	}
 	if err := n.AdministrativeState.Validate("node.administrative_state"); err != nil {
 		return err

@@ -42,5 +42,4 @@ func (*OSWorkspace) PinLaunch(
 }
 func (*PinnedWorkspace) Directory() *os.File  { return nil }
 func (*PinnedWorkspace) Executable() *os.File { return nil }
-func (*PinnedWorkspace) Close() error          { return nil }
-
+func (*PinnedWorkspace) Close() error         { return nil }
