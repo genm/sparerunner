@@ -46,6 +46,12 @@ parallelism, and re-registering broken runners.
   that background CI does not overwhelm a personal computer.
 - As an Administrator, I want explicit offline, stale, draining, and quarantined
   states so that missing data is never presented as a healthy empty fleet.
+- As a Node owner, I want a system-tray indicator on my own computer so that I can
+  see whether it is accepting fleet jobs and what is running right now without
+  opening the controller UI.
+- As a Node owner, I want to stop and resume accepting new jobs from the tray in one
+  action so that I can reclaim my computer without cancelling the job already
+  running, uninstalling the agent, or logging in to the controller.
 - As an Administrator, I want a one-job runner identity and disposable workspace so
   that jobs do not leave ordinary runner state behind.
 
@@ -95,6 +101,20 @@ parallelism, and re-registering broken runners.
    configuration or credential file materialized by the official runner before
    releasing the slot.
 
+### Control a node from its own desktop
+
+1. The node owner signs in to the desktop session of an enrolled computer and the
+   optional tray client starts.
+2. The tray shows the node's own administrative state, connection state, observation
+   freshness, and currently running executions.
+3. The owner selects "Stop accepting jobs".
+4. The agent records a durable node-local availability intent, immediately withholds
+   the node's capacity, and reports the intent to the controller, which stops
+   advertising that node's slots.
+5. A job that is already running continues to completion and normal verified cleanup.
+6. The owner selects "Resume accepting jobs", and admission returns only after the
+   controller confirms the node is otherwise active, reconciled, and not quarantined.
+
 ## Exception Journeys
 
 - If GitHub returns a transient error, the system retains the last-known state,
@@ -110,6 +130,14 @@ parallelism, and re-registering broken runners.
 - If a node certificate, join code, controller fingerprint, protocol version, or
   expected execution state is invalid, the operation fails closed with an explicit
   error and audit event.
+- If the tray client cannot reach its local agent, it presents an unknown state and
+  an explicit error rather than an idle or accepting appearance, and confirms no
+  availability change.
+- If the node has no controller session, stopping acceptance still takes effect
+  locally, while resuming remains pending and ineffective until the controller
+  confirms it.
+- If the desktop session provides no tray host, the tray client exits with an
+  explicit error and the agent service, CLI, and Web UI remain unaffected.
 
 ## Constraints
 
@@ -139,6 +167,20 @@ parallelism, and re-registering broken runners.
   equals the sum of node maxima.
 - Tewake shall not invent a node-count quota or other product limit without a
   measured resource boundary or platform contract.
+- The tray client is an optional, unprivileged, per-user presentation of existing
+  Node state. It is not a new user-facing concept, introduces no capability the
+  management API and CLI lack, and never receives GitHub App keys, join secrets, JIT
+  material, node private keys, session secrets, or authorization headers.
+- Node availability is one value expressed through two authorities: the controller
+  owns the Node administrative state, and the node owner owns a durable node-local
+  availability intent. Admission requires both. A node-local intent may only withhold
+  that node's capacity; it never overrides `Draining`, `Quarantined`, or `Revoked`,
+  and never grants admission the controller denies.
+- Stopping acceptance shall never terminate, cancel, or shorten a job that is already
+  running.
+- The agent's local control endpoint shall be reachable only from the same computer,
+  shall verify the peer's OS identity, and shall expose only non-secret node status
+  and the availability intent operation.
 
 ## Acceptance
 
@@ -180,6 +222,25 @@ parallelism, and re-registering broken runners.
 - A warm node shall start the official runner quickly enough to satisfy GitHub's
   60-second job-pickup window; measured startup latency is a release gate rather than
   a hidden runtime timeout.
+
+### Node availability control
+
+- When a node owner stops acceptance from the tray, the CLI, or the Web UI, the
+  controller shall advertise no further capacity for that node, and the same
+  effective state shall be visible in all three surfaces.
+- When acceptance is stopped while a job is running, the job shall complete and pass
+  normal verified cleanup, and the node shall then hold zero active executions.
+- After an agent service restart or an OS reboot, a stopped node shall remain stopped
+  until it is explicitly resumed.
+- When a node-local intent says accepting and the controller state is `Draining`,
+  `Quarantined`, or `Revoked`, the node shall receive no execution.
+- When the controller session is unavailable, stopping shall take effect locally and
+  resuming shall be reported as pending rather than accepting.
+- When the tray cannot reach the local agent, or a local control request comes from a
+  peer that is not an authorized local user, the request shall fail closed with an
+  explicit error and no state change.
+- Every availability change shall persist an audit event containing the node, the
+  requesting surface, the previous and next value, and the result.
 
 ### Recovery and degraded state
 
