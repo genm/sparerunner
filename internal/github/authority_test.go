@@ -48,7 +48,9 @@ func (transport *authorityRoundTripper) RoundTrip(request *http.Request) (*http.
 	path := request.URL.Path
 	switch {
 	case path == "/app/installations" && request.Method == http.MethodGet:
-		body = `{"installations":[{"id":42,"repository_selection":"all","account":{"login":"acme","type":"Organization"}},{"id":43,"repository_selection":"selected","account":{"login":"genm","type":"User"}}]}`
+		// The live endpoint returns a bare array; the wrapped {installations: []}
+		// shape belongs to /user/installations and must not leak into this fake.
+		body = `[{"id":42,"repository_selection":"all","account":{"login":"acme","type":"Organization"}},{"id":43,"repository_selection":"selected","account":{"login":"genm","type":"User"}}]`
 	case strings.HasSuffix(path, "/access_tokens") && request.Method == http.MethodPost:
 		body = `{"token":"ghs_test_token"}`
 	case path == "/repos/acme/private" && request.Method == http.MethodGet:
