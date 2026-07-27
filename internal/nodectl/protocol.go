@@ -85,6 +85,18 @@ type RunningExecution struct {
 	State       domain.ExecutionState `json:"state"`
 }
 
+// EligibleTarget mirrors transport.EligibleTarget's shape for the node-local
+// display contract. It is redeclared here rather than importing the
+// transport package, so a compromised desktop session's dependency surface
+// never reaches the wire/session-actor code that speaks to the Controller.
+type EligibleTarget struct {
+	TargetID     domain.TargetID        `json:"targetId"`
+	ScopeKind    domain.TargetScopeKind `json:"scopeKind"`
+	Scope        string                 `json:"scope"`
+	ScaleSetName string                 `json:"scaleSetName"`
+	Excluded     bool                   `json:"excluded"`
+}
+
 // Status is the complete document every desktop surface renders. Every field is
 // observation, so a client that cannot reach the Agent has nothing to display
 // and must show the unknown state instead of inventing one.
@@ -102,11 +114,17 @@ type Status struct {
 	// PendingResume is true when the owner accepts jobs but the controller has
 	// not confirmed it. Resuming adds capacity, so it stays ineffective until
 	// then and must never render as accepting.
-	PendingResume      bool               `json:"pendingResume"`
-	NativeRunnerReady  bool               `json:"nativeRunnerReady"`
-	RunningExecutions  []RunningExecution `json:"runningExecutions"`
-	ObservedAtUnixNano int64              `json:"observedAtUnixNano"`
-	AgentVersion       string             `json:"agentVersion"`
+	PendingResume     bool               `json:"pendingResume"`
+	NativeRunnerReady bool               `json:"nativeRunnerReady"`
+	RunningExecutions []RunningExecution `json:"runningExecutions"`
+	// EligibleTargets is the last-known list of configured GitHub Targets whose
+	// Runner Profile matches this node's platform, as refreshed by the
+	// controller's heartbeat acknowledgement. It is omitted until the first
+	// heartbeat round trip completes, and it is display data only: it never
+	// implies a free slot exists right now.
+	EligibleTargets    []EligibleTarget `json:"eligibleTargets,omitempty"`
+	ObservedAtUnixNano int64            `json:"observedAtUnixNano"`
+	AgentVersion       string           `json:"agentVersion"`
 }
 
 // EffectiveAccepting reports whether this node currently offers capacity as far

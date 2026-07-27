@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"sort"
+	"sync"
 
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/reconcile"
@@ -20,11 +22,33 @@ type controllerAgentStore interface {
 	RecordAgentReadiness(context.Context, domain.NodeID, string, bool) error
 	RecordAgentDisconnect(context.Context, domain.NodeID, string) error
 	RecordAgentExecutionUpdate(context.Context, store.AgentExecutionUpdate) (bool, error)
+	ReadManagementConfiguration(context.Context) (store.ManagementConfiguration, error)
+	// ManagementConfigurationRevision is the cheap poll primitive EligibleTargets
+	// uses to avoid paying for ReadManagementConfiguration's full transaction at
+	// heartbeat cadence (1 Hz per node) when nothing has changed.
+	ManagementConfigurationRevision(context.Context) (uint64, error)
 }
 
 type storeBackedAgentConsumers struct {
 	store      controllerAgentStore
 	projection controllerAgentProjection
+	// eligibility is a pointer so every storeBackedAgentConsumers value copied
+	// out of newStoreBackedAgentConsumers (one per AgentConsumers field) shares
+	// one cache. A mutex embedded directly in this struct would be silently
+	// duplicated by those copies instead of guarding shared state.
+	eligibility *eligibilityCache
+}
+
+// eligibilityCache holds the last configuration read keyed by its revision.
+// EligibleTargets is called once per node per heartbeat interval, so without
+// this cache every node would force a full ReadManagementConfiguration SQLite
+// transaction at that cadence even when configuration never changes.
+type eligibilityCache struct {
+	mu       sync.Mutex
+	loaded   bool
+	revision uint64
+	profiles map[domain.RunnerProfileID]domain.RunnerProfile
+	targets  []store.ManagementGitHubTarget
 }
 
 type controllerAgentProjection interface {
@@ -39,7 +63,7 @@ func newStoreBackedAgentConsumers(
 	agentStore controllerAgentStore,
 	projections ...controllerAgentProjection,
 ) AgentConsumers {
-	consumers := storeBackedAgentConsumers{store: agentStore}
+	consumers := storeBackedAgentConsumers{store: agentStore, eligibility: &eligibilityCache{}}
 	if len(projections) > 0 {
 		consumers.projection = projections[0]
 	}
@@ -49,7 +73,86 @@ func newStoreBackedAgentConsumers(
 		Readiness:        consumers,
 		ExecutionUpdates: consumers,
 		Disconnects:      consumers,
+		Eligibility:      consumers,
 	}
+}
+
+// EligibleTargets is read-only display data computed from current
+// configuration: which private GitHub Targets have a Runner Profile whose
+// optional OS/architecture constraint matches this node. It never consults
+// online/reconciled/capacity state, so it answers "could this node ever serve
+// this scope" rather than "is a slot free right now."
+func (consumers storeBackedAgentConsumers) EligibleTargets(
+	ctx context.Context,
+	os domain.OperatingSystem,
+	architecture domain.Architecture,
+) ([]transport.EligibleTarget, error) {
+	if consumers.store == nil || consumers.eligibility == nil {
+		return nil, ErrAgentCommandConsumerRequired
+	}
+	profiles, targets, err := consumers.eligibility.read(ctx, consumers.store)
+	if err != nil {
+		return nil, err
+	}
+	var eligible []transport.EligibleTarget
+	for _, target := range targets {
+		profile, known := profiles[target.Target.RunnerProfileID]
+		if !known {
+			continue
+		}
+		if profile.OS != nil && *profile.OS != os {
+			continue
+		}
+		if profile.Architecture != nil && *profile.Architecture != architecture {
+			continue
+		}
+		eligible = append(eligible, transport.EligibleTarget{
+			TargetID:     target.Target.ID,
+			ScopeKind:    target.Target.ScopeKind,
+			Scope:        target.Target.Scope,
+			ScaleSetName: target.Target.ScaleSetName,
+			// The controller does not yet consult ExcludedTargets; adoption
+			// lands in a later PR alongside its snapshot persistence.
+			Excluded: false,
+		})
+	}
+	// A node's displayed list must not depend on SQLite row order or map
+	// iteration order, both of which are unspecified.
+	sort.Slice(eligible, func(i, j int) bool {
+		return eligible[i].TargetID < eligible[j].TargetID
+	})
+	return eligible, nil
+}
+
+// read returns the profile/target projection for the current configuration
+// revision, reusing the cached projection when the cheap revision read proves
+// nothing changed since the last full read.
+func (cache *eligibilityCache) read(
+	ctx context.Context,
+	agentStore controllerAgentStore,
+) (map[domain.RunnerProfileID]domain.RunnerProfile, []store.ManagementGitHubTarget, error) {
+	revision, err := agentStore.ManagementConfigurationRevision(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.loaded && cache.revision == revision {
+		return cache.profiles, cache.targets, nil
+	}
+	configuration, err := agentStore.ReadManagementConfiguration(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	profiles := make(map[domain.RunnerProfileID]domain.RunnerProfile, len(configuration.RunnerProfiles))
+	for _, profile := range configuration.RunnerProfiles {
+		profiles[profile.Profile.ID] = profile.Profile
+	}
+	cache.loaded = true
+	cache.revision = configuration.Revision
+	cache.profiles = profiles
+	cache.targets = configuration.GitHubTargets
+	return cache.profiles, cache.targets, nil
 }
 
 func (consumers storeBackedAgentConsumers) HandleAgentCommand(ctx context.Context, record AgentCommandRecord) error {

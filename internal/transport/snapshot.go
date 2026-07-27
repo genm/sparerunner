@@ -12,9 +12,14 @@ import (
 )
 
 // AgentSnapshotDigest binds the complete typed journal snapshot used by
-// Controller reconciliation. NativeRunnerReady and AvailabilityIntent are
-// deliberately excluded: they are lease-backed liveness and owner display
-// state, not presence-or-absence authority for commands or runtimes. It contains no JIT body, filesystem path, log, or credential.
+// Controller reconciliation. NativeRunnerReady, AvailabilityIntent, and
+// ExcludedTargets are deliberately excluded: they are lease-backed liveness
+// and owner-editable observed state, not presence-or-absence authority for
+// commands or runtimes. Like AvailabilityIntent, a change to the exclusion
+// set must not strand the readiness-lease compare-and-swap that is keyed to
+// this digest; the set is still persisted in the snapshot transaction
+// controller-side (a later PR wires that consumption). It contains no JIT
+// body, filesystem path, log, or credential.
 func AgentSnapshotDigest(snapshot AgentSnapshot) (string, error) {
 	if err := snapshot.Validate(); err != nil {
 		return "", err
@@ -58,12 +63,16 @@ type AgentCleanupTombstone struct {
 // activation. Command entries contain only the authenticated payload digest;
 // JIT bodies, paths, process output, and private material have no field here.
 type AgentSnapshot struct {
-	NodeID             domain.NodeID               `json:"nodeId"`
-	OS                 domain.OperatingSystem      `json:"os"`
-	Arch               domain.Architecture         `json:"arch"`
-	RunnerVersion      string                      `json:"runnerVersion"`
-	NativeRunnerReady  bool                        `json:"nativeRunnerReady"`
-	AvailabilityIntent domain.AvailabilityIntent   `json:"availabilityIntent,omitempty"`
+	NodeID             domain.NodeID             `json:"nodeId"`
+	OS                 domain.OperatingSystem    `json:"os"`
+	Arch               domain.Architecture       `json:"arch"`
+	RunnerVersion      string                    `json:"runnerVersion"`
+	NativeRunnerReady  bool                      `json:"nativeRunnerReady"`
+	AvailabilityIntent domain.AvailabilityIntent `json:"availabilityIntent,omitempty"`
+	// ExcludedTargets is the node owner's editable withdrawal from otherwise
+	// eligible GitHub Targets. Absent means "no change reported"; an Agent
+	// that never populates it (this PR) always omits the field.
+	ExcludedTargets    []domain.TargetID           `json:"excludedTargets,omitempty"`
 	MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
 	Commands           []domain.Command            `json:"commands"`
 	Observations       []AgentExecutionObservation `json:"observations"`
@@ -81,6 +90,14 @@ func (snapshot AgentSnapshot) Validate() error {
 	if snapshot.AvailabilityIntent != "" &&
 		snapshot.AvailabilityIntent.Validate("agent_snapshot.availability_intent") != nil {
 		return ErrInvalidCommand
+	}
+	// An absent list is "no change reported". A present list (including an
+	// empty one) is validated the same way ValidateEligibleTargets treats a
+	// duplicate identity: corruption, not a legitimate repeat.
+	if snapshot.ExcludedTargets != nil {
+		if err := ValidateExcludedTargets(snapshot.ExcludedTargets); err != nil {
+			return ErrInvalidCommand
+		}
 	}
 	if snapshot.RunnerVersion != "" &&
 		(strings.TrimSpace(snapshot.RunnerVersion) != snapshot.RunnerVersion ||
@@ -152,6 +169,7 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 		RunnerVersion      *string                     `json:"runnerVersion"`
 		NativeRunnerReady  *bool                       `json:"nativeRunnerReady"`
 		AvailabilityIntent *domain.AvailabilityIntent  `json:"availabilityIntent"`
+		ExcludedTargets    *[]domain.TargetID          `json:"excludedTargets"`
 		MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
 		Commands           []domain.Command            `json:"commands"`
 		Observations       []AgentExecutionObservation `json:"observations"`
@@ -179,6 +197,11 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 	}
 	if wire.AvailabilityIntent != nil {
 		snapshot.AvailabilityIntent = *wire.AvailabilityIntent
+	}
+	if wire.ExcludedTargets != nil {
+		// Preserve "present but empty" as a non-nil zero-length slice so the
+		// caller can distinguish it from "absent" after decode.
+		snapshot.ExcludedTargets = append([]domain.TargetID{}, *wire.ExcludedTargets...)
 	}
 	if err := snapshot.Validate(); err != nil {
 		return AgentSnapshot{}, err

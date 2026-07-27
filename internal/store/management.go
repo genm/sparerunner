@@ -213,6 +213,20 @@ func (s *ControllerStore) ReadManagementConfiguration(
 	return result, nil
 }
 
+// ManagementConfigurationRevision reads only the current revision counter,
+// without the full configuration transaction ReadManagementConfiguration
+// pays for. Callers that poll at a fixed cadence (for example, the per-node
+// eligibility cache) use this to detect "nothing changed" cheaply and only
+// pay for the full read when the revision actually advances.
+func (s *ControllerStore) ManagementConfigurationRevision(
+	ctx context.Context,
+) (uint64, error) {
+	if err := s.requireReady(); err != nil {
+		return 0, err
+	}
+	return readManagementRevision(ctx, s.db)
+}
+
 // ApplyManagementConfiguration compare-and-swaps the complete desired
 // configuration, runtime projections, global revision, and success audit in one
 // SQLite transaction. Audit failure therefore cannot leave a successful

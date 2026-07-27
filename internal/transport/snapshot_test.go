@@ -3,6 +3,7 @@ package transport
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -81,6 +82,95 @@ func TestAgentSnapshotDigestSeparatesJournalAuthorityFromReadinessLease(t *testi
 	}
 	if changedDigest == digest {
 		t.Fatal("runner package identity did not change journal digest")
+	}
+}
+
+func TestAgentSnapshotDigestExcludesExcludedTargets(t *testing.T) {
+	snapshot := testAgentSnapshot()
+	digest, err := AgentSnapshotDigest(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot.ExcludedTargets = []domain.TargetID{"target-excluded"}
+	changedDigest, err := AgentSnapshotDigest(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changedDigest != digest {
+		t.Fatal("excludedTargets changed the readiness-lease-keyed journal digest")
+	}
+}
+
+func TestAgentSnapshotExcludedTargetsRoundTrip(t *testing.T) {
+	base := testAgentSnapshot()
+
+	// Absent: the field is entirely omitted, and decode reports nil, not an
+	// empty-but-present slice.
+	absentPayload, err := EncodeAgentSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(absentPayload), "excludedTargets") {
+		t.Fatalf("absent ExcludedTargets was encoded: %s", absentPayload)
+	}
+	decodedAbsent, err := DecodeAgentSnapshot(absentPayload)
+	if err != nil || decodedAbsent.ExcludedTargets != nil {
+		t.Fatalf("decoded absent ExcludedTargets = %#v, err = %v", decodedAbsent.ExcludedTargets, err)
+	}
+
+	// Present-but-empty is a distinct wire state from absent.
+	var raw map[string]any
+	if err := json.Unmarshal(absentPayload, &raw); err != nil {
+		t.Fatal(err)
+	}
+	raw["excludedTargets"] = []string{}
+	emptyPayload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedEmpty, err := DecodeAgentSnapshot(emptyPayload)
+	if err != nil || decodedEmpty.ExcludedTargets == nil || len(decodedEmpty.ExcludedTargets) != 0 {
+		t.Fatalf("decoded empty ExcludedTargets = %#v, err = %v", decodedEmpty.ExcludedTargets, err)
+	}
+
+	// Populated round-trips intact.
+	populated := base
+	populated.ExcludedTargets = []domain.TargetID{"target-1", "target-2"}
+	populatedPayload, err := EncodeAgentSnapshot(populated)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decodedPopulated, err := DecodeAgentSnapshot(populatedPayload)
+	if err != nil || len(decodedPopulated.ExcludedTargets) != 2 ||
+		decodedPopulated.ExcludedTargets[0] != "target-1" ||
+		decodedPopulated.ExcludedTargets[1] != "target-2" {
+		t.Fatalf("decoded populated ExcludedTargets = %#v, err = %v", decodedPopulated.ExcludedTargets, err)
+	}
+
+	// A duplicate TargetID is corruption, not a legitimate repeat.
+	duplicated := base
+	duplicated.ExcludedTargets = []domain.TargetID{"target-1", "target-1"}
+	if _, err := EncodeAgentSnapshot(duplicated); err == nil {
+		t.Fatal("duplicate ExcludedTargets entry accepted at encode")
+	}
+	raw["excludedTargets"] = []string{"target-1", "target-1"}
+	duplicatePayload, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := DecodeAgentSnapshot(duplicatePayload); err == nil {
+		t.Fatal("duplicate ExcludedTargets entry accepted at decode")
+	}
+
+	// A list beyond MaxEligibleTargets is rejected as oversized.
+	oversized := make([]domain.TargetID, MaxEligibleTargets+1)
+	for index := range oversized {
+		oversized[index] = domain.TargetID(fmt.Sprintf("target-%d", index))
+	}
+	oversizedSnapshot := base
+	oversizedSnapshot.ExcludedTargets = oversized
+	if _, err := EncodeAgentSnapshot(oversizedSnapshot); err == nil {
+		t.Fatal("oversized ExcludedTargets accepted at encode")
 	}
 }
 
