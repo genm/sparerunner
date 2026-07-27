@@ -109,19 +109,20 @@ const (
 	AuditActorNode        AuditActor = "node"
 	AuditActorSingleAdmin AuditActor = "single_admin"
 
-	AuditActionAuthenticationSucceeded AuditAction = "authentication_succeeded"
-	AuditActionAuthenticationFailed    AuditAction = "authentication_failed"
-	AuditActionEnrollmentRejected      AuditAction = "enrollment_rejected"
-	AuditActionEnrollmentUnavailable   AuditAction = "enrollment_unavailable"
-	AuditActionAgentSessionRejected    AuditAction = "agent_session_rejected"
-	AuditActionSessionEnded            AuditAction = "session_ended"
-	AuditActionJoinCodeCreated         AuditAction = "join_code_created"
-	AuditActionJoinCodeCancelled       AuditAction = "join_code_cancelled"
-	AuditActionConfigurationApplied    AuditAction = "configuration_applied"
-	AuditActionNodeEnrolled            AuditAction = "node_enrolled"
-	AuditActionNodeDrained             AuditAction = "node_drained"
-	AuditActionNodeResumed             AuditAction = "node_resumed"
-	AuditActionNodeRevoked             AuditAction = "node_revoked"
+	AuditActionAuthenticationSucceeded  AuditAction = "authentication_succeeded"
+	AuditActionAuthenticationFailed     AuditAction = "authentication_failed"
+	AuditActionBrowserHandoffAuthorized AuditAction = "browser_handoff_authorized"
+	AuditActionEnrollmentRejected       AuditAction = "enrollment_rejected"
+	AuditActionEnrollmentUnavailable    AuditAction = "enrollment_unavailable"
+	AuditActionAgentSessionRejected     AuditAction = "agent_session_rejected"
+	AuditActionSessionEnded             AuditAction = "session_ended"
+	AuditActionJoinCodeCreated          AuditAction = "join_code_created"
+	AuditActionJoinCodeCancelled        AuditAction = "join_code_cancelled"
+	AuditActionConfigurationApplied     AuditAction = "configuration_applied"
+	AuditActionNodeEnrolled             AuditAction = "node_enrolled"
+	AuditActionNodeDrained              AuditAction = "node_drained"
+	AuditActionNodeResumed              AuditAction = "node_resumed"
+	AuditActionNodeRevoked              AuditAction = "node_revoked"
 
 	AuditOutcomeSucceeded AuditOutcome = "succeeded"
 	AuditOutcomeRejected  AuditOutcome = "rejected"
@@ -183,8 +184,9 @@ const MaximumAuditPageSize = 500
 var ErrInvalidAuditPage = errors.New("management audit page is invalid")
 
 type AuditPage struct {
-	Events    []AuditEvent
-	NextAfter *uint64
+	Events      []AuditEvent
+	NextAfter   *uint64
+	ResumeAfter *uint64
 }
 
 // ReadManagementConfiguration returns one transactionally consistent,
@@ -776,6 +778,15 @@ func (s *ControllerStore) ReadAuditEventsPage(
 		page.Events = events[:limit]
 		next := page.Events[len(page.Events)-1].Sequence
 		page.NextAfter = &next
+	}
+	if len(page.Events) > 0 {
+		resume := page.Events[len(page.Events)-1].Sequence
+		page.ResumeAfter = &resume
+	} else if after > 0 {
+		// Preserve the caller's confirmed append-only position even when no
+		// later event exists, so a subsequent invalidation can resume from it.
+		resume := after
+		page.ResumeAfter = &resume
 	}
 	return page, nil
 }
@@ -2102,6 +2113,7 @@ func validateAuditRecord(record AuditRecord) error {
 	switch record.Action {
 	case AuditActionAuthenticationSucceeded,
 		AuditActionAuthenticationFailed,
+		AuditActionBrowserHandoffAuthorized,
 		AuditActionEnrollmentRejected,
 		AuditActionEnrollmentUnavailable,
 		AuditActionAgentSessionRejected,
@@ -2242,6 +2254,7 @@ func validateAuditActionResource(record AuditRecord) error {
 	switch record.Action {
 	case AuditActionAuthenticationSucceeded,
 		AuditActionAuthenticationFailed,
+		AuditActionBrowserHandoffAuthorized,
 		AuditActionEnrollmentRejected,
 		AuditActionEnrollmentUnavailable,
 		AuditActionSessionEnded:

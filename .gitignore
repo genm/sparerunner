@@ -10,6 +10,7 @@
 # Web
 /web/node_modules/
 /web/dist/
+/web/playwright/.cache/
 /web/playwright-report/
 /web/test-results/
 /api/codegen/node_modules/
@@ -21,5 +22,6 @@
 /output/
 
 # Tool state
+/.pnpm-store/
 /.mise.local.toml
 /.process-compose/

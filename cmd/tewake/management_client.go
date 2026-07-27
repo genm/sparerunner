@@ -296,6 +296,38 @@ func (client *managementAPIClient) createJoinCode(
 	return delivery.Code, nil
 }
 
+func (client *managementAPIClient) authorizeBrowserHandoff(
+	ctx context.Context,
+	code string,
+) error {
+	if client == nil || !safeOpaqueValue(client.csrf) ||
+		!auth.ValidBrowserHandoffCodeEncoding(code) {
+		return errors.New("browser handoff authorization is invalid")
+	}
+	response, err := client.client.AuthorizeBrowserHandoff(
+		ctx,
+		&gen.AuthorizeBrowserHandoffParams{XTewakeCSRF: client.csrf},
+		gen.AuthorizeBrowserHandoffRequest{Code: code},
+	)
+	if err != nil {
+		return errors.New("management API browser handoff authorization request failed")
+	}
+	body, readErr := readManagementResponse(response)
+	if response == nil {
+		return readErr
+	}
+	if response.StatusCode != http.StatusNoContent {
+		return managementStatusError("authorize browser handoff", response.StatusCode)
+	}
+	if readErr != nil {
+		return readErr
+	}
+	if len(body) != 0 {
+		return errors.New("management API browser handoff authorization response is invalid")
+	}
+	return nil
+}
+
 func (client *managementAPIClient) exportConfiguration(
 	ctx context.Context,
 ) ([]byte, error) {

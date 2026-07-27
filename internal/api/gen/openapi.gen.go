@@ -71,6 +71,36 @@ func (e AuditEventOutcome) Valid() bool {
 	}
 }
 
+// Defines values for BrowserHandoffState.
+const (
+	BrowserHandoffStatePending BrowserHandoffState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the BrowserHandoffState enum.
+func (e BrowserHandoffState) Valid() bool {
+	switch e {
+	case BrowserHandoffStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
+// Defines values for BrowserHandoffPendingState.
+const (
+	BrowserHandoffPendingStatePending BrowserHandoffPendingState = "pending"
+)
+
+// Valid indicates whether the value is a known member of the BrowserHandoffPendingState enum.
+func (e BrowserHandoffPendingState) Valid() bool {
+	switch e {
+	case BrowserHandoffPendingStatePending:
+		return true
+	default:
+		return false
+	}
+}
+
 // Defines values for ConditionStatus.
 const (
 	ConditionStatusDegraded    ConditionStatus = "degraded"
@@ -529,6 +559,49 @@ type AuditEventOutcome string
 type AuditEventPage struct {
 	Events     []AuditEvent `json:"events"`
 	NextCursor *string      `json:"nextCursor,omitempty"`
+
+	// ResumeCursor Opaque exclusive cursor for the last event represented by this
+	// response. Unlike nextCursor, it remains present on the final page
+	// so append-only consumers can request only later events.
+	ResumeCursor *string `json:"resumeCursor,omitempty"`
+}
+
+// AuthorizeBrowserHandoffRequest defines model for AuthorizeBrowserHandoffRequest.
+type AuthorizeBrowserHandoffRequest struct {
+	// Code Signed correlation code that carries no session authority without the browser claim secret.
+	Code BrowserHandoffCode `json:"code"`
+}
+
+// BrowserHandoff defines model for BrowserHandoff.
+type BrowserHandoff struct {
+	// Code Signed correlation code that carries no session authority without the browser claim secret.
+	Code      BrowserHandoffCode  `json:"code"`
+	ExpiresAt time.Time           `json:"expiresAt"`
+	State     BrowserHandoffState `json:"state"`
+}
+
+// BrowserHandoffState defines model for BrowserHandoff.State.
+type BrowserHandoffState string
+
+// BrowserHandoffCode Signed correlation code that carries no session authority without the browser claim secret.
+type BrowserHandoffCode = string
+
+// BrowserHandoffPending defines model for BrowserHandoffPending.
+type BrowserHandoffPending struct {
+	ExpiresAt time.Time                  `json:"expiresAt"`
+	State     BrowserHandoffPendingState `json:"state"`
+}
+
+// BrowserHandoffPendingState defines model for BrowserHandoffPending.State.
+type BrowserHandoffPendingState string
+
+// ClaimBrowserHandoffRequest defines model for ClaimBrowserHandoffRequest.
+type ClaimBrowserHandoffRequest struct {
+	// ClaimSecret Canonical raw-base64url 256-bit secret retained only by the requesting browser tab.
+	ClaimSecret *string `json:"claimSecret,omitempty"`
+
+	// Code Signed correlation code that carries no session authority without the browser claim secret.
+	Code BrowserHandoffCode `json:"code"`
 }
 
 // Condition defines model for Condition.
@@ -554,6 +627,12 @@ type Configuration struct {
 
 // ConfigurationSchemaVersion defines model for Configuration.SchemaVersion.
 type ConfigurationSchemaVersion int
+
+// CreateBrowserHandoffRequest defines model for CreateBrowserHandoffRequest.
+type CreateBrowserHandoffRequest struct {
+	// ClaimDigest Canonical raw-base64url SHA-256 of the browser-held claim secret.
+	ClaimDigest string `json:"claimDigest"`
+}
 
 // CreateJoinCodeRequest defines model for CreateJoinCodeRequest.
 type CreateJoinCodeRequest struct {
@@ -783,6 +862,9 @@ type Conflict = Problem
 // Forbidden defines model for Forbidden.
 type Forbidden = Problem
 
+// Gone defines model for Gone.
+type Gone = Problem
+
 // Misdirected defines model for Misdirected.
 type Misdirected = Problem
 
@@ -823,6 +905,11 @@ type ListAuditEventsParams struct {
 	Limit *int `form:"limit,omitempty" json:"limit,omitempty"`
 }
 
+// AuthorizeBrowserHandoffParams defines parameters for AuthorizeBrowserHandoff.
+type AuthorizeBrowserHandoffParams struct {
+	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
+}
+
 // ApplyConfigurationParams defines parameters for ApplyConfiguration.
 type ApplyConfigurationParams struct {
 	IfMatch     IfMatch   `json:"If-Match"`
@@ -831,8 +918,9 @@ type ApplyConfigurationParams struct {
 
 // StreamEventsParams defines parameters for StreamEvents.
 type StreamEventsParams struct {
-	Cursor      *string `form:"cursor,omitempty" json:"cursor,omitempty"`
-	LastEventID *string `json:"Last-Event-ID,omitempty"`
+	Cursor      *string   `form:"cursor,omitempty" json:"cursor,omitempty"`
+	LastEventID *string   `json:"Last-Event-ID,omitempty"`
+	XTewakeCSRF CSRFToken `json:"X-Tewake-CSRF"`
 }
 
 // CreateJoinCodeParams defines parameters for CreateJoinCode.
@@ -873,6 +961,15 @@ type CreateSessionParams struct {
 	// XTewakeAdminBootstrap Short-lived, one-use owner proof derived from the Controller credential boundary.
 	XTewakeAdminBootstrap AdminBootstrap `json:"X-Tewake-Admin-Bootstrap"`
 }
+
+// AuthorizeBrowserHandoffJSONRequestBody defines body for AuthorizeBrowserHandoff for application/json ContentType.
+type AuthorizeBrowserHandoffJSONRequestBody = AuthorizeBrowserHandoffRequest
+
+// CreateBrowserHandoffJSONRequestBody defines body for CreateBrowserHandoff for application/json ContentType.
+type CreateBrowserHandoffJSONRequestBody = CreateBrowserHandoffRequest
+
+// ClaimBrowserHandoffJSONRequestBody defines body for ClaimBrowserHandoff for application/json ContentType.
+type ClaimBrowserHandoffJSONRequestBody = ClaimBrowserHandoffRequest
 
 // ApplyConfigurationJSONRequestBody defines body for ApplyConfiguration for application/json ContentType.
 type ApplyConfigurationJSONRequestBody = Configuration
@@ -958,6 +1055,48 @@ type ClientInterface interface {
 	//
 	// Corresponds with GET /audit-events (the `ListAuditEvents` operationId).
 	ListAuditEvents(ctx context.Context, params *ListAuditEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AuthorizeBrowserHandoffWithBody Authorize one browser handoff as the Controller owner
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+	AuthorizeBrowserHandoffWithBody(ctx context.Context, params *AuthorizeBrowserHandoffParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// AuthorizeBrowserHandoff Authorize one browser handoff as the Controller owner
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+	AuthorizeBrowserHandoff(ctx context.Context, params *AuthorizeBrowserHandoffParams, body AuthorizeBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateBrowserHandoffWithBody Create a non-authorizing browser handoff code
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+	CreateBrowserHandoffWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// CreateBrowserHandoff Create a non-authorizing browser handoff code
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+	CreateBrowserHandoff(ctx context.Context, body CreateBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClaimBrowserHandoffWithBody Claim an owner-approved browser handoff
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+	ClaimBrowserHandoffWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// ClaimBrowserHandoff Claim an owner-approved browser handoff
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+	ClaimBrowserHandoff(ctx context.Context, body ClaimBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// GetConfiguration Read the non-secret desired configuration
 	//
@@ -1074,6 +1213,108 @@ type ClientInterface interface {
 // Corresponds with GET /audit-events (the `ListAuditEvents` operationId).
 func (c *Client) ListAuditEvents(ctx context.Context, params *ListAuditEventsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewListAuditEventsRequest(c.Server, params)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AuthorizeBrowserHandoffWithBody Authorize one browser handoff as the Controller owner
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+func (c *Client) AuthorizeBrowserHandoffWithBody(ctx context.Context, params *AuthorizeBrowserHandoffParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAuthorizeBrowserHandoffRequestWithBody(c.Server, params, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// AuthorizeBrowserHandoff Authorize one browser handoff as the Controller owner
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+func (c *Client) AuthorizeBrowserHandoff(ctx context.Context, params *AuthorizeBrowserHandoffParams, body AuthorizeBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewAuthorizeBrowserHandoffRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateBrowserHandoffWithBody Create a non-authorizing browser handoff code
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+func (c *Client) CreateBrowserHandoffWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBrowserHandoffRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// CreateBrowserHandoff Create a non-authorizing browser handoff code
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+func (c *Client) CreateBrowserHandoff(ctx context.Context, body CreateBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewCreateBrowserHandoffRequest(c.Server, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClaimBrowserHandoffWithBody Claim an owner-approved browser handoff
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+func (c *Client) ClaimBrowserHandoffWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClaimBrowserHandoffRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// ClaimBrowserHandoff Claim an owner-approved browser handoff
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+func (c *Client) ClaimBrowserHandoff(ctx context.Context, body ClaimBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewClaimBrowserHandoffRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -1449,6 +1690,139 @@ func NewListAuditEventsRequest(server string, params *ListAuditEventsParams) (*h
 	return req, nil
 }
 
+// NewAuthorizeBrowserHandoffRequest calls the generic AuthorizeBrowserHandoff builder with application/json body
+func NewAuthorizeBrowserHandoffRequest(server string, params *AuthorizeBrowserHandoffParams, body AuthorizeBrowserHandoffJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewAuthorizeBrowserHandoffRequestWithBody(server, params, "application/json", bodyReader)
+}
+
+// NewAuthorizeBrowserHandoffRequestWithBody constructs an http.Request for the AuthorizeBrowserHandoff method, with any body, and a specified content type
+func NewAuthorizeBrowserHandoffRequestWithBody(server string, params *AuthorizeBrowserHandoffParams, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/browser-handoff-authorizations")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	if params != nil {
+
+		var headerParam0 string
+
+		headerParam0, err = runtime.StyleParamWithOptions("simple", false, "X-Tewake-CSRF", params.XTewakeCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Tewake-CSRF", headerParam0)
+
+	}
+
+	return req, nil
+}
+
+// NewCreateBrowserHandoffRequest calls the generic CreateBrowserHandoff builder with application/json body
+func NewCreateBrowserHandoffRequest(server string, body CreateBrowserHandoffJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewCreateBrowserHandoffRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewCreateBrowserHandoffRequestWithBody constructs an http.Request for the CreateBrowserHandoff method, with any body, and a specified content type
+func NewCreateBrowserHandoffRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/browser-handoffs")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
+// NewClaimBrowserHandoffRequest calls the generic ClaimBrowserHandoff builder with application/json body
+func NewClaimBrowserHandoffRequest(server string, body ClaimBrowserHandoffJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewClaimBrowserHandoffRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewClaimBrowserHandoffRequestWithBody constructs an http.Request for the ClaimBrowserHandoff method, with any body, and a specified content type
+func NewClaimBrowserHandoffRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/browser-handoffs/claim")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
+
+	return req, nil
+}
+
 // NewGetConfigurationRequest constructs an http.Request for the GetConfiguration method
 func NewGetConfigurationRequest(server string) (*http.Request, error) {
 	var err error
@@ -1628,6 +2002,15 @@ func NewStreamEventsRequest(server string, params *StreamEventsParams) (*http.Re
 
 			req.Header.Set("Last-Event-ID", headerParam0)
 		}
+
+		var headerParam1 string
+
+		headerParam1, err = runtime.StyleParamWithOptions("simple", false, "X-Tewake-CSRF", params.XTewakeCSRF, runtime.StyleParamOptions{ParamLocation: runtime.ParamLocationHeader, Type: "string", Format: ""})
+		if err != nil {
+			return nil, err
+		}
+
+		req.Header.Set("X-Tewake-CSRF", headerParam1)
 
 	}
 
@@ -2195,6 +2578,48 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /audit-events (the `ListAuditEvents` operationId).
 	ListAuditEventsWithResponse(ctx context.Context, params *ListAuditEventsParams, reqEditors ...RequestEditorFn) (*ListAuditEventsResponse, error)
 
+	// AuthorizeBrowserHandoffWithBodyWithResponse Authorize one browser handoff as the Controller owner
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+	AuthorizeBrowserHandoffWithBodyWithResponse(ctx context.Context, params *AuthorizeBrowserHandoffParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AuthorizeBrowserHandoffResponse, error)
+
+	// AuthorizeBrowserHandoffWithResponse Authorize one browser handoff as the Controller owner
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+	AuthorizeBrowserHandoffWithResponse(ctx context.Context, params *AuthorizeBrowserHandoffParams, body AuthorizeBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*AuthorizeBrowserHandoffResponse, error)
+
+	// CreateBrowserHandoffWithBodyWithResponse Create a non-authorizing browser handoff code
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+	CreateBrowserHandoffWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBrowserHandoffResponse, error)
+
+	// CreateBrowserHandoffWithResponse Create a non-authorizing browser handoff code
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+	CreateBrowserHandoffWithResponse(ctx context.Context, body CreateBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBrowserHandoffResponse, error)
+
+	// ClaimBrowserHandoffWithBodyWithResponse Claim an owner-approved browser handoff
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+	ClaimBrowserHandoffWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClaimBrowserHandoffResponse, error)
+
+	// ClaimBrowserHandoffWithResponse Claim an owner-approved browser handoff
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+	ClaimBrowserHandoffWithResponse(ctx context.Context, body ClaimBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*ClaimBrowserHandoffResponse, error)
+
 	// GetConfigurationWithResponse Read the non-secret desired configuration
 	//
 	// Returns a wrapper object for the known response body format(s).
@@ -2398,6 +2823,318 @@ func (r ListAuditEventsResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r ListAuditEventsResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type AuthorizeBrowserHandoffResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON410 the response for an HTTP 410 `application/problem+json` response
+	ApplicationproblemJSON410 *Gone
+	// ApplicationproblemJSON413 the response for an HTTP 413 `application/problem+json` response
+	ApplicationproblemJSON413 *PayloadTooLarge
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMedia
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ValidationFailed
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON410 returns the response for an HTTP 410 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON410() *Gone {
+	return r.ApplicationproblemJSON410
+}
+
+// GetApplicationproblemJSON413 returns the response for an HTTP 413 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON413() *PayloadTooLarge {
+	return r.ApplicationproblemJSON413
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON415() *UnsupportedMedia {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON422() *ValidationFailed {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r AuthorizeBrowserHandoffResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r AuthorizeBrowserHandoffResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r AuthorizeBrowserHandoffResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r AuthorizeBrowserHandoffResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r AuthorizeBrowserHandoffResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type CreateBrowserHandoffResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *BrowserHandoff
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON413 the response for an HTTP 413 `application/problem+json` response
+	ApplicationproblemJSON413 *PayloadTooLarge
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMedia
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ValidationFailed
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r CreateBrowserHandoffResponse) GetJSON201() *BrowserHandoff {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON413 returns the response for an HTTP 413 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON413() *PayloadTooLarge {
+	return r.ApplicationproblemJSON413
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON415() *UnsupportedMedia {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON422() *ValidationFailed {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r CreateBrowserHandoffResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r CreateBrowserHandoffResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r CreateBrowserHandoffResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r CreateBrowserHandoffResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r CreateBrowserHandoffResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+// ClaimBrowserHandoffResponse201Headers the declared response headers of an HTTP 201 response for ClaimBrowserHandoff
+type ClaimBrowserHandoffResponse201Headers struct {
+	SetCookie *string
+}
+
+type ClaimBrowserHandoffResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *Session
+	// JSON202 the response for an HTTP 202 `application/json` response
+	JSON202 *BrowserHandoffPending
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *BadRequest
+	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
+	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *Conflict
+	// ApplicationproblemJSON410 the response for an HTTP 410 `application/problem+json` response
+	ApplicationproblemJSON410 *Gone
+	// ApplicationproblemJSON413 the response for an HTTP 413 `application/problem+json` response
+	ApplicationproblemJSON413 *PayloadTooLarge
+	// ApplicationproblemJSON415 the response for an HTTP 415 `application/problem+json` response
+	ApplicationproblemJSON415 *UnsupportedMedia
+	// ApplicationproblemJSON421 the response for an HTTP 421 `application/problem+json` response
+	ApplicationproblemJSON421 *Misdirected
+	// ApplicationproblemJSON422 the response for an HTTP 422 `application/problem+json` response
+	ApplicationproblemJSON422 *ValidationFailed
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *Unavailable
+	// Headers201 the parsed response headers for an HTTP 201 response
+	Headers201 *ClaimBrowserHandoffResponse201Headers
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r ClaimBrowserHandoffResponse) GetJSON201() *Session {
+	return r.JSON201
+}
+
+// GetJSON202 returns the response for an HTTP 202 `application/json` response
+func (r ClaimBrowserHandoffResponse) GetJSON202() *BrowserHandoffPending {
+	return r.JSON202
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON400() *BadRequest {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON401() *Unauthorized {
+	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON409() *Conflict {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON410 returns the response for an HTTP 410 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON410() *Gone {
+	return r.ApplicationproblemJSON410
+}
+
+// GetApplicationproblemJSON413 returns the response for an HTTP 413 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON413() *PayloadTooLarge {
+	return r.ApplicationproblemJSON413
+}
+
+// GetApplicationproblemJSON415 returns the response for an HTTP 415 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON415() *UnsupportedMedia {
+	return r.ApplicationproblemJSON415
+}
+
+// GetApplicationproblemJSON421 returns the response for an HTTP 421 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON421() *Misdirected {
+	return r.ApplicationproblemJSON421
+}
+
+// GetApplicationproblemJSON422 returns the response for an HTTP 422 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON422() *ValidationFailed {
+	return r.ApplicationproblemJSON422
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r ClaimBrowserHandoffResponse) GetApplicationproblemJSON503() *Unavailable {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r ClaimBrowserHandoffResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r ClaimBrowserHandoffResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r ClaimBrowserHandoffResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r ClaimBrowserHandoffResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -3778,6 +4515,84 @@ func (c *ClientWithResponses) ListAuditEventsWithResponse(ctx context.Context, p
 	return ParseListAuditEventsResponse(rsp)
 }
 
+// AuthorizeBrowserHandoffWithBodyWithResponse Authorize one browser handoff as the Controller owner
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+func (c *ClientWithResponses) AuthorizeBrowserHandoffWithBodyWithResponse(ctx context.Context, params *AuthorizeBrowserHandoffParams, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*AuthorizeBrowserHandoffResponse, error) {
+	rsp, err := c.AuthorizeBrowserHandoffWithBody(ctx, params, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAuthorizeBrowserHandoffResponse(rsp)
+}
+
+// AuthorizeBrowserHandoffWithResponse Authorize one browser handoff as the Controller owner
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoff-authorizations (the `AuthorizeBrowserHandoff` operationId).
+func (c *ClientWithResponses) AuthorizeBrowserHandoffWithResponse(ctx context.Context, params *AuthorizeBrowserHandoffParams, body AuthorizeBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*AuthorizeBrowserHandoffResponse, error) {
+	rsp, err := c.AuthorizeBrowserHandoff(ctx, params, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseAuthorizeBrowserHandoffResponse(rsp)
+}
+
+// CreateBrowserHandoffWithBodyWithResponse Create a non-authorizing browser handoff code
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+func (c *ClientWithResponses) CreateBrowserHandoffWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*CreateBrowserHandoffResponse, error) {
+	rsp, err := c.CreateBrowserHandoffWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateBrowserHandoffResponse(rsp)
+}
+
+// CreateBrowserHandoffWithResponse Create a non-authorizing browser handoff code
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoffs (the `CreateBrowserHandoff` operationId).
+func (c *ClientWithResponses) CreateBrowserHandoffWithResponse(ctx context.Context, body CreateBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*CreateBrowserHandoffResponse, error) {
+	rsp, err := c.CreateBrowserHandoff(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseCreateBrowserHandoffResponse(rsp)
+}
+
+// ClaimBrowserHandoffWithBodyWithResponse Claim an owner-approved browser handoff
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+func (c *ClientWithResponses) ClaimBrowserHandoffWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*ClaimBrowserHandoffResponse, error) {
+	rsp, err := c.ClaimBrowserHandoffWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClaimBrowserHandoffResponse(rsp)
+}
+
+// ClaimBrowserHandoffWithResponse Claim an owner-approved browser handoff
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /browser-handoffs/claim (the `ClaimBrowserHandoff` operationId).
+func (c *ClientWithResponses) ClaimBrowserHandoffWithResponse(ctx context.Context, body ClaimBrowserHandoffJSONRequestBody, reqEditors ...RequestEditorFn) (*ClaimBrowserHandoffResponse, error) {
+	rsp, err := c.ClaimBrowserHandoff(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseClaimBrowserHandoffResponse(rsp)
+}
+
 // GetConfigurationWithResponse Read the non-secret desired configuration
 //
 // Returns a wrapper object for the known response body format(s).
@@ -4080,6 +4895,282 @@ func ParseListAuditEventsResponse(rsp *http.Response) (*ListAuditEventsResponse,
 		}
 		response.ApplicationproblemJSON503 = &dest
 
+	}
+
+	return response, nil
+}
+
+// ParseAuthorizeBrowserHandoffResponse parses an HTTP response from a AuthorizeBrowserHandoffWithResponse call
+func ParseAuthorizeBrowserHandoffResponse(rsp *http.Response) (*AuthorizeBrowserHandoffResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &AuthorizeBrowserHandoffResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case rsp.StatusCode == 204:
+		break // No content-type
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 410:
+		var dest Gone
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON410 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 413:
+		var dest PayloadTooLarge
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON413 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMedia
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ValidationFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseCreateBrowserHandoffResponse parses an HTTP response from a CreateBrowserHandoffWithResponse call
+func ParseCreateBrowserHandoffResponse(rsp *http.Response) (*CreateBrowserHandoffResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &CreateBrowserHandoffResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest BrowserHandoff
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 413:
+		var dest PayloadTooLarge
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON413 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMedia
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ValidationFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	return response, nil
+}
+
+// ParseClaimBrowserHandoffResponse parses an HTTP response from a ClaimBrowserHandoffWithResponse call
+func ParseClaimBrowserHandoffResponse(rsp *http.Response) (*ClaimBrowserHandoffResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &ClaimBrowserHandoffResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest Session
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 202:
+		var dest BrowserHandoffPending
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON202 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest BadRequest
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 401:
+		var dest Unauthorized
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest Conflict
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 410:
+		var dest Gone
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON410 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 413:
+		var dest PayloadTooLarge
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON413 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 415:
+		var dest UnsupportedMedia
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON415 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 421:
+		var dest Misdirected
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON421 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 422:
+		var dest ValidationFailed
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON422 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest Unavailable
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
+	}
+
+	switch {
+	case rsp.StatusCode == 201:
+		var headers ClaimBrowserHandoffResponse201Headers
+		if values := rsp.Header.Values("Set-Cookie"); len(values) > 0 {
+			var value string
+			if err := runtime.BindStyledParameterWithOptions("simple", "Set-Cookie", values[0], &value, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: false, Type: "string", Format: ""}); err != nil {
+				return nil, err
+			}
+			headers.SetCookie = &value
+		}
+		response.Headers201 = &headers
 	}
 
 	return response, nil
@@ -5240,6 +6331,15 @@ type ServerInterface interface {
 	// ListAuditEvents List append-only safe audit events
 	// (GET /audit-events)
 	ListAuditEvents(w http.ResponseWriter, r *http.Request, params ListAuditEventsParams)
+	// AuthorizeBrowserHandoff Authorize one browser handoff as the Controller owner
+	// (POST /browser-handoff-authorizations)
+	AuthorizeBrowserHandoff(w http.ResponseWriter, r *http.Request, params AuthorizeBrowserHandoffParams)
+	// CreateBrowserHandoff Create a non-authorizing browser handoff code
+	// (POST /browser-handoffs)
+	CreateBrowserHandoff(w http.ResponseWriter, r *http.Request)
+	// ClaimBrowserHandoff Claim an owner-approved browser handoff
+	// (POST /browser-handoffs/claim)
+	ClaimBrowserHandoff(w http.ResponseWriter, r *http.Request)
 	// GetConfiguration Read the non-secret desired configuration
 	// (GET /configuration)
 	GetConfiguration(w http.ResponseWriter, r *http.Request)
@@ -5339,6 +6439,79 @@ func (siw *ServerInterfaceWrapper) ListAuditEvents(w http.ResponseWriter, r *htt
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		siw.Handler.ListAuditEvents(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// AuthorizeBrowserHandoff operation middleware
+func (siw *ServerInterfaceWrapper) AuthorizeBrowserHandoff(w http.ResponseWriter, r *http.Request) {
+
+	var err error
+	_ = err
+
+	// Parameter object where we will unmarshal all parameters from the context
+	var params AuthorizeBrowserHandoffParams
+
+	headers := r.Header
+
+	// ------------- Required header parameter "X-Tewake-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Tewake-CSRF")]; found {
+		var XTewakeCSRF CSRFToken
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Tewake-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Tewake-CSRF", valueList[0], &XTewakeCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Tewake-CSRF", Err: err})
+			return
+		}
+
+		params.XTewakeCSRF = XTewakeCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Tewake-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Tewake-CSRF", Err: err})
+		return
+	}
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.AuthorizeBrowserHandoff(w, r, params)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// CreateBrowserHandoff operation middleware
+func (siw *ServerInterfaceWrapper) CreateBrowserHandoff(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.CreateBrowserHandoff(w, r)
+	}))
+
+	for _, middleware := range siw.HandlerMiddlewares {
+		handler = middleware(handler)
+	}
+
+	handler.ServeHTTP(w, r)
+}
+
+// ClaimBrowserHandoff operation middleware
+func (siw *ServerInterfaceWrapper) ClaimBrowserHandoff(w http.ResponseWriter, r *http.Request) {
+
+	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		siw.Handler.ClaimBrowserHandoff(w, r)
 	}))
 
 	for _, middleware := range siw.HandlerMiddlewares {
@@ -5485,6 +6658,29 @@ func (siw *ServerInterfaceWrapper) StreamEvents(w http.ResponseWriter, r *http.R
 
 		params.LastEventID = &LastEventID
 
+	}
+
+	// ------------- Required header parameter "X-Tewake-CSRF" -------------
+	if valueList, found := headers[http.CanonicalHeaderKey("X-Tewake-CSRF")]; found {
+		var XTewakeCSRF CSRFToken
+		n := len(valueList)
+		if n != 1 {
+			siw.ErrorHandlerFunc(w, r, &TooManyValuesForParamError{ParamName: "X-Tewake-CSRF", Count: n})
+			return
+		}
+
+		err = runtime.BindStyledParameterWithOptions("simple", "X-Tewake-CSRF", valueList[0], &XTewakeCSRF, runtime.BindStyledParameterOptions{ParamLocation: runtime.ParamLocationHeader, Explode: false, Required: true, Type: "string", Format: ""})
+		if err != nil {
+			siw.ErrorHandlerFunc(w, r, &InvalidParamFormatError{ParamName: "X-Tewake-CSRF", Err: err})
+			return
+		}
+
+		params.XTewakeCSRF = XTewakeCSRF
+
+	} else {
+		err := fmt.Errorf("Header parameter X-Tewake-CSRF is required, but not found")
+		siw.ErrorHandlerFunc(w, r, &RequiredHeaderError{ParamName: "X-Tewake-CSRF", Err: err})
+		return
 	}
 
 	handler := http.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -6125,6 +7321,9 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 	m.HandleFunc(http.MethodDelete+" "+options.BaseURL+"/session", wrapper.DeleteSession)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/session", wrapper.GetSession)
 	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/session", wrapper.CreateSession)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/browser-handoffs", wrapper.CreateBrowserHandoff)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/browser-handoffs/claim", wrapper.ClaimBrowserHandoff)
+	m.HandleFunc(http.MethodPost+" "+options.BaseURL+"/browser-handoff-authorizations", wrapper.AuthorizeBrowserHandoff)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/setup", wrapper.GetSetup)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/overview", wrapper.GetOverview)
 	m.HandleFunc(http.MethodGet+" "+options.BaseURL+"/nodes", wrapper.ListNodes)
@@ -6149,70 +7348,80 @@ func HandlerWithOptions(si ServerInterface, options StdHTTPServerOptions) http.H
 // const string: with thousands of chunks the chained `+` fold is several
 // times slower for the Go compiler than parsing a slice literal.
 var swaggerSpec = []string{
-	"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",
-	"llyy6Cjaxxndnw+j5fXy/wIAAP//",
+	"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",
+	"5fL/AgAA//8=",
 }
 
 // decodeSpec returns the embedded OpenAPI spec as raw JSON bytes,

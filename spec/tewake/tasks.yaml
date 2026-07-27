@@ -376,20 +376,65 @@ tasks:
     title: Build the embedded management UI
     type: frontend
     description: >
-      Build Setup, Overview, Nodes, Targets, Runs, and Settings against the generated
-      client and embed the production output into the controller.
+      Add the owner-authorized browser handoff, then build Setup, Overview, Nodes,
+      Targets, Runs, and Settings against the generated client and embed the
+      production output into the controller.
     depends_on: [twk-012]
     paths:
+      - spec/tewake
+      - api
+      - internal/api
+      - internal/auth
+      - internal/store
+      - cmd/tewake
       - web
       - internal/webui
     ci_targets: [lint, typecheck, test, build, e2e]
     pr_order: 13
-    status: todo
+    status: done
+    notes:
+      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. TWK-013 must show these controls as unavailable rather than fabricate a successful Target journey; TWK-016 now owns that missing provider authority and enables the final setup journey."
+      - "2026-07-26: Browser bootstrap is fixed to a two-party handoff. The browser-held claim secret never leaves volatile memory except for same-origin claim, while the CLI-visible signed code carries no session authority by itself."
+      - "2026-07-27: The process-key-signed two-minute browser handoff now requires exact Host/Origin, owner session and CSRF approval, and the browser-held 256-bit preimage. Approval and claim use rollback-capable fences; 16 concurrent HTTP claims issue exactly one cookie and audit, while audit, entropy, expiry, restart, tamper, wrong-secret, and replay failures remain fail closed without persisting claim or session material."
+      - "2026-07-27: The generated-client console implements Setup, Overview, Nodes, Targets, Runs, and Settings with explicit last-known, offline, stale, permission, quarantine, optimistic-conflict, and committed-but-unconfirmed states. Join-code responses racing Close/Escape/hidden/unmount are cancelled and scrubbed; GitHub App and Target controls remain visibly disabled with their missing authority rather than submitting an unverified Target."
+      - "2026-07-27: An interrupted browser-claim response reconciles against the current session instead of calling an ambiguous commit a rejection. Activity appends resume from an opaque final-page cursor without skipping older pages, and same-origin fetch-based SSE carries CSRF only in a header. Stream 401/403 is terminal in the browser; the Controller also closes every open stream at the absolute session deadline or exact logout revocation signal."
+      - "2026-07-27: Local machine-readable gates pass with 1,297 Go tests, 23 Vitest tests, 22 desktop/mobile Playwright component tests with zero axe violations, one release-binary browser E2E, and 171 networkless privileged Linux race tests, all with zero failures. Generated API/Web guards pass, known pnpm high-severity vulnerabilities are absent, focused auth/API race tests pass, and controller plus Agent cross-build for Linux, macOS, and Windows amd64/arm64."
+      - "2026-07-27: In an external-network-disabled Linux arm64 container, the cross-built release binary completed the actual owner CLI browser handoff, a 204 join-code cancellation, a consumed-code 404 reconciliation, real node enrollment, Drain/Resume, and audit rendering. A separate read-only-root, empty-PATH smoke served the checked-in hashed UI without a Node runtime; index and JavaScript returned 200 with CSP and no-store evidence."
     acceptance:
       - Playwright component fixtures cover loading, empty, running, offline, stale, permission error, and quarantined states.
-      - The operator can complete setup, target creation, join-code management, and node drain journeys.
+      - Browser handoff, join-code management, and node drain journeys complete without placing claim or session secrets in URLs, storage, logs, or diagnostics.
+      - Unimplemented GitHub and Target authority remains visible but disabled with an exact reason; no unverified Target can be submitted.
       - Component screenshots have no unresolved visual or accessibility defects.
       - A release binary serves the same generated UI with no Node.js runtime.
+
+  - id: twk-020
+    title: Implement GitHub App management authority and Target provisioning
+    type: integration
+    description: >
+      Implement the signed GitHub App Manifest callback, OS-private App credential
+      ownership, installation and private-scope discovery, fail-closed Target
+      verification, durable scale-set provisioning intent, and the corresponding
+      Setup and Target UI journey.
+    depends_on: [twk-012, twk-013]
+    paths:
+      - spec/tewake
+      - api
+      - internal/api
+      - internal/app
+      - internal/github
+      - internal/platform
+      - internal/store
+      - cmd/tewake
+      - web
+      - test/contract/github
+    ci_targets: [lint, typecheck, test, build, e2e]
+    pr_order: 14
+    status: todo
+    acceptance:
+      - One user-owned GitHub App can be installed into and managed across two or more accounts.
+      - Manifest callback state is signed, single-use, bounded, and never leaks the App key or installation token.
+      - Public, unknown, unsafe runner-group, overlapping, and shared scale-set Targets fail closed before desired configuration commits.
+      - The operator can complete GitHub setup and private Target creation from the generated-client UI.
 
   - id: twk-016
     title: Implement node availability control
@@ -409,7 +454,7 @@ tasks:
       - cmd/tewake
       - cmd/tewake-agent
     ci_targets: [lint, test, build]
-    pr_order: 14
+    pr_order: 15
     status: todo
     acceptance:
       - A stopped node receives no execution and remains stopped across agent service restart and reboot.
@@ -433,7 +478,7 @@ tasks:
       - packaging/tray
       - test/live/tray
     ci_targets: [lint, test, build, e2e]
-    pr_order: 15
+    pr_order: 16
     status: todo
     acceptance:
       - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
@@ -448,13 +493,13 @@ tasks:
     description: >
       Run real three-OS, two-installation E2E and publish the threat model, security
       contract, support matrix, native-isolation limitations, and machine-readable evidence.
-    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017]
+    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017, twk-020]
     paths:
       - docs/security
       - test/live
       - output/release-evidence
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 16
+    pr_order: 17
     status: todo
     acceptance:
       - Private generic and OS-specific jobs route correctly across all three OSes.
@@ -477,7 +522,7 @@ tasks:
       - CONTRIBUTING.md
       - SECURITY.md
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 17
+    pr_order: 18
     status: todo
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
@@ -501,7 +546,7 @@ tasks:
       - extensions/raycast
       - docs/integrations
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 18
+    pr_order: 19
     status: todo
     notes: >
       Ordered after the first release because Raycast is macOS-only, optional, and

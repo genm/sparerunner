@@ -23,6 +23,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/browser-handoffs": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Create a non-authorizing browser handoff code */
+    post: operations["createBrowserHandoff"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/browser-handoffs/claim": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Claim an owner-approved browser handoff */
+    post: operations["claimBrowserHandoff"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  "/browser-handoff-authorizations": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Authorize one browser handoff as the Controller owner */
+    post: operations["authorizeBrowserHandoff"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/setup": {
     parameters: {
       query?: never;
@@ -277,6 +328,33 @@ export interface components {
       authenticated: true;
       csrfToken: string;
     };
+    CreateBrowserHandoffRequest: {
+      /** @description Canonical raw-base64url SHA-256 of the browser-held claim secret. */
+      claimDigest: string;
+    };
+    ClaimBrowserHandoffRequest: {
+      code: components["schemas"]["BrowserHandoffCode"];
+      /** @description Canonical raw-base64url 256-bit secret retained only by the requesting browser tab. */
+      claimSecret: string;
+    };
+    AuthorizeBrowserHandoffRequest: {
+      code: components["schemas"]["BrowserHandoffCode"];
+    };
+    /** @description Signed correlation code that carries no session authority without the browser claim secret. */
+    BrowserHandoffCode: string;
+    BrowserHandoff: {
+      code: components["schemas"]["BrowserHandoffCode"];
+      /** @enum {string} */
+      state: "pending";
+      /** Format: date-time */
+      expiresAt: string;
+    };
+    BrowserHandoffPending: {
+      /** @enum {string} */
+      state: "pending";
+      /** Format: date-time */
+      expiresAt: string;
+    };
     Setup: {
       controllerInitialized: boolean;
       /** @enum {string} */
@@ -426,6 +504,12 @@ export interface components {
     AuditEventPage: {
       events: components["schemas"]["AuditEvent"][];
       nextCursor?: string;
+      /**
+       * @description Opaque exclusive cursor for the last event represented by this
+       *     response. Unlike nextCursor, it remains present on the final page
+       *     so append-only consumers can request only later events.
+       */
+      resumeCursor?: string;
     };
     CreateJoinCodeRequest: {
       endpointHints: string[];
@@ -504,6 +588,15 @@ export interface components {
     };
     /** @description Stale revision or domain conflict */
     Conflict: {
+      headers: {
+        [name: string]: unknown;
+      };
+      content: {
+        "application/problem+json": components["schemas"]["Problem"];
+      };
+    };
+    /** @description The short-lived resource expired */
+    Gone: {
       headers: {
         [name: string]: unknown;
       };
@@ -665,6 +758,114 @@ export interface operations {
       401: components["responses"]["Unauthorized"];
       403: components["responses"]["Forbidden"];
       421: components["responses"]["Misdirected"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  createBrowserHandoff: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["CreateBrowserHandoffRequest"];
+      };
+    };
+    responses: {
+      /** @description Browser handoff created */
+      201: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BrowserHandoff"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      403: components["responses"]["Forbidden"];
+      413: components["responses"]["PayloadTooLarge"];
+      415: components["responses"]["UnsupportedMedia"];
+      421: components["responses"]["Misdirected"];
+      422: components["responses"]["ValidationFailed"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  claimBrowserHandoff: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["ClaimBrowserHandoffRequest"];
+      };
+    };
+    responses: {
+      /** @description Administrator session created */
+      201: {
+        headers: {
+          "Set-Cookie"?: string;
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["Session"];
+        };
+      };
+      /** @description Handoff still awaits owner approval */
+      202: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["BrowserHandoffPending"];
+        };
+      };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      409: components["responses"]["Conflict"];
+      410: components["responses"]["Gone"];
+      413: components["responses"]["PayloadTooLarge"];
+      415: components["responses"]["UnsupportedMedia"];
+      421: components["responses"]["Misdirected"];
+      422: components["responses"]["ValidationFailed"];
+      503: components["responses"]["Unavailable"];
+    };
+  };
+  authorizeBrowserHandoff: {
+    parameters: {
+      query?: never;
+      header: {
+        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+      };
+      path?: never;
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["AuthorizeBrowserHandoffRequest"];
+      };
+    };
+    responses: {
+      /** @description Browser handoff authorized */
+      204: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content?: never;
+      };
+      400: components["responses"]["BadRequest"];
+      401: components["responses"]["Unauthorized"];
+      403: components["responses"]["Forbidden"];
+      410: components["responses"]["Gone"];
+      413: components["responses"]["PayloadTooLarge"];
+      415: components["responses"]["UnsupportedMedia"];
+      421: components["responses"]["Misdirected"];
+      422: components["responses"]["ValidationFailed"];
       503: components["responses"]["Unavailable"];
     };
   };
@@ -1052,8 +1253,9 @@ export interface operations {
       query?: {
         cursor?: string;
       };
-      header?: {
+      header: {
         "Last-Event-ID"?: string;
+        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;

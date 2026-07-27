@@ -2,6 +2,7 @@ package auth
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -311,6 +313,50 @@ func TestManagerRevokesExpiresAndInvalidatesSessionsOnRestart(t *testing.T) {
 	}
 }
 
+func TestWatchSessionBindsRemainingLifetimeAndExactRevocation(t *testing.T) {
+	t.Parallel()
+
+	manager, err := NewManagerWithSessionTTL(testRoot(), testOrigin, false, 5*time.Minute)
+	if err != nil {
+		t.Fatalf("create short-lived manager: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	manager.now = func() time.Time { return now }
+	session, _, err := manager.IssueSession()
+	if err != nil {
+		t.Fatalf("issue session: %v", err)
+	}
+	expiresAt, revoked, err := manager.WatchSession(session)
+	if err != nil {
+		t.Fatalf("watch session: %v", err)
+	}
+	if want := now.Add(5 * time.Minute); !expiresAt.Equal(want) {
+		t.Fatalf("session deadline = %s, want %s", expiresAt, want)
+	}
+	select {
+	case <-revoked:
+		t.Fatal("fresh session revocation signal was already closed")
+	default:
+	}
+	if err := manager.RevokeSession(session); err != nil {
+		t.Fatalf("revoke session: %v", err)
+	}
+	select {
+	case <-revoked:
+	default:
+		t.Fatal("exact session revocation did not close the watcher")
+	}
+
+	for _, ttl := range []time.Duration{-time.Second, 0, DefaultSessionTTL + time.Nanosecond} {
+		if _, err := NewManagerWithSessionTTL(testRoot(), testOrigin, false, ttl); !errors.Is(
+			err,
+			ErrInvalidSessionTTL,
+		) {
+			t.Fatalf("invalid TTL %s error = %v, want %v", ttl, err, ErrInvalidSessionTTL)
+		}
+	}
+}
+
 func TestAuthenticateRejectsMalformedForgedAndDuplicateCookies(t *testing.T) {
 	t.Parallel()
 
@@ -460,23 +506,33 @@ func TestAuthorizeMutationEnforcesHostAuthOriginCSRFOrdering(t *testing.T) {
 	}
 }
 
-func TestAuthorizeSameOriginReadRequiresAuthenticatedExactOrigin(t *testing.T) {
+func TestAuthorizeSameOriginReadRequiresAuthenticatedSessionCSRF(t *testing.T) {
 	t.Parallel()
 
 	manager := newTestManager(t, testOrigin, false)
-	_, cookie, err := manager.IssueSession()
+	session, cookie, err := manager.IssueSession()
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
+	csrf, err := manager.CSRFToken(session)
+	if err != nil {
+		t.Fatalf("derive CSRF: %v", err)
+	}
 	request := sameOriginRequest(http.MethodGet, "/api/v1/events")
+	request.Header.Del("Origin")
 	request.AddCookie(cookie)
+	request.Header.Set(CSRFHeaderName, csrf)
 	if _, err := manager.AuthorizeSameOriginRead(request); err != nil {
-		t.Fatalf("authorize same-origin read: %v", err)
+		t.Fatalf("authorize browser-compatible same-origin read without Origin header: %v", err)
 	}
 
-	request.Header.Set("Origin", "null")
-	if _, err := manager.AuthorizeSameOriginRead(request); !errors.Is(err, ErrForbiddenOrigin) {
-		t.Fatalf("cross-origin read error = %v, want %v", err, ErrForbiddenOrigin)
+	request.Header.Del(CSRFHeaderName)
+	if _, err := manager.AuthorizeSameOriginRead(request); !errors.Is(err, ErrInvalidCSRF) {
+		t.Fatalf("missing stream CSRF error = %v, want %v", err, ErrInvalidCSRF)
+	}
+	request.Header.Set(CSRFHeaderName, csrf+"x")
+	if _, err := manager.AuthorizeSameOriginRead(request); !errors.Is(err, ErrInvalidCSRF) {
+		t.Fatalf("invalid stream CSRF error = %v, want %v", err, ErrInvalidCSRF)
 	}
 }
 
@@ -585,6 +641,385 @@ func TestIssueSessionFailsClosedWhenEntropyIsUnavailable(t *testing.T) {
 	}
 	if session != (Session{}) || cookie != nil {
 		t.Fatalf("failed issue returned credential material: session=%v cookie=%v", session, cookie)
+	}
+}
+
+func TestBrowserHandoffApprovalAndClaimAreTwoPhase(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	now := time.Unix(1_750_000_000, 0).UTC()
+	manager.now = func() time.Time { return now }
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x42}, browserHandoffIDSize))
+
+	secret := [browserHandoffSecretSize]byte{1, 2, 3, 4}
+	digest := sha256.Sum256(secret[:])
+	handoff, err := manager.IssueBrowserHandoff(digest)
+	if err != nil {
+		t.Fatalf("issue browser handoff: %v", err)
+	}
+	if !ValidBrowserHandoffCodeEncoding(handoff.Code()) {
+		t.Fatal("issued browser handoff does not have canonical public encoding")
+	}
+	if !strings.HasPrefix(handoff.Code(), browserHandoffVersion+".") {
+		t.Fatalf("handoff code = %q, want %s wire", handoff.Code(), browserHandoffVersion)
+	}
+	if got, want := handoff.ExpiresAt(), now.Add(BrowserHandoffTTL); !got.Equal(want) {
+		t.Fatalf("handoff expiry = %s, want %s", got, want)
+	}
+
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), secret); !errors.Is(err, ErrBrowserHandoffPending) {
+		t.Fatalf("claim before approval error = %v, want pending", err)
+	} else {
+		var pending *BrowserHandoffPendingError
+		if !errors.As(err, &pending) || !pending.ExpiresAt().Equal(handoff.ExpiresAt()) {
+			t.Fatalf("pending error = %#v, want verified expiry %s", err, handoff.ExpiresAt())
+		}
+	}
+
+	approval, err := manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("reserve approval: %v", err)
+	}
+	if !approval.NeedsAudit() {
+		t.Fatal("new approval does not require audit")
+	}
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), secret); !errors.Is(err, ErrBrowserHandoffPending) {
+		t.Fatalf("claim while approval is fenced error = %v, want pending", err)
+	}
+	staleApproval := approval
+	if err := manager.RollbackBrowserHandoffApproval(approval); err != nil {
+		t.Fatalf("rollback approval: %v", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), secret); !errors.Is(err, ErrBrowserHandoffPending) {
+		t.Fatalf("claim after approval rollback error = %v, want pending", err)
+	}
+
+	approval, err = manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("reserve approval again: %v", err)
+	}
+	if err := manager.CommitBrowserHandoffApproval(staleApproval); !errors.Is(err, ErrBrowserHandoffFence) {
+		t.Fatalf("stale approval commit error = %v, want fence rejection", err)
+	}
+	if err := manager.CommitBrowserHandoffApproval(approval); err != nil {
+		t.Fatalf("commit approval: %v", err)
+	}
+	retry, err := manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("retry committed approval: %v", err)
+	}
+	if retry.NeedsAudit() {
+		t.Fatal("committed approval retry requested duplicate audit")
+	}
+
+	claim, err := manager.ClaimBrowserHandoff(handoff.Code(), secret)
+	if err != nil {
+		t.Fatalf("reserve claim: %v", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), secret); !errors.Is(err, ErrBrowserHandoffClaiming) {
+		t.Fatalf("parallel claim error = %v, want claiming", err)
+	}
+	staleClaim := claim
+	if err := manager.RollbackBrowserHandoffClaim(claim); err != nil {
+		t.Fatalf("rollback claim: %v", err)
+	}
+	claim, err = manager.ClaimBrowserHandoff(handoff.Code(), secret)
+	if err != nil {
+		t.Fatalf("reserve claim again: %v", err)
+	}
+	if err := manager.CommitBrowserHandoffClaim(staleClaim); !errors.Is(err, ErrBrowserHandoffFence) {
+		t.Fatalf("stale claim commit error = %v, want fence rejection", err)
+	}
+	if err := manager.CommitBrowserHandoffClaim(claim); err != nil {
+		t.Fatalf("commit claim: %v", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), secret); !errors.Is(err, ErrBrowserHandoffClaimed) {
+		t.Fatalf("claim replay error = %v, want claimed", err)
+	}
+}
+
+func TestBrowserHandoffRejectsTamperSecretExpiryAndRestart(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	now := time.Unix(1_750_000_000, 0).UTC()
+	manager.now = func() time.Time { return now }
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x21}, browserHandoffIDSize))
+	secret := [browserHandoffSecretSize]byte{8, 7, 6, 5}
+	digest := sha256.Sum256(secret[:])
+	handoff, err := manager.IssueBrowserHandoff(digest)
+	if err != nil {
+		t.Fatalf("issue browser handoff: %v", err)
+	}
+
+	wrongSecret := secret
+	wrongSecret[0] ^= 0xff
+	if _, err := manager.ClaimBrowserHandoff(handoff.Code(), wrongSecret); !errors.Is(err, ErrInvalidBrowserHandoff) {
+		t.Fatalf("wrong secret error = %v, want invalid", err)
+	}
+	tamperedSuffix := "A"
+	if strings.HasSuffix(handoff.Code(), tamperedSuffix) {
+		tamperedSuffix = "E"
+	}
+	tampered := handoff.Code()[:len(handoff.Code())-1] + tamperedSuffix
+	if _, err := manager.ApproveBrowserHandoff(tampered); !errors.Is(err, ErrInvalidBrowserHandoff) {
+		t.Fatalf("tampered code error = %v, want invalid", err)
+	}
+	if !ValidBrowserHandoffCodeEncoding(tampered) {
+		t.Fatal("canonical encoding check unexpectedly authenticated a tampered MAC")
+	}
+	for _, invalid := range []string{
+		"",
+		"twh0" + strings.TrimPrefix(handoff.Code(), browserHandoffVersion),
+		strings.Replace(handoff.Code(), ".", "..", 1),
+		handoff.Code() + "=",
+	} {
+		if ValidBrowserHandoffCodeEncoding(invalid) {
+			t.Fatalf("invalid browser handoff encoding accepted: %q", invalid)
+		}
+	}
+
+	now = handoff.ExpiresAt()
+	if _, err := manager.ApproveBrowserHandoff(handoff.Code()); !errors.Is(err, ErrExpiredBrowserHandoff) {
+		t.Fatalf("expired code error = %v, want expired", err)
+	}
+
+	restarted := newTestManager(t, testOrigin, false)
+	restarted.now = func() time.Time { return handoff.ExpiresAt().Add(-time.Second) }
+	if _, err := restarted.ApproveBrowserHandoff(handoff.Code()); !errors.Is(err, ErrInvalidBrowserHandoff) {
+		t.Fatalf("restarted manager error = %v, want invalid", err)
+	}
+}
+
+func TestBrowserHandoffConcurrentClaimHasExactlyOneFence(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	now := time.Unix(1_750_000_000, 0).UTC()
+	manager.now = func() time.Time { return now }
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x33}, browserHandoffIDSize))
+	secret := [browserHandoffSecretSize]byte{9, 8, 7, 6}
+	handoff, err := manager.IssueBrowserHandoff(sha256.Sum256(secret[:]))
+	if err != nil {
+		t.Fatalf("issue browser handoff: %v", err)
+	}
+	approval, err := manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("reserve approval: %v", err)
+	}
+	if err := manager.CommitBrowserHandoffApproval(approval); err != nil {
+		t.Fatalf("commit approval: %v", err)
+	}
+
+	const contenders = 32
+	start := make(chan struct{})
+	results := make(chan error, contenders)
+	claims := make(chan BrowserHandoffClaim, contenders)
+	var wait sync.WaitGroup
+	for range contenders {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			<-start
+			claim, claimErr := manager.ClaimBrowserHandoff(handoff.Code(), secret)
+			if claimErr == nil {
+				claims <- claim
+			}
+			results <- claimErr
+		}()
+	}
+	close(start)
+	wait.Wait()
+	close(results)
+	close(claims)
+
+	successes := 0
+	for claimErr := range results {
+		switch {
+		case claimErr == nil:
+			successes++
+		case errors.Is(claimErr, ErrBrowserHandoffClaiming):
+		default:
+			t.Fatalf("parallel claim error = %v", claimErr)
+		}
+	}
+	if successes != 1 {
+		t.Fatalf("successful claim fences = %d, want 1", successes)
+	}
+	claim := <-claims
+	if err := manager.CommitBrowserHandoffClaim(claim); err != nil {
+		t.Fatalf("commit winning claim: %v", err)
+	}
+}
+
+func TestBrowserHandoffExpiryDuringFinalizationLeavesNoAuthority(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	now := time.Unix(1_750_000_000, 0).UTC()
+	manager.now = func() time.Time { return now }
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x4d}, browserHandoffIDSize*2))
+	secret := [browserHandoffSecretSize]byte{4, 3, 2, 1}
+
+	approvalHandoff, err := manager.IssueBrowserHandoff(sha256.Sum256(secret[:]))
+	if err != nil {
+		t.Fatalf("issue approval handoff: %v", err)
+	}
+	approval, err := manager.ApproveBrowserHandoff(approvalHandoff.Code())
+	if err != nil {
+		t.Fatalf("reserve approval: %v", err)
+	}
+	now = approvalHandoff.ExpiresAt()
+	if err := manager.CommitBrowserHandoffApproval(approval); !errors.Is(
+		err,
+		ErrExpiredBrowserHandoff,
+	) {
+		t.Fatalf("approval commit at expiry error = %v, want expired", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(
+		approvalHandoff.Code(),
+		secret,
+	); !errors.Is(err, ErrExpiredBrowserHandoff) {
+		t.Fatalf("expired approval became claimable: %v", err)
+	}
+
+	now = time.Unix(1_750_000_100, 0).UTC()
+	claimHandoff, err := manager.IssueBrowserHandoff(sha256.Sum256(secret[:]))
+	if err != nil {
+		t.Fatalf("issue claim handoff: %v", err)
+	}
+	approval, err = manager.ApproveBrowserHandoff(claimHandoff.Code())
+	if err != nil {
+		t.Fatalf("reserve claim approval: %v", err)
+	}
+	if err := manager.CommitBrowserHandoffApproval(approval); err != nil {
+		t.Fatalf("commit claim approval: %v", err)
+	}
+	claim, err := manager.ClaimBrowserHandoff(claimHandoff.Code(), secret)
+	if err != nil {
+		t.Fatalf("reserve claim: %v", err)
+	}
+	now = claimHandoff.ExpiresAt()
+	if err := manager.CommitBrowserHandoffClaim(claim); !errors.Is(
+		err,
+		ErrExpiredBrowserHandoff,
+	) {
+		t.Fatalf("claim commit at expiry error = %v, want expired", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(
+		claimHandoff.Code(),
+		secret,
+	); !errors.Is(err, ErrExpiredBrowserHandoff) {
+		t.Fatalf("expired claim remained reusable: %v", err)
+	}
+}
+
+func TestBrowserHandoffValuesRedactCodeDigestAndFences(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x5a}, browserHandoffIDSize))
+	secret := [browserHandoffSecretSize]byte{1, 3, 3, 7}
+	digest := sha256.Sum256(secret[:])
+	handoff, err := manager.IssueBrowserHandoff(digest)
+	if err != nil {
+		t.Fatalf("issue browser handoff: %v", err)
+	}
+	approval, err := manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("reserve approval: %v", err)
+	}
+	_, pendingErr := manager.ClaimBrowserHandoff(handoff.Code(), secret)
+	if !errors.Is(pendingErr, ErrBrowserHandoffPending) {
+		t.Fatalf("claim during approval error = %v, want pending", pendingErr)
+	}
+
+	handoffJSON, err := json.Marshal(handoff)
+	if err != nil {
+		t.Fatalf("marshal handoff: %v", err)
+	}
+	approvalJSON, err := json.Marshal(approval)
+	if err != nil {
+		t.Fatalf("marshal approval: %v", err)
+	}
+	pendingJSON, err := json.Marshal(pendingErr)
+	if err != nil {
+		t.Fatalf("marshal pending error: %v", err)
+	}
+	formatted := strings.Join([]string{
+		fmt.Sprint(handoff),
+		fmt.Sprintf("%#v", handoff),
+		string(handoffJSON),
+		fmt.Sprint(approval),
+		fmt.Sprintf("%#v", approval),
+		string(approvalJSON),
+		fmt.Sprint(pendingErr),
+		fmt.Sprintf("%#v", pendingErr),
+		string(pendingJSON),
+	}, "\n")
+	for _, sensitive := range []string{
+		handoff.Code(),
+		base64.RawURLEncoding.EncodeToString(digest[:]),
+		base64.RawURLEncoding.EncodeToString(secret[:]),
+	} {
+		if strings.Contains(formatted, sensitive) {
+			t.Fatalf("formatted browser handoff leaked %q", sensitive)
+		}
+	}
+	if !strings.Contains(formatted, "redacted") {
+		t.Fatalf("browser handoff values do not signal redaction: %s", formatted)
+	}
+}
+
+func TestIssueBrowserHandoffFailsClosedWithoutEntropyOrClock(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	manager.random = failingReader{}
+	handoff, err := manager.IssueBrowserHandoff(sha256.Sum256([]byte("claim")))
+	if err == nil {
+		t.Fatal("browser handoff unexpectedly succeeded without entropy")
+	}
+	if handoff != (BrowserHandoff{}) {
+		t.Fatalf("failed issue returned handoff material: %v", handoff)
+	}
+
+	manager = newTestManager(t, testOrigin, false)
+	manager.now = func() time.Time { return time.Time{} }
+	handoff, err = manager.IssueBrowserHandoff(sha256.Sum256([]byte("claim")))
+	if !errors.Is(err, ErrSessionClock) {
+		t.Fatalf("zero clock error = %v, want %v", err, ErrSessionClock)
+	}
+	if handoff != (BrowserHandoff{}) {
+		t.Fatalf("failed issue returned handoff material: %v", handoff)
+	}
+}
+
+func TestIssueBrowserHandoffAcceptsCanonicalZeroDigestWithoutGrantingClaim(t *testing.T) {
+	t.Parallel()
+
+	manager := newTestManager(t, testOrigin, false)
+	manager.random = bytes.NewReader(bytes.Repeat([]byte{0x7c}, browserHandoffIDSize))
+	handoff, err := manager.IssueBrowserHandoff([sha256.Size]byte{})
+	if err != nil {
+		t.Fatalf("issue zero digest handoff: %v", err)
+	}
+	if !ValidBrowserHandoffCodeEncoding(handoff.Code()) {
+		t.Fatal("zero digest handoff is not canonically encoded")
+	}
+	approval, err := manager.ApproveBrowserHandoff(handoff.Code())
+	if err != nil {
+		t.Fatalf("reserve zero digest approval: %v", err)
+	}
+	if err := manager.CommitBrowserHandoffApproval(approval); err != nil {
+		t.Fatalf("commit zero digest approval: %v", err)
+	}
+	if _, err := manager.ClaimBrowserHandoff(
+		handoff.Code(),
+		[browserHandoffSecretSize]byte{},
+	); !errors.Is(err, ErrInvalidBrowserHandoff) {
+		t.Fatalf("zero secret claim error = %v, want invalid digest match", err)
 	}
 }
 
