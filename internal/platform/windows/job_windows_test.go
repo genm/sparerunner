@@ -205,11 +205,7 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 	resumed = true
 
 	descendantPID := waitForPIDFile(t, pidFile)
-	descendant, err := syswindows.OpenProcess(
-		syswindows.SYNCHRONIZE|syswindows.PROCESS_QUERY_LIMITED_INFORMATION,
-		false,
-		uint32(descendantPID),
-	)
+	descendant, err := waitForProcessHandle(t, uint32(descendantPID))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,4 +396,23 @@ func waitForPIDFile(t *testing.T, path string) int {
 	}
 	t.Fatal("descendant pid was not published")
 	return 0
+}
+
+func waitForProcessHandle(t *testing.T, pid uint32) (syswindows.Handle, error) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		handle, err := syswindows.OpenProcess(
+			syswindows.SYNCHRONIZE|syswindows.PROCESS_QUERY_LIMITED_INFORMATION,
+			false,
+			pid,
+		)
+		if err == nil {
+			return handle, nil
+		}
+		lastErr = err
+		time.Sleep(25 * time.Millisecond)
+	}
+	return 0, lastErr
 }
