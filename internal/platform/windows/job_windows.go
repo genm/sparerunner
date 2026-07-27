@@ -954,11 +954,7 @@ func lockFileFence(
 }
 
 func ensurePrivateFenceDirectory(path string) error {
-	if err := os.Mkdir(path, 0o700); err == nil {
-		if err := winacl.SecureEmptyPrivateDirectory(path); err != nil {
-			_ = os.Remove(path)
-			return err
-		}
+	if err := winacl.CreatePrivateDirectory(path); err == nil {
 		return nil
 	} else if !errors.Is(err, os.ErrExist) {
 		return err

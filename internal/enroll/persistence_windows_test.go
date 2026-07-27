@@ -122,10 +122,7 @@ func TestWindowsPrivateMaterialDoesNotClaimExistingUnsafeParent(t *testing.T) {
 func TestWindowsDPAPILocatorSurvivesParentDirectoryRename(t *testing.T) {
 	root := filepath.Clean(t.TempDir())
 	staging := filepath.Join(root, "staging")
-	if err := os.Mkdir(staging, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := winacl.SecureEmptyPrivateDirectory(staging); err != nil {
+	if err := winacl.CreatePrivateDirectory(staging); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(staging, "movable.locator")
@@ -217,8 +214,8 @@ func TestWindowsPrivateMaterialRejectsReparseLocator(t *testing.T) {
 func windowsPrivateDirectory(t *testing.T) string {
 	t.Helper()
 	_ = os.Setenv("TEWAKE_WINDOWS_DEBUG", "1")
-	directory := filepath.Clean(t.TempDir())
-	if err := winacl.SecureEmptyPrivateDirectory(directory); err != nil {
+	directory := filepath.Join(filepath.Clean(t.TempDir()), "private")
+	if err := winacl.CreatePrivateDirectory(directory); err != nil {
 		currentSID, _ := winacl.CurrentProcessSID()
 		aclOutput, _ := exec.Command("icacls.exe", directory).CombinedOutput()
 		t.Fatalf(

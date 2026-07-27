@@ -84,9 +84,9 @@ function Get-TreeSnapshot([string] $root) {
                 else {
                     $sha = [System.Security.Cryptography.SHA256]::Create()
                     try {
-                        $hash = [Convert]::ToHexString(
+                        $hash = ([BitConverter]::ToString(
                             $sha.ComputeHash([System.IO.File]::ReadAllBytes($_.FullName))
-                        )
+                        )).Replace("-", "")
                     }
                     finally {
                         $sha.Dispose()

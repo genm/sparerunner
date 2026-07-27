@@ -547,7 +547,7 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 		return bootstrapIdentityError(fmt.Sprintf("dacl protection control=0x%x err=%v", control, err))
 	}
 	dacl, defaulted, err := descriptor.DACL()
-	var aceCount uint32
+	var aceCount uint16
 	if dacl != nil {
 		aceCount = dacl.AceCount
 	}
