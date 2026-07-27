@@ -1646,6 +1646,10 @@ func validGitHubJobCompletionResult(result string) bool {
 	}
 }
 
+// githubSlotAvailable is the single slot-availability predicate behind
+// advertised capacity, the claim boundary, and fresh-recovery admission. The
+// node-owner exclusion clause lives here precisely so all three stay consistent
+// by construction instead of by three parallel checks.
 func githubSlotAvailable(ctx context.Context, queryer interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
 }, binding SingleSlotBinding) (bool, error) {
@@ -1663,7 +1667,13 @@ func githubSlotAvailable(ctx context.Context, queryer interface {
 						ON old_execution.id = intent.old_execution_id
 					WHERE old_execution.node_id = a.node_id
 						AND old_execution.slot_index = ?
-				)`, binding.NodeID, binding.Slot, binding.Slot).Scan(&count); err != nil {
+				)
+				AND NOT EXISTS (
+					SELECT 1 FROM node_target_exclusions x
+					WHERE x.node_id = a.node_id AND x.target_id = ?
+				)`,
+		binding.NodeID, binding.Slot, binding.Slot, binding.TargetID,
+	).Scan(&count); err != nil {
 		return false, err
 	}
 	return count == 1, nil

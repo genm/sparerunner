@@ -21,6 +21,14 @@ type controllerAgentStore interface {
 	RecordAgentSnapshot(context.Context, store.NodeAgentSnapshot) error
 	RecordAgentReadiness(context.Context, domain.NodeID, string, bool) error
 	RecordAgentDisconnect(context.Context, domain.NodeID, string) error
+	RecordNodeOwnerState(
+		context.Context,
+		domain.NodeID,
+		string,
+		domain.AvailabilityIntent,
+		*[]domain.TargetID,
+	) error
+	ReadNodeTargetExclusions(context.Context, domain.NodeID) ([]domain.TargetID, error)
 	RecordAgentExecutionUpdate(context.Context, store.AgentExecutionUpdate) (bool, error)
 	ReadManagementConfiguration(context.Context) (store.ManagementConfiguration, error)
 	// ManagementConfigurationRevision is the cheap poll primitive EligibleTargets
@@ -54,6 +62,9 @@ type eligibilityCache struct {
 type controllerAgentProjection interface {
 	ApplyIssuedCommand(reconcile.IssuedCommand) error
 	ApplyAgentReadiness(domain.NodeID, bool) error
+	ApplyNodeOwnerState(
+		domain.NodeID, domain.AvailabilityIntent, []domain.TargetID,
+	) error
 	ApplyExecutionUpdate(transport.ExecutionUpdate) error
 	ApplyReconciliationExecutionUpdate(transport.ExecutionUpdate) error
 	HandleAgentDisconnect(context.Context, domain.NodeID) error
@@ -74,7 +85,39 @@ func newStoreBackedAgentConsumers(
 		ExecutionUpdates: consumers,
 		Disconnects:      consumers,
 		Eligibility:      consumers,
+		OwnerState:       consumers,
 	}
+}
+
+// HandleAgentOwnerState adopts a heartbeat-carried node-owner change durably and
+// then mirrors it into the process projection, in that order: the durable table
+// is the authority the echo reads back, so it must never lag the projection.
+func (consumers storeBackedAgentConsumers) HandleAgentOwnerState(
+	ctx context.Context,
+	record AgentOwnerStateRecord,
+) error {
+	if consumers.store == nil {
+		return ErrAgentOwnerStateConsumerRequired
+	}
+	var exclusions *[]domain.TargetID
+	if record.ExcludedTargets != nil {
+		set := append([]domain.TargetID{}, record.ExcludedTargets...)
+		exclusions = &set
+	}
+	if err := consumers.store.RecordNodeOwnerState(
+		ctx,
+		record.NodeID,
+		record.SnapshotDigest,
+		record.AvailabilityIntent,
+		exclusions,
+	); err != nil {
+		return err
+	}
+	if consumers.projection == nil {
+		return nil
+	}
+	return consumers.projection.ApplyNodeOwnerState(
+		record.NodeID, record.AvailabilityIntent, record.ExcludedTargets)
 }
 
 // EligibleTargets is read-only display data computed from current
@@ -84,6 +127,7 @@ func newStoreBackedAgentConsumers(
 // this scope" rather than "is a slot free right now."
 func (consumers storeBackedAgentConsumers) EligibleTargets(
 	ctx context.Context,
+	nodeID domain.NodeID,
 	os domain.OperatingSystem,
 	architecture domain.Architecture,
 ) ([]transport.EligibleTarget, error) {
@@ -93,6 +137,19 @@ func (consumers storeBackedAgentConsumers) EligibleTargets(
 	profiles, targets, err := consumers.eligibility.read(ctx, consumers.store)
 	if err != nil {
 		return nil, err
+	}
+	// The echo must report what the controller durably adopted, never an
+	// in-memory guess, so display state self-heals across reconnects instead of
+	// drifting from the table that actually gates capacity. This is a cheap
+	// primary-key range read and is deliberately not cached: a cache would
+	// reintroduce exactly the drift the durable read exists to prevent.
+	adopted, err := consumers.store.ReadNodeTargetExclusions(ctx, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	excluded := make(map[domain.TargetID]struct{}, len(adopted))
+	for _, targetID := range adopted {
+		excluded[targetID] = struct{}{}
 	}
 	var eligible []transport.EligibleTarget
 	for _, target := range targets {
@@ -111,9 +168,7 @@ func (consumers storeBackedAgentConsumers) EligibleTargets(
 			ScopeKind:    target.Target.ScopeKind,
 			Scope:        target.Target.Scope,
 			ScaleSetName: target.Target.ScaleSetName,
-			// The controller does not yet consult ExcludedTargets; adoption
-			// lands in a later PR alongside its snapshot persistence.
-			Excluded: false,
+			Excluded:     targetExcluded(excluded, target.Target.ID),
 		})
 	}
 	// A node's displayed list must not depend on SQLite row order or map
@@ -122,6 +177,14 @@ func (consumers storeBackedAgentConsumers) EligibleTargets(
 		return eligible[i].TargetID < eligible[j].TargetID
 	})
 	return eligible, nil
+}
+
+func targetExcluded(
+	excluded map[domain.TargetID]struct{},
+	targetID domain.TargetID,
+) bool {
+	_, found := excluded[targetID]
+	return found
 }
 
 // read returns the profile/target projection for the current configuration
@@ -231,13 +294,21 @@ func (consumers storeBackedAgentConsumers) HandleAgentSnapshot(ctx context.Conte
 			RecordedAtUnixNano: tombstone.RecordedAtUnixNano,
 		})
 	}
+	// ExcludedTargets keeps its nil-versus-empty distinction across this
+	// boundary: nil is "no change reported", empty is an authoritative empty set.
+	var excluded []domain.TargetID
+	if snapshot.ExcludedTargets != nil {
+		excluded = append([]domain.TargetID{}, snapshot.ExcludedTargets...)
+	}
 	return consumers.store.RecordAgentSnapshot(ctx, store.NodeAgentSnapshot{
-		NodeID:            snapshot.NodeID,
-		OS:                domain.OperatingSystem(snapshot.OS),
-		Architecture:      domain.Architecture(snapshot.Arch),
-		RunnerVersion:     snapshot.RunnerVersion,
-		NativeRunnerReady: snapshot.NativeRunnerReady,
-		Journal:           journal,
+		NodeID:             snapshot.NodeID,
+		OS:                 domain.OperatingSystem(snapshot.OS),
+		Architecture:       domain.Architecture(snapshot.Arch),
+		RunnerVersion:      snapshot.RunnerVersion,
+		NativeRunnerReady:  snapshot.NativeRunnerReady,
+		AvailabilityIntent: snapshot.AvailabilityIntent,
+		ExcludedTargets:    excluded,
+		Journal:            journal,
 	})
 }
 

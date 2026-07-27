@@ -798,6 +798,13 @@ func (controller *Controller) reconcileAgentSnapshotAt(
 	candidate.actions = nil
 	candidate.scheduler.Node.ObservedState = domain.NodeOnline
 	candidate.scheduler.NativeReady = snapshot.NativeRunnerReady
+	// A nil ExcludedTargets is "no change reported" and must keep whatever was
+	// last adopted; only a present set replaces it. Degradation paths below zero
+	// NativeReady but deliberately leave this alone: excluded stays excluded.
+	if snapshot.ExcludedTargets != nil {
+		candidate.scheduler.ExcludedTargets = append(
+			[]domain.TargetID(nil), snapshot.ExcludedTargets...)
+	}
 	candidate.scheduler.Reconciled = true
 	candidate.scheduler.ActiveExecutions = activeObservationIDs(snapshot.Observations)
 	if len(candidate.scheduler.ActiveExecutions) > candidate.scheduler.Node.MaxRunners {
@@ -1710,6 +1717,56 @@ func (controller *Controller) ApplyAgentReadiness(
 	return err
 }
 
+// ApplyNodeOwnerState mirrors a durably adopted node-owner availability change
+// into the retained process snapshot without replaying the Agent journal. It is
+// the mid-session counterpart of the snapshot-carried adoption, so a heartbeat
+// exclusion takes effect on placement without waiting for a reconnect.
+//
+// An empty intent and a nil exclusion set each mean "no change reported".
+func (controller *Controller) ApplyNodeOwnerState(
+	nodeID domain.NodeID,
+	intent domain.AvailabilityIntent,
+	exclusions []domain.TargetID,
+) error {
+	if controller == nil {
+		return invalid("controller_unavailable", "controller", "is nil")
+	}
+	if nodeID == "" {
+		return invalid("node_not_found", "node_owner_state.node_id", "is empty")
+	}
+	if intent != "" && intent.Validate("node_owner_state.availability_intent") != nil {
+		return invalid("invalid_availability_intent", "node_owner_state.availability_intent", "is not a known intent")
+	}
+	for _, targetID := range exclusions {
+		if strings.TrimSpace(string(targetID)) == "" {
+			return invalid("invalid_excluded_target", "node_owner_state.excluded_targets", "must not contain an empty target identifier")
+		}
+	}
+	if intent == "" && exclusions == nil {
+		return nil
+	}
+	controller.applyMu.Lock()
+	defer controller.applyMu.Unlock()
+	controller.mu.Lock()
+	node, exists := controller.nodes[nodeID]
+	if !exists || !node.seen {
+		controller.mu.Unlock()
+		return invalid("node_not_found", "node_owner_state.node_id", "does not identify an active reconciled node")
+	}
+	if intent != "" {
+		node.snapshot.AvailabilityIntent = intent
+	}
+	if exclusions != nil {
+		node.snapshot.ExcludedTargets = append([]domain.TargetID{}, exclusions...)
+	}
+	controller.nodes[nodeID] = node
+	snapshot := cloneAgentSnapshot(node.snapshot)
+	controller.signalChangeLocked()
+	controller.mu.Unlock()
+	_, err := controller.reconcileAgentSnapshot(snapshot)
+	return err
+}
+
 // ApplyDesiredExecution mirrors an exact store CAS into the process
 // projection. It is used for snapshot adoption; no Agent or provider side
 // effect is performed here.
@@ -2282,6 +2339,7 @@ func cloneNodeRuntime(node nodeRuntime) nodeRuntime {
 func cloneSchedulerNode(node scheduler.NodeSnapshot) scheduler.NodeSnapshot {
 	node.ActiveExecutions = append([]domain.ExecutionID(nil), node.ActiveExecutions...)
 	node.CachedRunnerPackages = append([]string(nil), node.CachedRunnerPackages...)
+	node.ExcludedTargets = append([]domain.TargetID(nil), node.ExcludedTargets...)
 	return node
 }
 
@@ -2291,6 +2349,9 @@ func cloneActions(actions []Action) []Action {
 
 func cloneAgentSnapshot(snapshot transport.AgentSnapshot) transport.AgentSnapshot {
 	snapshot.Commands = append([]domain.Command(nil), snapshot.Commands...)
+	// Preserves nil, which distinguishes "no change reported" from an empty set.
+	snapshot.ExcludedTargets = append(
+		[]domain.TargetID(nil), snapshot.ExcludedTargets...)
 	snapshot.Observations = append(
 		[]transport.AgentExecutionObservation(nil), snapshot.Observations...)
 	snapshot.CleanupTombstones = append(

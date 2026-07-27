@@ -36,6 +36,11 @@ type NodeSnapshot struct {
 	AvailableMemoryBytes uint64
 	ActiveExecutions     []domain.ExecutionID
 	CachedRunnerPackages []string
+	// ExcludedTargets is the node owner's per-Target withdrawal, adopted by the
+	// controller. It only ever subtracts placement candidates; it can never
+	// admit a node the administrative state, reconciliation, or profile match
+	// already denies.
+	ExcludedTargets []domain.TargetID
 }
 
 // Validate rejects observations that could make scheduling bounds ambiguous.
@@ -59,6 +64,11 @@ func (snapshot NodeSnapshot) Validate() error {
 	for _, packageID := range snapshot.CachedRunnerPackages {
 		if strings.TrimSpace(packageID) == "" {
 			return invalid("invalid_cached_runner_package", "node.cached_runner_packages", "must not contain an empty package identifier")
+		}
+	}
+	for _, targetID := range snapshot.ExcludedTargets {
+		if strings.TrimSpace(string(targetID)) == "" {
+			return invalid("invalid_excluded_target", "node.excluded_targets", "must not contain an empty target identifier")
 		}
 	}
 	return nil
@@ -157,6 +167,7 @@ type RestoredReservation struct {
 type nodeState struct {
 	snapshot NodeSnapshot
 	cached   map[string]struct{}
+	excluded map[domain.TargetID]struct{}
 }
 
 // Scheduler serializes target round-robin and concrete slot ownership. Durable
@@ -252,7 +263,12 @@ func newNodeState(snapshot NodeSnapshot) (nodeState, error) {
 	for _, packageID := range snapshot.CachedRunnerPackages {
 		cached[packageID] = struct{}{}
 	}
-	return nodeState{snapshot: snapshot, cached: cached}, nil
+	snapshot.ExcludedTargets = append([]domain.TargetID(nil), snapshot.ExcludedTargets...)
+	excluded := make(map[domain.TargetID]struct{}, len(snapshot.ExcludedTargets))
+	for _, targetID := range snapshot.ExcludedTargets {
+		excluded[targetID] = struct{}{}
+	}
+	return nodeState{snapshot: snapshot, cached: cached, excluded: excluded}, nil
 }
 
 func (scheduler *Scheduler) restoreReservations(reservations []RestoredReservation) error {
@@ -439,6 +455,12 @@ func (scheduler *Scheduler) candidatesLocked(target TargetSpec) []candidate {
 		if !exists ||
 			!eligible(node.snapshot, target.Profile) ||
 			!scheduler.nodeOwnershipAlignedLocked(slot.Key.NodeID) {
+			continue
+		}
+		// The node owner withdrew this Target from this computer. Exclusion is
+		// purely subtractive, so it is checked beside eligibility rather than
+		// inside it: it removes a candidate and never creates one.
+		if _, withdrawn := node.excluded[target.Target.ID]; withdrawn {
 			continue
 		}
 		activeRunners := len(node.snapshot.ActiveExecutions)

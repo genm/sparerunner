@@ -42,7 +42,7 @@ func TestAcknowledgeHeartbeatEncodesEligibleTargetsPresenceDistinctFromAbsence(t
 		{
 			name: "lookup failed",
 			eligible: AgentEligibilityConsumerFunc(func(
-				context.Context, domain.OperatingSystem, domain.Architecture,
+				context.Context, domain.NodeID, domain.OperatingSystem, domain.Architecture,
 			) ([]transport.EligibleTarget, error) {
 				return nil, errors.New("configuration unavailable")
 			}),
@@ -51,7 +51,7 @@ func TestAcknowledgeHeartbeatEncodesEligibleTargetsPresenceDistinctFromAbsence(t
 		{
 			name: "lookup succeeded with zero targets",
 			eligible: AgentEligibilityConsumerFunc(func(
-				context.Context, domain.OperatingSystem, domain.Architecture,
+				context.Context, domain.NodeID, domain.OperatingSystem, domain.Architecture,
 			) ([]transport.EligibleTarget, error) {
 				return nil, nil
 			}),
@@ -61,7 +61,7 @@ func TestAcknowledgeHeartbeatEncodesEligibleTargetsPresenceDistinctFromAbsence(t
 		{
 			name: "lookup succeeded with targets",
 			eligible: AgentEligibilityConsumerFunc(func(
-				context.Context, domain.OperatingSystem, domain.Architecture,
+				context.Context, domain.NodeID, domain.OperatingSystem, domain.Architecture,
 			) ([]transport.EligibleTarget, error) {
 				return targets, nil
 			}),

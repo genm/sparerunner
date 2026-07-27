@@ -28,6 +28,18 @@ type recordingControllerAgentStore struct {
 	configuration          store.ManagementConfiguration
 	revisionReads          int
 	fullConfigurationReads int
+	ownerStates            []recordedNodeOwnerState
+	ownerStateErr          error
+	adoptedExclusions      map[domain.NodeID][]domain.TargetID
+}
+
+// recordedNodeOwnerState captures one adoption call so a test can assert the
+// exact nil-versus-empty exclusion semantics that crossed the boundary.
+type recordedNodeOwnerState struct {
+	NodeID         domain.NodeID
+	SnapshotDigest string
+	Intent         domain.AvailabilityIntent
+	Exclusions     *[]domain.TargetID
 }
 
 func (recording *recordingControllerAgentStore) ManagementConfigurationRevision(context.Context) (uint64, error) {
@@ -122,6 +134,39 @@ func (recording *recordingControllerAgentStore) RecordAgentDisconnect(
 func (recording *recordingControllerAgentStore) RecordAgentExecutionUpdate(_ context.Context, update store.AgentExecutionUpdate) (bool, error) {
 	recording.updates = append(recording.updates, update)
 	return false, recording.err
+}
+
+func (recording *recordingControllerAgentStore) RecordNodeOwnerState(
+	_ context.Context,
+	nodeID domain.NodeID,
+	snapshotDigest string,
+	intent domain.AvailabilityIntent,
+	exclusions *[]domain.TargetID,
+) error {
+	recording.mu.Lock()
+	defer recording.mu.Unlock()
+	recording.ownerStates = append(recording.ownerStates, recordedNodeOwnerState{
+		NodeID:         nodeID,
+		SnapshotDigest: snapshotDigest,
+		Intent:         intent,
+		Exclusions:     exclusions,
+	})
+	if recording.ownerStateErr != nil {
+		return recording.ownerStateErr
+	}
+	return recording.err
+}
+
+func (recording *recordingControllerAgentStore) ReadNodeTargetExclusions(
+	_ context.Context,
+	nodeID domain.NodeID,
+) ([]domain.TargetID, error) {
+	recording.mu.Lock()
+	defer recording.mu.Unlock()
+	if recording.err != nil {
+		return nil, recording.err
+	}
+	return append([]domain.TargetID(nil), recording.adoptedExclusions[nodeID]...), nil
 }
 
 func TestStoreBackedAgentConsumersMapOnlyNonSecretDurableFields(t *testing.T) {
@@ -335,7 +380,7 @@ func TestEligibleTargetsFiltersByPlatformAndOrdersDeterministically(t *testing.T
 	consumers := newStoreBackedAgentConsumers(recording)
 
 	eligible, err := consumers.Eligibility.EligibleTargets(
-		context.Background(), domain.OSLinux, domain.ArchAMD64,
+		context.Background(), "node-eligibility", domain.OSLinux, domain.ArchAMD64,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -345,7 +390,7 @@ func TestEligibleTargetsFiltersByPlatformAndOrdersDeterministically(t *testing.T
 	}
 	for _, target := range eligible {
 		if target.Excluded {
-			t.Fatalf("controller adoption of exclusion has not landed yet: %#v", target)
+			t.Fatalf("node with no adopted exclusions reported one: %#v", target)
 		}
 	}
 
@@ -353,7 +398,7 @@ func TestEligibleTargetsFiltersByPlatformAndOrdersDeterministically(t *testing.T
 	// profile is constrained to exactly its platform, and not the
 	// linux/amd64-constrained target.
 	windowsEligible, err := consumers.Eligibility.EligibleTargets(
-		context.Background(), domain.OSWindows, domain.ArchARM64,
+		context.Background(), "node-eligibility", domain.OSWindows, domain.ArchARM64,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -372,7 +417,7 @@ func TestEligibleTargetsCacheAvoidsFullReadUntilRevisionChanges(t *testing.T) {
 
 	for i := 0; i < 3; i++ {
 		if _, err := consumers.Eligibility.EligibleTargets(
-			context.Background(), domain.OSLinux, domain.ArchAMD64,
+			context.Background(), "node-eligibility", domain.OSLinux, domain.ArchAMD64,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +434,7 @@ func TestEligibleTargetsCacheAvoidsFullReadUntilRevisionChanges(t *testing.T) {
 	// reflects the new configuration rather than the stale cache.
 	recording.setConfiguration(eligibilityTestConfiguration(2))
 	if eligible, err := consumers.Eligibility.EligibleTargets(
-		context.Background(), domain.OSLinux, domain.ArchAMD64,
+		context.Background(), "node-eligibility", domain.OSLinux, domain.ArchAMD64,
 	); err != nil || len(eligible) != 2 {
 		t.Fatalf("eligible targets after revision bump = %#v, err = %v", eligible, err)
 	}
@@ -413,7 +458,7 @@ func TestEligibleTargetsCacheIsSharedAcrossConsumerCopies(t *testing.T) {
 	agentConsumers := newStoreBackedAgentConsumers(recording)
 
 	if _, err := agentConsumers.Eligibility.EligibleTargets(
-		context.Background(), domain.OSLinux, domain.ArchAMD64,
+		context.Background(), "node-eligibility", domain.OSLinux, domain.ArchAMD64,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -421,7 +466,7 @@ func TestEligibleTargetsCacheIsSharedAcrossConsumerCopies(t *testing.T) {
 	// different AgentConsumers field; it implements AgentEligibilityConsumer
 	// too, so this reaches the cache through a distinct struct copy.
 	if _, err := agentConsumers.Commands.(AgentEligibilityConsumer).EligibleTargets(
-		context.Background(), domain.OSLinux, domain.ArchAMD64,
+		context.Background(), "node-eligibility", domain.OSLinux, domain.ArchAMD64,
 	); err != nil {
 		t.Fatal(err)
 	}
