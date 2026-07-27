@@ -1,0 +1,104 @@
+version: 2
+
+project_name: tewake
+
+before:
+  hooks:
+    - ./scripts/generate-license-bundle.sh licenses
+    - go mod tidy
+
+builds:
+  - id: controller
+    main: ./cmd/tewake
+    binary: tewake
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/genm/tewake/internal/buildinfo.version={{ .Version }}
+      - -X github.com/genm/tewake/internal/buildinfo.commit={{ .Commit }}
+      - -X github.com/genm/tewake/internal/buildinfo.date={{ .Date }}
+
+  - id: agent
+    main: ./cmd/tewake-agent
+    binary: tewake-agent
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/genm/tewake/internal/buildinfo.version={{ .Version }}
+      - -X github.com/genm/tewake/internal/buildinfo.commit={{ .Commit }}
+      - -X github.com/genm/tewake/internal/buildinfo.date={{ .Date }}
+
+archives:
+  - id: binaries
+    ids:
+      - controller
+      - agent
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    strip_binary_directory: true
+    files:
+      - LICENSE
+      - README.md
+      - docs/security/*.md
+      - licenses/*
+      - packaging/**/*
+      - licenses/**/*
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - id: archives
+    artifacts: archive
+    documents:
+      - "${artifact}.cyclonedx.json"
+    cmd: syft
+    args:
+      - "$artifact"
+      - "--output"
+      - "cyclonedx-json=$document"
+
+changelog:
+  sort: asc
+  use: github
+  filters:
+    exclude:
+      - "^Merge"
+      - "^docs?\\(spec\\)"
+      - "^test"
+
+release:
+  github:
+    owner: genm
+    name: tewake
+  draft: true
+  prerelease: auto
+  name_template: "Tewake {{ .Tag }}"
+  header: |
+    This is a draft release. Publish only after the real three-OS and two-installation
+    live evidence gate, platform signing, and clean-machine install checks pass.
+  footer: |
+    Verify `checksums.txt` and the GitHub artifact attestation before installing.

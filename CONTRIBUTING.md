@@ -34,6 +34,13 @@ defined by the design.
 - Do not send public fork PR workloads to Tewake self-hosted nodes.
 - Do not reduce types, skip tests, or change expected output merely to make CI green.
 
+## Release changes
+
+Release changes must keep `.goreleaser.yaml`, the tag workflow, the artifact
+checker, and [docs/RELEASE.md](docs/RELEASE.md) consistent. A local snapshot or
+hosted build is not live three-OS evidence. Keep the release draft until the
+TWK-014 manifest validates and Apple/Windows signing prerequisites are available.
+
 ## Security-sensitive changes
 
 Enrollment, authentication, certificates, GitHub App credentials, JIT delivery,

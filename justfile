@@ -53,6 +53,9 @@ test-platform-linux:
 validate-release-evidence file='output/release-evidence/twk-014.json':
   ./scripts/validate-release-evidence.sh "{{file}}"
 
+check-release-artifacts dist='dist':
+  ./scripts/check-release-artifacts.sh "{{dist}}"
+
 test-management-ui-linux: build
   ./scripts/test-management-ui-linux.sh bin/tewake
 

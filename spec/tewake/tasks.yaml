@@ -541,9 +541,14 @@ tasks:
       - README.md
       - CONTRIBUTING.md
       - SECURITY.md
+      - docs/RELEASE.md
+      - scripts/check-release-artifacts.sh
+      - scripts/generate-license-bundle.sh
     ci_targets: [lint, test, build, e2e, deploy-check]
     pr_order: 18
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.

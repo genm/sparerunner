@@ -40,5 +40,9 @@ The following are release-blocking invariants:
 - transient external errors remain visible as stale/degraded state;
 - unsigned or unverifiable release material is never represented as trusted.
 
+Release artifacts are draft-only until checksums, the GitHub attestation,
+CycloneDX SBOMs, real three-OS evidence, and platform signatures are verified.
+See [docs/RELEASE.md](docs/RELEASE.md) for the operator checklist.
+
 The detailed threat model and platform conformance results are tracked by
 `twk-014` and must exist before the first public tag.
