@@ -549,6 +549,7 @@ tasks:
     status: in_progress
     notes:
       - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
+      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until TWK-014/live/signing gates pass."
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.
