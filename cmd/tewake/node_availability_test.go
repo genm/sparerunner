@@ -11,20 +11,21 @@ import (
 
 func TestWriteAvailabilityTextRendersTargetsSectionWhenPresent(t *testing.T) {
 	var out bytes.Buffer
+	targets := []nodectl.EligibleTarget{
+		{TargetID: "target-1", ScopeKind: domain.TargetRepository, Scope: "owner/repo", ScaleSetName: "scale-set"},
+		// Locally excluded and adopted by the controller: a settled exclusion
+		// rather than one still syncing.
+		{
+			TargetID: "target-2", ScopeKind: domain.TargetOrganization, Scope: "owner",
+			ScaleSetName: "scale-set-2", Excluded: true, LocallyExcluded: true,
+		},
+	}
 	writeAvailabilityText(&out, nodectl.Status{
 		NodeID:              "node-1",
 		Intent:              domain.AvailabilityAccepting,
 		ControllerConnected: true,
 		NativeRunnerReady:   true,
-		EligibleTargets: []nodectl.EligibleTarget{
-			{TargetID: "target-1", ScopeKind: domain.TargetRepository, Scope: "owner/repo", ScaleSetName: "scale-set"},
-			// Locally excluded and adopted by the controller: a settled exclusion
-			// rather than one still syncing.
-			{
-				TargetID: "target-2", ScopeKind: domain.TargetOrganization, Scope: "owner",
-				ScaleSetName: "scale-set-2", Excluded: true, LocallyExcluded: true,
-			},
-		},
+		EligibleTargets:     &targets,
 	})
 	rendered := out.String()
 	if !strings.Contains(rendered, "Targets:    2 scope(s)") {
@@ -39,7 +40,8 @@ func TestWriteAvailabilityTextRendersTargetsSectionWhenPresent(t *testing.T) {
 }
 
 func TestWriteAvailabilityTextRendersNoneReportedWhenTargetsAreAbsentOrEmpty(t *testing.T) {
-	for _, targets := range [][]nodectl.EligibleTarget{nil, {}} {
+	empty := []nodectl.EligibleTarget{}
+	for _, targets := range []*[]nodectl.EligibleTarget{nil, &empty} {
 		var out bytes.Buffer
 		writeAvailabilityText(&out, nodectl.Status{
 			NodeID:          "node-1",

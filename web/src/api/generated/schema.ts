@@ -511,6 +511,13 @@ export interface components {
       /** Format: date-time */
       lastSeenAt?: string;
       statusReason?: string;
+      /**
+       * @description The node owner's adopted global availability intent. Absent means the node has never reported one; this is display provenance only and never a controller-invented default.
+       * @enum {string}
+       */
+      availabilityIntent?: "accepting" | "stopped";
+      /** @description The controller-adopted set of Target IDs this node owner has excluded. Omitted when the node has never adopted any exclusion; the store cannot distinguish that from an explicit empty set, so an empty adopted set is represented the same way as never reported. */
+      excludedTargets?: string[];
     };
     Target: {
       id: string;

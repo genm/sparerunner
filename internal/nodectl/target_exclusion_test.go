@@ -150,17 +150,18 @@ func TestServerRejectsMalformedTargetRequestsWithoutMutatingState(t *testing.T) 
 }
 
 func TestStatusDocumentCarriesThePerTargetViewAndUnknownExclusions(t *testing.T) {
+	eligibleTargets := []nodectl.EligibleTarget{{
+		TargetID:        "target-1",
+		ScopeKind:       domain.TargetRepository,
+		Scope:           "owner/repo",
+		ScaleSetName:    "scale-set",
+		LocallyExcluded: true,
+		Pending:         true,
+	}}
 	status := nodectl.Status{
-		ProtocolVersion: nodectl.ProtocolVersion,
-		NodeID:          "node-1",
-		EligibleTargets: []nodectl.EligibleTarget{{
-			TargetID:        "target-1",
-			ScopeKind:       domain.TargetRepository,
-			Scope:           "owner/repo",
-			ScaleSetName:    "scale-set",
-			LocallyExcluded: true,
-			Pending:         true,
-		}},
+		ProtocolVersion:   nodectl.ProtocolVersion,
+		NodeID:            "node-1",
+		EligibleTargets:   &eligibleTargets,
 		UnknownExclusions: []domain.TargetID{"target-offline"},
 		RunningExecutions: []nodectl.RunningExecution{{
 			ExecutionID: "execution-1",

@@ -12,30 +12,31 @@ import (
 
 func TestWriteNodeTargetsTextRendersEveryExclusionState(t *testing.T) {
 	var out bytes.Buffer
+	targets := []nodectl.EligibleTarget{
+		{TargetID: "t-served", ScopeKind: domain.TargetRepository, Scope: "owner/served", ScaleSetName: "s"},
+		// Locally excluded and adopted: settled.
+		{
+			TargetID: "t-settled", ScopeKind: domain.TargetRepository, Scope: "owner/settled",
+			ScaleSetName: "s", Excluded: true, LocallyExcluded: true,
+		},
+		// Locally excluded but not yet adopted. Excluding is subtractive, so
+		// it is already in force locally and must not read as served.
+		{
+			TargetID: "t-syncing", ScopeKind: domain.TargetOrganization, Scope: "owner-syncing",
+			ScaleSetName: "s", LocallyExcluded: true, Pending: true,
+		},
+		// Re-included locally, still adopted as excluded by the controller.
+		// Including is additive, so it stays pending and unserved.
+		{
+			TargetID: "t-including", ScopeKind: domain.TargetRepository, Scope: "owner/including",
+			ScaleSetName: "s", Excluded: true, Pending: true,
+		},
+	}
 	writeNodeTargetsText(&out, nodectl.Status{
 		NodeID:              "node-1",
 		ControllerConnected: true,
-		EligibleTargets: []nodectl.EligibleTarget{
-			{TargetID: "t-served", ScopeKind: domain.TargetRepository, Scope: "owner/served", ScaleSetName: "s"},
-			// Locally excluded and adopted: settled.
-			{
-				TargetID: "t-settled", ScopeKind: domain.TargetRepository, Scope: "owner/settled",
-				ScaleSetName: "s", Excluded: true, LocallyExcluded: true,
-			},
-			// Locally excluded but not yet adopted. Excluding is subtractive, so
-			// it is already in force locally and must not read as served.
-			{
-				TargetID: "t-syncing", ScopeKind: domain.TargetOrganization, Scope: "owner-syncing",
-				ScaleSetName: "s", LocallyExcluded: true, Pending: true,
-			},
-			// Re-included locally, still adopted as excluded by the controller.
-			// Including is additive, so it stays pending and unserved.
-			{
-				TargetID: "t-including", ScopeKind: domain.TargetRepository, Scope: "owner/including",
-				ScaleSetName: "s", Excluded: true, Pending: true,
-			},
-		},
-		UnknownExclusions: []domain.TargetID{"t-offline"},
+		EligibleTargets:     &targets,
+		UnknownExclusions:   []domain.TargetID{"t-offline"},
 	})
 	rendered := out.String()
 	for _, want := range []string{

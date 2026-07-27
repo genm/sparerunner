@@ -56,6 +56,11 @@ const stateCases: readonly StateCase[] = [
     route: "nodes",
     expectedText: "Safety quarantine",
   },
+  {
+    scenario: "stopped_by_owner",
+    route: "nodes",
+    expectedText: "Stopped by owner",
+  },
 ];
 
 for (const stateCase of stateCases) {
@@ -68,6 +73,21 @@ for (const stateCase of stateCases) {
     await captureState(testInfo, page, `${stateCase.scenario}-${testInfo.project.name}`);
   });
 }
+
+test("stopped-by-owner node shows adopted exclusions distinctly", async ({
+  mount,
+  page,
+}, testInfo) => {
+  const component = await mount(
+    <App api={createScenarioClient("stopped_by_owner")} initialRoute="nodes" />,
+  );
+  await expect(component.getByText("Stopped by owner")).toBeVisible();
+  await expect(component.getByText("1 scope excluded")).toBeVisible();
+  await expect(component.getByText("1 scope excluded")).toHaveAttribute("title", "target-1");
+  await expect(component.getByText("Runner unavailable")).toHaveCount(0);
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `stopped-by-owner-${testInfo.project.name}`);
+});
 
 test("pending browser handoff remains non-authorizing", async ({ mount, page }, testInfo) => {
   const component = await mount(

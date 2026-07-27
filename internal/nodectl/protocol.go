@@ -172,7 +172,13 @@ type Status struct {
 	// controller's heartbeat acknowledgement. It is omitted until the first
 	// heartbeat round trip completes, and it is display data only: it never
 	// implies a free slot exists right now.
-	EligibleTargets []EligibleTarget `json:"eligibleTargets,omitempty"`
+	//
+	// It is a pointer so a confirmed-empty list (a successful heartbeat that
+	// found zero eligible Targets) stays distinct from never-reported: a plain
+	// slice with `omitempty` would encode both as an absent field, because
+	// encoding/json's omitempty checks length rather than nilness for slices. A
+	// pointer's omitempty checks only the pointer itself.
+	EligibleTargets *[]EligibleTarget `json:"eligibleTargets,omitempty"`
 	// UnknownExclusions are locally excluded Targets absent from the last
 	// eligible list. Excluding a Target this node has never been told about —
 	// while offline, or before the first heartbeat round trip — is deliberately
@@ -186,6 +192,17 @@ type Status struct {
 // as the Agent can observe. It is the conjunction the desktop surfaces render.
 func (status Status) EffectiveAccepting() bool {
 	return status.Intent.Accepts() && status.ControllerConnected && !status.PendingResume
+}
+
+// Targets safely dereferences EligibleTargets. A caller that only needs to
+// range or measure the list, rather than distinguish never-reported from
+// confirmed-empty, uses this instead of a nil-pointer check at every call
+// site.
+func (status Status) Targets() []EligibleTarget {
+	if status.EligibleTargets == nil {
+		return nil
+	}
+	return *status.EligibleTargets
 }
 
 type Response struct {

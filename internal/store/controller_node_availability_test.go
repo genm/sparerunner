@@ -248,6 +248,71 @@ func TestRecordNodeOwnerStateRequiresCurrentSnapshotAuthority(t *testing.T) {
 	}
 }
 
+// TestReadNodeOwnerStatesBulkReadMatchesPerNodeReads proves the bulk reader
+// used by the management API listing agrees with the per-node primitives:
+// a node that never reported is absent, a node that only excluded targets has
+// a nil intent, and a node that reported both surfaces both.
+func TestReadNodeOwnerStatesBulkReadMatchesPerNodeReads(t *testing.T) {
+	ctx := context.Background()
+	controller := openController(t, "controller-owner-bulk.db")
+	defer controller.Close()
+
+	silentID, silentEpoch := enrollControllerAgentNode(t, controller, 3)
+	silent := domain.NodeID(silentID)
+	if err := controller.RecordAgentSnapshot(
+		ctx, nodeOwnerSnapshot(silent, silentEpoch, "", nil)); err != nil {
+		t.Fatal(err)
+	}
+
+	exclusionOnlyID, exclusionOnlyEpoch := enrollControllerAgentNode(t, controller, 4)
+	exclusionOnly := domain.NodeID(exclusionOnlyID)
+	if err := controller.RecordAgentSnapshot(ctx, nodeOwnerSnapshot(
+		exclusionOnly, exclusionOnlyEpoch, "", []domain.TargetID{"target-a"},
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	fullID, fullEpoch := enrollControllerAgentNode(t, controller, 5)
+	full := domain.NodeID(fullID)
+	if err := controller.RecordAgentSnapshot(ctx, nodeOwnerSnapshot(
+		full, fullEpoch, domain.AvailabilityStopped,
+		[]domain.TargetID{"target-b", "target-a"},
+	)); err != nil {
+		t.Fatal(err)
+	}
+
+	states, err := controller.ReadNodeOwnerStates(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, reported := states[silent]; reported {
+		t.Fatalf("silent node reported owner state: %#v", states[silent])
+	}
+
+	exclusionOnlyState, reported := states[exclusionOnly]
+	if !reported {
+		t.Fatal("exclusion-only node missing from bulk read")
+	}
+	if exclusionOnlyState.Intent != nil {
+		t.Fatalf("exclusion-only node intent = %v, want nil", *exclusionOnlyState.Intent)
+	}
+	if !reflect.DeepEqual(exclusionOnlyState.Exclusions, []domain.TargetID{"target-a"}) {
+		t.Fatalf("exclusion-only exclusions = %#v, want [target-a]", exclusionOnlyState.Exclusions)
+	}
+
+	fullState, reported := states[full]
+	if !reported {
+		t.Fatal("full node missing from bulk read")
+	}
+	if fullState.Intent == nil || *fullState.Intent != domain.AvailabilityStopped {
+		t.Fatalf("full node intent = %v, want stopped", fullState.Intent)
+	}
+	if !reflect.DeepEqual(fullState.Exclusions, []domain.TargetID{"target-a", "target-b"}) {
+		t.Fatalf("full node exclusions = %#v, want sorted [target-a target-b]", fullState.Exclusions)
+	}
+}
+
 func currentSnapshotDigest(t *testing.T, controller *ControllerStore, nodeID string) string {
 	t.Helper()
 	var digest string

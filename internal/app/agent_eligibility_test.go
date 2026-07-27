@@ -254,16 +254,23 @@ func TestAgentSessionHeartbeatAckEligibleTargetsWireStates(t *testing.T) {
 			}
 			if test.wantEligible == nil {
 				if status.EligibleTargets != nil {
-					t.Fatalf("absent ack changed eligible targets: %#v", status.EligibleTargets)
+					t.Fatalf("absent ack changed eligible targets: %#v", status.Targets())
 				}
 				return
 			}
-			if len(status.EligibleTargets) != len(test.wantEligible) {
-				t.Fatalf("eligible targets = %#v, want %#v", status.EligibleTargets, test.wantEligible)
+			// EligibleTargets must itself be non-nil here: a confirmed-empty
+			// heartbeat ack is a distinct wire value from never-reported, and a
+			// nil pointer would collapse the two into the same absent JSON field.
+			if status.EligibleTargets == nil {
+				t.Fatalf("confirmed eligible targets were reported as absent, want present: wantEligible=%#v", test.wantEligible)
+			}
+			targets := status.Targets()
+			if len(targets) != len(test.wantEligible) {
+				t.Fatalf("eligible targets = %#v, want %#v", targets, test.wantEligible)
 			}
 			for index, wantID := range test.wantEligible {
-				if string(status.EligibleTargets[index].TargetID) != string(wantID) {
-					t.Fatalf("eligible targets = %#v, want %#v", status.EligibleTargets, test.wantEligible)
+				if string(targets[index].TargetID) != string(wantID) {
+					t.Fatalf("eligible targets = %#v, want %#v", targets, test.wantEligible)
 				}
 			}
 		})

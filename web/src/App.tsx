@@ -1187,7 +1187,42 @@ function NodeStatus({ node }: { readonly node: Schema["Node"] }) {
       <span aria-hidden="true" className={`status-light status-${state}`} />
       <span>{capitalize(state)}</span>
       {qualifier ? <small>· {qualifier}</small> : null}
+      <AvailabilityIntentBadge intent={node.availabilityIntent} />
+      <BrokenRunnerBadge node={node} />
+      <ExcludedTargetsBadge targetIds={node.excludedTargets} />
     </div>
+  );
+}
+function AvailabilityIntentBadge({
+  intent,
+}: {
+  readonly intent: Schema["Node"]["availabilityIntent"];
+}) {
+  // The owner's global "stopped" intent withholds capacity by choice, which is
+  // a distinct condition from a broken native runner (nativeRunnerReady false)
+  // or a controller-side drain: it must never be mistaken for either.
+  if (intent !== "stopped") return null;
+  return <span className="badge badge-stopped">Stopped by owner</span>;
+}
+function BrokenRunnerBadge({ node }: { readonly node: Schema["Node"] }) {
+  // A connected node whose native runner backend failed is a different
+  // problem than an owner-chosen stop: the owner did not withhold capacity,
+  // the runtime did. Offline nodes already show "Last known" and are not
+  // double-flagged here.
+  if (node.observedState !== "online" || node.nativeRunnerReady) return null;
+  return <span className="badge badge-runner-broken">Runner unavailable</span>;
+}
+function ExcludedTargetsBadge({
+  targetIds,
+}: {
+  readonly targetIds: Schema["Node"]["excludedTargets"];
+}) {
+  if (!targetIds || targetIds.length === 0) return null;
+  const label = targetIds.length === 1 ? "1 scope excluded" : `${targetIds.length} scopes excluded`;
+  return (
+    <span className="badge badge-excluded" title={targetIds.join(", ")}>
+      {label}
+    </span>
   );
 }
 function NodeTerminalState({ node }: { readonly node: Schema["Node"] }) {

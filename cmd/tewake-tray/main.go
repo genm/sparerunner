@@ -17,10 +17,18 @@ import (
 
 	"fyne.io/systray"
 	"github.com/genm/tewake/internal/buildinfo"
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/nodectl"
 )
 
 const refreshInterval = 3 * time.Second
+
+// targetPoolSize bounds the number of per-Target menu items the tray
+// pre-creates. systray items cannot be created or destroyed on the fly across
+// platforms, so a fixed pool is retitled/shown/hidden on every refresh instead;
+// a fleet with more eligible/excluded Targets than the pool renders a single
+// disabled overflow item rather than truncating silently.
+const targetPoolSize = 16
 
 func main() {
 	stateDirectory := flag.String(
@@ -74,6 +82,20 @@ type trayApp struct {
 	running  *systray.MenuItem
 	pause    *systray.MenuItem
 	resume   *systray.MenuItem
+
+	targetsHeading *systray.MenuItem
+	targetPool     [targetPoolSize]*systray.MenuItem
+	// targetPoolTarget records which Target ID each pool slot currently
+	// renders, so a click on that slot's ClickedCh can be resolved back to an
+	// action without racing a concurrent refresh. "" means the slot is hidden.
+	targetPoolTarget [targetPoolSize]domain.TargetID
+	targetPoolAction [targetPoolSize]func(domain.TargetID) (nodectl.Status, error)
+	overflow         *systray.MenuItem
+
+	// targetClicked receives a pool index whenever that slot's menu item is
+	// clicked. One forwarding goroutine per pool slot feeds it, so the main
+	// loop can select over a single channel instead of a fixed-size case list.
+	targetClicked chan int
 }
 
 func (app *trayApp) onReady() {
@@ -90,6 +112,23 @@ func (app *trayApp) onReady() {
 	app.pause = systray.AddMenuItem("Stop accepting jobs", "Withhold this computer's capacity")
 	app.resume = systray.AddMenuItem("Resume accepting jobs", "Offer this computer's capacity again")
 	systray.AddSeparator()
+	app.targetsHeading = systray.AddMenuItem("Targets", "GitHub Targets this computer may serve")
+	app.targetsHeading.Disable()
+	app.targetClicked = make(chan int, targetPoolSize)
+	for index := range app.targetPool {
+		item := systray.AddMenuItem("", "")
+		item.Hide()
+		app.targetPool[index] = item
+		go func(slot int, clicked chan struct{}) {
+			for range clicked {
+				app.targetClicked <- slot
+			}
+		}(index, item.ClickedCh)
+	}
+	app.overflow = systray.AddMenuItem("", "")
+	app.overflow.Disable()
+	app.overflow.Hide()
+	systray.AddSeparator()
 	quit := systray.AddMenuItem("Quit", "Close the tray; the agent keeps running")
 
 	app.refresh()
@@ -105,6 +144,8 @@ func (app *trayApp) loop(quit *systray.MenuItem) {
 			app.apply(app.client.Pause)
 		case <-app.resume.ClickedCh:
 			app.apply(app.client.Resume)
+		case slot := <-app.targetClicked:
+			app.applyTargetClick(slot)
 		case <-ticker.C:
 			app.refresh()
 		case <-quit.ClickedCh:
@@ -112,6 +153,21 @@ func (app *trayApp) loop(quit *systray.MenuItem) {
 			return
 		}
 	}
+}
+
+// applyTargetClick resolves a pool slot's recorded action under the lock, then
+// invokes it outside the lock so a slow control-endpoint round trip cannot
+// stall a concurrent refresh's rendering.
+func (app *trayApp) applyTargetClick(slot int) {
+	app.mu.Lock()
+	targetID := app.targetPoolTarget[slot]
+	action := app.targetPoolAction[slot]
+	app.mu.Unlock()
+	if targetID == "" || action == nil {
+		return
+	}
+	status, err := action(targetID)
+	app.render(status, err)
 }
 
 func (app *trayApp) apply(action func() (nodectl.Status, error)) {
@@ -145,6 +201,7 @@ func (app *trayApp) render(status nodectl.Status, err error) {
 		// neither is offered.
 		app.pause.Disable()
 		app.resume.Disable()
+		app.clearTargetPool()
 		return
 	}
 	switch {
@@ -173,6 +230,107 @@ func (app *trayApp) render(status nodectl.Status, err error) {
 		"Node %s · controller %s", shortNode(string(status.NodeID)), connectionText(status.ControllerConnected),
 	))
 	app.running.SetTitle(runningText(status))
+	app.renderTargetPool(status)
+}
+
+// targetPoolEntry is one row the pool can render: a scoped eligible Target or
+// an unknown locally-excluded Target ID. label and action are computed once so
+// renderTargetPool never mixes species of entry into the same slot.
+type targetPoolEntry struct {
+	targetID domain.TargetID
+	label    string
+	action   func(domain.TargetID) (nodectl.Status, error)
+}
+
+// renderTargetPool must be called with app.mu already held. It retitles a
+// fixed pool of pre-created menu items rather than creating or destroying
+// items on the fly, because systray menus cannot do that reliably across
+// platforms. Entries beyond the pool collapse into a single disabled overflow
+// item pointing at the CLI rather than being silently dropped.
+func (app *trayApp) renderTargetPool(status nodectl.Status) {
+	entries := make([]targetPoolEntry, 0, len(status.Targets())+len(status.UnknownExclusions))
+	for _, target := range status.Targets() {
+		entries = append(entries, targetPoolEntry{
+			targetID: target.TargetID,
+			label:    fmt.Sprintf("%s — %s", target.Scope, targetStateLabel(target)),
+			action:   targetToggleAction(app.client, target.LocallyExcluded),
+		})
+	}
+	for _, targetID := range status.UnknownExclusions {
+		entries = append(entries, targetPoolEntry{
+			targetID: targetID,
+			label:    fmt.Sprintf("%s — not currently eligible", targetID),
+			action:   app.client.Include,
+		})
+	}
+	shown := entries
+	overflow := 0
+	if len(entries) > targetPoolSize {
+		shown = entries[:targetPoolSize]
+		overflow = len(entries) - targetPoolSize
+	}
+	for slot, item := range app.targetPool {
+		if slot >= len(shown) {
+			item.Hide()
+			app.targetPoolTarget[slot] = ""
+			app.targetPoolAction[slot] = nil
+			continue
+		}
+		entry := shown[slot]
+		item.SetTitle(entry.label)
+		item.Show()
+		item.Enable()
+		app.targetPoolTarget[slot] = entry.targetID
+		app.targetPoolAction[slot] = entry.action
+	}
+	if overflow > 0 {
+		app.overflow.SetTitle(fmt.Sprintf("+%d more (use CLI)", overflow))
+		app.overflow.Show()
+	} else {
+		app.overflow.Hide()
+	}
+}
+
+// clearTargetPool hides every pool slot when the agent is unreachable, so a
+// stale Target list is never rendered alongside an unknown top-level state.
+// Callers must already hold app.mu.
+func (app *trayApp) clearTargetPool() {
+	for slot, item := range app.targetPool {
+		item.Hide()
+		app.targetPoolTarget[slot] = ""
+		app.targetPoolAction[slot] = nil
+	}
+	app.overflow.Hide()
+}
+
+// targetStateLabel names the four distinct owner-facing states a heartbeat can
+// report: serving, adopted-excluded, an owner exclusion the controller has not
+// yet adopted, and an owner inclusion the controller has not yet adopted. The
+// last never renders as served, matching the additive/subtractive asymmetry.
+func targetStateLabel(target nodectl.EligibleTarget) string {
+	switch {
+	case !target.LocallyExcluded && !target.Excluded:
+		return "serving"
+	case target.LocallyExcluded && target.Excluded:
+		return "excluded"
+	case target.LocallyExcluded && !target.Excluded:
+		return "excluded — syncing"
+	default: // !target.LocallyExcluded && target.Excluded
+		return "include pending"
+	}
+}
+
+// targetToggleAction picks the mutation a click on this row should perform:
+// a currently-excluded row (whether adopted or still syncing) offers Include,
+// and everything else offers Exclude.
+func targetToggleAction(
+	client nodectl.Client,
+	locallyExcluded bool,
+) func(domain.TargetID) (nodectl.Status, error) {
+	if locallyExcluded {
+		return client.Include
+	}
+	return client.Exclude
 }
 
 func errorDetail(err error) string {

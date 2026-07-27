@@ -38,7 +38,15 @@ type agentAvailability struct {
 	// deliberately survives a disconnect: ControllerConnected already tells the
 	// owner the session is down, so this stays the last-known list instead of
 	// blanking to nothing.
-	eligible []nodectl.EligibleTarget
+	//
+	// eligibleReported distinguishes "no heartbeat ack has ever carried this
+	// list" from "a heartbeat ack confirmed zero eligible targets": both leave
+	// eligible at its zero value, and a plain nil-vs-empty check on the slice
+	// cannot survive a copy (append onto a nil slice with nothing to append
+	// stays nil), which previously collapsed a confirmed-empty list into the
+	// same wire representation as never-reported.
+	eligible         []nodectl.EligibleTarget
+	eligibleReported bool
 	// excluded mirrors the durable exclusion set. Every mutation goes through
 	// this type, so the cache is invalidated exactly when the durable set
 	// changes and a heartbeat never pays for a database read.
@@ -179,6 +187,7 @@ func (availability *agentAvailability) setEligibleTargets(
 	}
 	availability.mu.Lock()
 	availability.eligible = converted
+	availability.eligibleReported = true
 	availability.mu.Unlock()
 }
 
@@ -208,7 +217,15 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 	connected := availability.connected
 	confirmed := availability.confirmedIntent
 	nativeReady := availability.nativeReady
-	eligible := append([]nodectl.EligibleTarget(nil), availability.eligible...)
+	eligibleReported := availability.eligibleReported
+	var eligible []nodectl.EligibleTarget
+	if eligibleReported {
+		// Always allocate, even for zero elements, so a confirmed-empty list
+		// stays a distinct non-nil value all the way to the wire instead of
+		// collapsing into the same nil the never-reported case uses.
+		eligible = make([]nodectl.EligibleTarget, len(availability.eligible))
+		copy(eligible, availability.eligible)
+	}
 	locallyExcluded := make(map[domain.TargetID]struct{}, len(availability.excluded))
 	for _, targetID := range availability.excluded {
 		locallyExcluded[targetID] = struct{}{}
@@ -235,6 +252,10 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 		}
 	}
 
+	var eligibleTargets *[]nodectl.EligibleTarget
+	if eligibleReported {
+		eligibleTargets = &eligible
+	}
 	status := nodectl.Status{
 		UnknownExclusions:       unknownExclusions,
 		ProtocolVersion:         nodectl.ProtocolVersion,
@@ -246,7 +267,7 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 		ControllerConnected:     connected,
 		PendingResume:           record.Intent.Accepts() && confirmed != record.Intent,
 		NativeRunnerReady:       nativeReady,
-		EligibleTargets:         eligible,
+		EligibleTargets:         eligibleTargets,
 		ObservedAtUnixNano:      time.Now().UnixNano(),
 		AgentVersion:            buildinfo.String(),
 	}

@@ -80,6 +80,25 @@ docker run --rm \
       return 1
     }
 
+    # eligibleTargets is refreshed on the heartbeat acknowledgement rather than
+    # at connect time, so it is polled the same way await_field polls a scalar
+    # field instead of being read once right after controllerConnected turns
+    # true.
+    await_eligible_targets_empty() {
+      i=0
+      while [ "${i}" -lt 100 ]; do
+        if /opt/tewake node status --state-dir /state/agent --json 2>/dev/null \
+          | grep -q "\"eligibleTargets\": \[\]"; then
+          return 0
+        fi
+        i=$((i + 1))
+        sleep 0.1
+      done
+      echo "timed out waiting for an empty eligibleTargets heartbeat echo" >&2
+      /opt/tewake node status --state-dir /state/agent --json >&2 || true
+      return 1
+    }
+
     await_field() {
       name="$1"
       want="$2"
@@ -152,6 +171,15 @@ docker run --rm \
     await_field controllerConnected true
     await_field pendingResume false
     test "$(status_field intent)" = accepting
+
+    # Absent-vs-empty: this rig configures no GitHub Target, so the first
+    # heartbeat acknowledgement must report an explicit empty eligible list
+    # rather than omitting the field. That distinguishes "no eligible
+    # targets for this node" from "no refresh yet", and confirms the empty
+    # list alone never breaks status rendering.
+    await_eligible_targets_empty
+    /opt/tewake node status --state-dir /state/agent --json >/tmp/status-first.json
+    grep -q "\"eligibleTargets\": \[\]" /tmp/status-first.json
 
     # Stopping withholds capacity and records the requesting surface.
     /opt/tewake node pause --state-dir /state/agent --source raycast --json >/tmp/pause.json
@@ -257,7 +285,7 @@ docker run --rm \
 
     # The control surface is non-secret: no join code or credential material may
     # appear in its documents.
-    if grep -R -F "${join_code}" /tmp/pause.json /tmp/resume.json \
+    if grep -R -F "${join_code}" /tmp/status-first.json /tmp/pause.json /tmp/resume.json \
       /tmp/offline-pause.json /tmp/exclude.json /tmp/targets.json /tmp/include.json; then
       echo "join code leaked into the node control documents" >&2
       exit 1

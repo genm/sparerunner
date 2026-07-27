@@ -422,16 +422,17 @@ func TestAgentStatusJoinsLocalExclusionsAgainstTheControllerEcho(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(status.EligibleTargets) != 2 {
-		t.Fatalf("status targets = %+v", status.EligibleTargets)
+	targets := status.Targets()
+	if len(targets) != 2 {
+		t.Fatalf("status targets = %+v", targets)
 	}
-	fresh := status.EligibleTargets[0]
+	fresh := targets[0]
 	if !fresh.LocallyExcluded || !fresh.Pending || fresh.Excluded {
 		t.Fatalf("locally excluded target = %+v", fresh)
 	}
 	// The controller still adopts this one as excluded while the owner no
 	// longer does, so re-inclusion is additive and stays pending.
-	adopted := status.EligibleTargets[1]
+	adopted := targets[1]
 	if adopted.LocallyExcluded || !adopted.Pending || !adopted.Excluded {
 		t.Fatalf("include-pending target = %+v", adopted)
 	}

@@ -64,7 +64,18 @@ export function createScenarioClient(scenario: ScenarioName): ManagementClient {
             administrativeState: scenario === "quarantined" ? "quarantined" : "active",
           } as Schema["Node"],
         ]
-      : [];
+      : scenario === "stopped_by_owner"
+        ? [
+            {
+              ...offlineNode,
+              observedState: "online",
+              nativeRunnerReady: true,
+              statusReason: undefined,
+              availabilityIntent: "stopped",
+              excludedTargets: ["target-1"],
+            } as Schema["Node"],
+          ]
+        : [];
   const runs: Schema["Run"][] =
     scenario === "running"
       ? [

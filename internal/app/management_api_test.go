@@ -863,6 +863,55 @@ func (verify managementTargetVerifierFunc) VerifyManagementTarget(
 	return verify(ctx, target)
 }
 
+// TestNodesReportsAdoptedOwnerState proves the management API listing
+// surfaces the node-owner-owned availability intent and exclusion set once
+// they are adopted from an Agent snapshot, and omits them beforehand rather
+// than inventing a default.
+func TestNodesReportsAdoptedOwnerState(t *testing.T) {
+	ctx := context.Background()
+	backend, nodeID := newManagementBackendForTest(t)
+
+	before, _, err := backend.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(before) != 1 {
+		t.Fatalf("nodes before snapshot = %#v, want exactly one", before)
+	}
+	if before[0].AvailabilityIntent != nil || before[0].ExcludedTargets != nil {
+		t.Fatalf("node reported owner state before any snapshot: %#v", before[0])
+	}
+
+	if err := backend.state.Store.RecordAgentSnapshot(ctx, store.NodeAgentSnapshot{
+		NodeID:             nodeID,
+		OS:                 domain.OSLinux,
+		Architecture:       domain.ArchAMD64,
+		RunnerVersion:      "0.0.0",
+		NativeRunnerReady:  true,
+		AvailabilityIntent: domain.AvailabilityStopped,
+		ExcludedTargets:    []domain.TargetID{"target-b", "target-a"},
+		Journal:            store.AgentSnapshot{MaxControllerEpoch: domain.ControllerEpoch(backend.state.Epoch)},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	after, _, err := backend.Nodes(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(after) != 1 {
+		t.Fatalf("nodes after snapshot = %#v, want exactly one", after)
+	}
+	node := after[0]
+	if node.AvailabilityIntent == nil || *node.AvailabilityIntent != gen.Stopped {
+		t.Fatalf("node availability intent = %v, want stopped", node.AvailabilityIntent)
+	}
+	if node.ExcludedTargets == nil || len(*node.ExcludedTargets) != 2 ||
+		(*node.ExcludedTargets)[0] != "target-a" || (*node.ExcludedTargets)[1] != "target-b" {
+		t.Fatalf("node excluded targets = %v, want sorted [target-a target-b]", node.ExcludedTargets)
+	}
+}
+
 type cancelAfterEnrollmentConsumeRegistry struct {
 	enroll.Registry
 	cancel context.CancelFunc

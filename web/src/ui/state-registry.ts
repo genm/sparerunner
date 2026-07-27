@@ -19,6 +19,7 @@ export type ScenarioName =
   | "stale"
   | "permission_error"
   | "quarantined"
+  | "stopped_by_owner"
   | "handoff_required"
   | "handoff_processing"
   | "handoff_rejected"
@@ -87,6 +88,12 @@ export const screenScenarios = {
     "nodes",
     "Node administrative state or Run state is quarantined",
     "Explain capacity is unavailable and do not fabricate a release action.",
+  ),
+  stopped_by_owner: scenario(
+    "stopped_by_owner",
+    "nodes",
+    "Node.availabilityIntent = stopped with an adopted excludedTargets entry",
+    "Show the owner-chosen stop and per-Target exclusion distinctly from a broken runner or drain.",
   ),
   handoff_required: scenario(
     "handoff_required",

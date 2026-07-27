@@ -115,6 +115,19 @@ function args(operation: "status" | "pause" | "resume"): string[] {
   return result;
 }
 
+// targetArgs builds the "node targets" invocation. Exactly one of exclude or
+// include names the mutation; neither names a plain list, mirroring the CLI's
+// own ambiguous-invocation refusal so this extension never sends a request
+// the CLI would itself reject.
+function targetArgs(action: "exclude" | "include", targetId: string): string[] {
+  const preferences = getPreferenceValues<Preferences>();
+  const result = ["node", "targets", `--${action}`, targetId, "--json", "--source", "raycast"];
+  if (preferences.stateDirectory) {
+    result.push("--state-dir", preferences.stateDirectory);
+  }
+  return result;
+}
+
 interface FailureDocument {
   errorClass?: string;
   message?: string;
@@ -124,6 +137,29 @@ export async function callNode(operation: "status" | "pause" | "resume"): Promis
   const cli = resolveCLI();
   try {
     const { stdout } = await run(cli, args(operation), { timeout: 10_000 });
+    const status = JSON.parse(stdout) as NodeStatus;
+    if (status.protocolVersion !== PROTOCOL_VERSION) {
+      throw new NodeControlError(
+        "protocol_mismatch",
+        "The installed Tewake CLI speaks a different node control protocol version.",
+      );
+    }
+    return status;
+  } catch (error) {
+    if (error instanceof NodeControlError) {
+      throw error;
+    }
+    throw toNodeControlError(error);
+  }
+}
+
+// callNodeTarget excludes or includes one GitHub Target through the CLI, the
+// same single implementation the tray and Web UI's read-only display rely on
+// for this per-Target mutation. It never touches the local socket directly.
+export async function callNodeTarget(action: "exclude" | "include", targetId: string): Promise<NodeStatus> {
+  const cli = resolveCLI();
+  try {
+    const { stdout } = await run(cli, targetArgs(action, targetId), { timeout: 10_000 });
     const status = JSON.parse(stdout) as NodeStatus;
     if (status.protocolVersion !== PROTOCOL_VERSION) {
       throw new NodeControlError(
@@ -176,6 +212,24 @@ export function explain(errorClass: string): string {
       return "The agent could not read or record availability state.";
     default:
       return "The Tewake CLI could not complete the request.";
+  }
+}
+
+// targetStateLabel names the same four owner-facing states the CLI's text
+// renderer and the tray use: serving, adopted-excluded, an owner exclusion the
+// controller has not yet adopted, and an owner inclusion it has not yet
+// released. The last never renders as served, matching the additive/
+// subtractive asymmetry the design specifies.
+export function targetStateLabel(target: EligibleTarget): string {
+  switch (true) {
+    case !target.locallyExcluded && !target.excluded:
+      return "serving";
+    case target.locallyExcluded && target.excluded:
+      return "excluded";
+    case target.locallyExcluded && !target.excluded:
+      return "excluded — syncing";
+    default: // !target.locallyExcluded && target.excluded
+      return "include pending";
   }
 }
 

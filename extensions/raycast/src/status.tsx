@@ -1,6 +1,14 @@
 import { Action, ActionPanel, Color, Icon, List, showToast, Toast } from "@raycast/api";
 import { useEffect, useState } from "react";
-import { callNode, explain, headline, NodeControlError, NodeStatus } from "./node";
+import {
+  callNode,
+  callNodeTarget,
+  explain,
+  headline,
+  NodeControlError,
+  NodeStatus,
+  targetStateLabel,
+} from "./node";
 
 export default function Command() {
   const [status, setStatus] = useState<NodeStatus | undefined>();
@@ -26,6 +34,30 @@ export default function Command() {
       await showToast({
         style: Toast.Style.Failure,
         title: "Tewake could not read this node",
+        message: explain(controlError.errorClass),
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function loadTarget(action: "exclude" | "include", targetId: string) {
+    setLoading(true);
+    try {
+      const next = await callNodeTarget(action, targetId);
+      setStatus(next);
+      setFailure(undefined);
+      await showToast({
+        style: Toast.Style.Success,
+        title: action === "exclude" ? `Excluded ${targetId}` : `Included ${targetId}`,
+      });
+    } catch (error) {
+      const controlError =
+        error instanceof NodeControlError ? error : new NodeControlError("cli_failed", String(error));
+      setFailure(controlError);
+      await showToast({
+        style: Toast.Style.Failure,
+        title: "Tewake could not update this Target",
         message: explain(controlError.errorClass),
       });
     } finally {
@@ -91,8 +123,72 @@ export default function Command() {
           />
         ))}
       </List.Section>
+      {status && (
+        <List.Section
+          title={
+            status.eligibleTargets === undefined
+              ? "Targets: not yet reported"
+              : `Targets: ${status.eligibleTargets.length}`
+          }
+        >
+          {(status.eligibleTargets ?? []).map((target) => (
+            <List.Item
+              key={target.targetId}
+              icon={targetIcon(target.locallyExcluded)}
+              title={target.scope}
+              subtitle={target.scopeKind}
+              accessories={[{ text: targetStateLabel(target) }]}
+              actions={
+                <ActionPanel>
+                  {target.locallyExcluded ? (
+                    <Action
+                      title="Include Target"
+                      icon={Icon.Plus}
+                      onAction={() => void loadTarget("include", target.targetId)}
+                    />
+                  ) : (
+                    <Action
+                      title="Exclude Target"
+                      icon={Icon.Minus}
+                      onAction={() => void loadTarget("exclude", target.targetId)}
+                    />
+                  )}
+                  <Action title="Refresh" icon={Icon.ArrowClockwise} onAction={() => void load("status")} />
+                </ActionPanel>
+              }
+            />
+          ))}
+        </List.Section>
+      )}
+      {status && (status.unknownExclusions?.length ?? 0) > 0 && (
+        <List.Section title="Excluded, not currently eligible">
+          {status.unknownExclusions!.map((targetId) => (
+            <List.Item
+              key={targetId}
+              icon={{ source: Icon.QuestionMark, tintColor: Color.SecondaryText }}
+              title={targetId}
+              accessories={[{ text: "not currently eligible" }]}
+              actions={
+                <ActionPanel>
+                  <Action
+                    title="Include Target"
+                    icon={Icon.Plus}
+                    onAction={() => void loadTarget("include", targetId)}
+                  />
+                </ActionPanel>
+              }
+            />
+          ))}
+        </List.Section>
+      )}
     </List>
   );
+}
+
+function targetIcon(locallyExcluded: boolean) {
+  return locallyExcluded
+    ? { source: Icon.MinusCircle, tintColor: Color.SecondaryText }
+    : { source: Icon.CheckCircle, tintColor: Color.Green };
 }
 
 function stateIcon(status: NodeStatus) {
