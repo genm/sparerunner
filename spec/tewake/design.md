@@ -114,9 +114,11 @@ A node additionally carries a node-local availability intent owned by the node o
 Accepting | Stopped
 ```
 
-The intent is durable on the node and is reported to the controller as observed
-state. Effective admission is the conjunction of the administrative state and the
-intent, so the intent can only subtract capacity.
+The intent is durable on the node. The Agent applies the conjunction itself: it
+advertises native readiness only while the runtime is healthy *and* the owner
+accepts, and it reports the intent separately as observed state for display and
+audit. Capacity therefore travels one path, and a Controller that ignored the
+intent field could still never over-admit because of it.
 
 ### GitHub Target
 
@@ -186,8 +188,8 @@ Weighted fairness, aging, and resource vectors are intentionally absent.
 
 Node selection:
 
-1. retain online, reconciled, active, non-quarantined nodes whose last reported
-   availability intent is `Accepting` and whose OS/architecture matches;
+1. retain online, reconciled, active, non-quarantined nodes that currently
+   advertise native readiness and whose OS/architecture matches;
 2. enforce optional minimum available memory;
 3. sort by active runner count ascending;
 4. sort by available memory descending;

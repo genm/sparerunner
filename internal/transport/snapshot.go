@@ -12,9 +12,9 @@ import (
 )
 
 // AgentSnapshotDigest binds the complete typed journal snapshot used by
-// Controller reconciliation. NativeRunnerReady is deliberately excluded: it
-// is lease-backed liveness, not presence-or-absence authority for commands or
-// runtimes. It contains no JIT body, filesystem path, log, or credential.
+// Controller reconciliation. NativeRunnerReady and AvailabilityIntent are
+// deliberately excluded: they are lease-backed liveness and owner display
+// state, not presence-or-absence authority for commands or runtimes. It contains no JIT body, filesystem path, log, or credential.
 func AgentSnapshotDigest(snapshot AgentSnapshot) (string, error) {
 	if err := snapshot.Validate(); err != nil {
 		return "", err
@@ -63,6 +63,7 @@ type AgentSnapshot struct {
 	Arch               domain.Architecture         `json:"arch"`
 	RunnerVersion      string                      `json:"runnerVersion"`
 	NativeRunnerReady  bool                        `json:"nativeRunnerReady"`
+	AvailabilityIntent domain.AvailabilityIntent   `json:"availabilityIntent,omitempty"`
 	MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
 	Commands           []domain.Command            `json:"commands"`
 	Observations       []AgentExecutionObservation `json:"observations"`
@@ -72,6 +73,13 @@ type AgentSnapshot struct {
 func (snapshot AgentSnapshot) Validate() error {
 	if snapshot.NodeID == "" || snapshot.OS.Validate("agent_snapshot.os") != nil ||
 		snapshot.Arch.Validate("agent_snapshot.architecture") != nil {
+		return ErrInvalidCommand
+	}
+	// An absent intent is "unspecified" for an Agent without the local control
+	// surface. It is display provenance only; NativeRunnerReady remains the
+	// capacity gate.
+	if snapshot.AvailabilityIntent != "" &&
+		snapshot.AvailabilityIntent.Validate("agent_snapshot.availability_intent") != nil {
 		return ErrInvalidCommand
 	}
 	if snapshot.RunnerVersion != "" &&
@@ -143,6 +151,7 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 		Arch               domain.Architecture         `json:"arch"`
 		RunnerVersion      *string                     `json:"runnerVersion"`
 		NativeRunnerReady  *bool                       `json:"nativeRunnerReady"`
+		AvailabilityIntent *domain.AvailabilityIntent  `json:"availabilityIntent"`
 		MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
 		Commands           []domain.Command            `json:"commands"`
 		Observations       []AgentExecutionObservation `json:"observations"`
@@ -167,6 +176,9 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 		Commands:           wire.Commands,
 		Observations:       wire.Observations,
 		CleanupTombstones:  wire.CleanupTombstones,
+	}
+	if wire.AvailabilityIntent != nil {
+		snapshot.AvailabilityIntent = *wire.AvailabilityIntent
 	}
 	if err := snapshot.Validate(); err != nil {
 		return AgentSnapshot{}, err

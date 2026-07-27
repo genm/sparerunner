@@ -476,7 +476,10 @@ tasks:
       - cmd/tewake-agent
     ci_targets: [lint, test, build]
     pr_order: 15
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-27: Durable intent, the same-host endpoint with kernel-verified peer authorization, agent readiness conjunction, transport reporting, and the versioned CLI document are implemented. `scripts/test-node-availability-linux.sh` proves stop, restart durability, pending resume until controller acknowledgement, offline stop, and endpoint refusal without --local-control against real controller, agent, and CLI binaries in a restricted container."
+      - "2026-07-27: Remaining for acceptance: the Windows named-pipe endpoint with an explicit DACL fails closed today, the controller does not yet persist an audit event per availability change, and the management API and Web UI do not yet expose the reported intent as a distinct field."
     acceptance:
       - A stopped node receives no execution and remains stopped across agent service restart and reboot.
       - Stopping during a running job leaves the job running and passes normal verified cleanup.
@@ -500,7 +503,10 @@ tasks:
       - test/live/tray
     ci_targets: [lint, test, build, e2e]
     pr_order: 16
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-27: `cmd/tewake-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
+      - "2026-07-27: Remaining for acceptance: StatusNotifierItem Linux and Windows runs, login-item packaging, and reviewed screenshots of each rendered state."
     acceptance:
       - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
@@ -585,10 +591,10 @@ tasks:
       - docs/integrations
     ci_targets: [lint, typecheck, test, build]
     pr_order: 19
-    status: todo
-    notes: >
-      Ordered after the first release because Raycast is macOS-only, optional, and
-      its store publication is an external review step. It gates no Tewake artifact.
+    status: in_progress
+    notes:
+      - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no Tewake artifact."
+      - "2026-07-27: The extension is implemented and `ray build` type-checks it. Its own code path was verified against the real CLI and a live endpoint: status, pause, resume, pending resume, controller confirmation, a missing CLI, and an unreachable agent each produce the documented class. Remaining for acceptance: a run inside Raycast itself and reviewed screenshots."
     acceptance:
       - Pause and resume from Raycast produce the same effective state as the tray, the CLI, and the Web UI.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.

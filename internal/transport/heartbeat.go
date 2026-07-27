@@ -14,10 +14,22 @@ import (
 type AgentHeartbeat struct {
 	NodeID            domain.NodeID `json:"nodeId"`
 	NativeRunnerReady bool          `json:"nativeRunnerReady"`
+	// AvailabilityIntent is the node owner's local decision. It is reported for
+	// display and audit; capacity itself is withheld by NativeRunnerReady, so a
+	// Controller that ignores this field can never over-admit because of it.
+	AvailabilityIntent domain.AvailabilityIntent `json:"availabilityIntent,omitempty"`
 }
 
 func (heartbeat AgentHeartbeat) Validate() error {
 	if heartbeat.NodeID == "" {
+		return ErrInvalidCommand
+	}
+	// An absent intent is "unspecified", which an Agent without the local
+	// control surface reports. It is display provenance only: capacity is
+	// withheld through NativeRunnerReady, so an unspecified value can never
+	// admit a node whose owner stopped it.
+	if heartbeat.AvailabilityIntent != "" &&
+		heartbeat.AvailabilityIntent.Validate("agent_heartbeat.availability_intent") != nil {
 		return ErrInvalidCommand
 	}
 	return nil
@@ -42,8 +54,9 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var wire struct {
-		NodeID            domain.NodeID `json:"nodeId"`
-		NativeRunnerReady *bool         `json:"nativeRunnerReady"`
+		NodeID             domain.NodeID              `json:"nodeId"`
+		NativeRunnerReady  *bool                      `json:"nativeRunnerReady"`
+		AvailabilityIntent *domain.AvailabilityIntent `json:"availabilityIntent"`
 	}
 	if err := decoder.Decode(&wire); err != nil {
 		return AgentHeartbeat{}, ErrInvalidCommand
@@ -58,6 +71,9 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 	heartbeat := AgentHeartbeat{
 		NodeID:            wire.NodeID,
 		NativeRunnerReady: *wire.NativeRunnerReady,
+	}
+	if wire.AvailabilityIntent != nil {
+		heartbeat.AvailabilityIntent = *wire.AvailabilityIntent
 	}
 	if err := heartbeat.Validate(); err != nil {
 		return AgentHeartbeat{}, err

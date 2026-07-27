@@ -47,6 +47,9 @@ test-enrollment-cli-linux:
 test-runner-linux:
   ./scripts/test-runner-linux.sh
 
+test-node-availability-linux:
+  ./scripts/test-node-availability-linux.sh
+
 test-platform-linux:
   ./scripts/test-platform-linux.sh
 
@@ -64,6 +67,12 @@ build:
   pnpm --dir web build
   go build -trimpath -o bin/tewake ./cmd/tewake
   go build -trimpath -o bin/tewake-agent ./cmd/tewake-agent
+
+# The optional desktop tray needs cgo and a native toolchain, so it stays out of
+# `just build` and the cross-build matrix.
+build-tray:
+  mkdir -p bin
+  CGO_ENABLED=1 go build -trimpath -o bin/tewake-tray ./cmd/tewake-tray
 
 build-all:
   ./scripts/cross-build.sh

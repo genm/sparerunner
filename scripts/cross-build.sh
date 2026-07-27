@@ -23,3 +23,8 @@ for os in linux darwin windows; do
     done
   done
 done
+
+# tewake-tray is deliberately absent from the matrix above. Its desktop
+# integration needs cgo on macOS and Linux, so it is built natively per platform
+# by `just build-tray` and never gates the pure-Go controller and agent
+# artifacts.

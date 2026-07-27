@@ -1,0 +1,183 @@
+#!/usr/bin/env bash
+# Prove node availability control end to end against real controller, agent, and
+# CLI binaries: durable intent, capacity withheld while stopped, pending resume
+# until the controller confirms it, and stop applied without a controller.
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+test_root="$(mktemp -d)"
+cleanup() {
+  rm -rf "${test_root}"
+}
+trap cleanup EXIT
+
+target_arch="$(go env GOARCH)"
+case "${target_arch}" in
+  amd64 | arm64) ;;
+  *)
+    echo "unsupported Docker test architecture: ${target_arch}" >&2
+    exit 1
+    ;;
+esac
+
+CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
+  go build -trimpath -o "${test_root}/tewake" "${repo_root}/cmd/tewake"
+CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
+  go build -trimpath -o "${test_root}/tewake-agent" "${repo_root}/cmd/tewake-agent"
+
+docker run --rm \
+  --network none \
+  --read-only \
+  --cap-drop ALL \
+  --security-opt no-new-privileges \
+  --user 65532:65532 \
+  --tmpfs /state:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
+  --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
+  --mount "type=bind,src=${test_root}/tewake,dst=/opt/tewake,readonly" \
+  --mount "type=bind,src=${test_root}/tewake-agent,dst=/opt/tewake-agent,readonly" \
+  alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
+  /bin/sh -eu -c '
+    controller_pid=
+    agent_pid=
+    stop_agent() {
+      if [ -n "${agent_pid}" ]; then
+        kill -TERM "${agent_pid}" 2>/dev/null || true
+        wait "${agent_pid}" 2>/dev/null || true
+        agent_pid=
+      fi
+    }
+    stop_processes() {
+      stop_agent
+      if [ -n "${controller_pid}" ]; then
+        kill -TERM "${controller_pid}" 2>/dev/null || true
+        wait "${controller_pid}" 2>/dev/null || true
+        controller_pid=
+      fi
+    }
+    trap stop_processes EXIT INT TERM
+
+    field() {
+      # Read one field from the versioned CLI document without a JSON tool.
+      sed -n "s/.*\"$1\": *\([^,]*\).*/\1/p" | tr -d "\" "
+    }
+
+    status_field() {
+      /opt/tewake node status --state-dir /state/agent --json | field "$1"
+    }
+
+    await_field() {
+      name="$1"
+      want="$2"
+      i=0
+      while [ "${i}" -lt 100 ]; do
+        if [ "$(status_field "${name}")" = "${want}" ]; then
+          return 0
+        fi
+        i=$((i + 1))
+        sleep 0.1
+      done
+      echo "timed out waiting for ${name}=${want}" >&2
+      /opt/tewake node status --state-dir /state/agent --json >&2 || true
+      return 1
+    }
+
+    init_output="$(/opt/tewake init \
+      --state-dir /state/controller \
+      --hint https://127.0.0.1:17443)"
+    join_code="$(printf "%s\n" "${init_output}" | awk "/^tewake join / { print \$3 }")"
+    test -n "${join_code}"
+
+    /opt/tewake serve \
+      --state-dir /state/controller \
+      --agent-listen 127.0.0.1:17443 \
+      --admin-listen "" \
+      --mdns=false >/tmp/controller.log 2>&1 &
+    controller_pid=$!
+
+    ready=false
+    for _ in $(seq 1 100); do
+      if nc -z 127.0.0.1 17443; then
+        ready=true
+        break
+      fi
+      kill -0 "${controller_pid}"
+      sleep 0.05
+    done
+    test "${ready}" = true
+
+    /opt/tewake join "${join_code}" \
+      --state-dir /state/agent \
+      --controller https://127.0.0.1:17443 >/tmp/join.log 2>&1
+
+    # An agent without the local control surface must refuse desktop clients
+    # rather than answering from an implicit endpoint.
+    /opt/tewake-agent serve \
+      --state-dir /state/agent \
+      --connection-timeout 2s \
+      --reconnect-delay 50ms >/tmp/agent-nocontrol.log 2>&1 &
+    agent_pid=$!
+    sleep 0.5
+    if /opt/tewake node status --state-dir /state/agent --json >/tmp/nocontrol.json 2>/dev/null; then
+      echo "status succeeded without --local-control" >&2
+      exit 1
+    fi
+    # The failure document is the only thing on stdout, so a launcher can parse
+    # exactly one stream in both the success and failure cases.
+    test "$(field ok </tmp/nocontrol.json)" = false
+    test "$(field errorClass </tmp/nocontrol.json)" = endpoint_unavailable
+    stop_agent
+
+    /opt/tewake-agent serve \
+      --state-dir /state/agent \
+      --local-control \
+      --connection-timeout 2s \
+      --reconnect-delay 50ms >/tmp/agent.log 2>&1 &
+    agent_pid=$!
+
+    await_field controllerConnected true
+    await_field pendingResume false
+    test "$(status_field intent)" = accepting
+
+    # Stopping withholds capacity and records the requesting surface.
+    /opt/tewake node pause --state-dir /state/agent --source raycast --json >/tmp/pause.json
+    test "$(field intent </tmp/pause.json)" = stopped
+    test "$(field intentChangedBy </tmp/pause.json)" = raycast
+    test "$(field intentExplicit </tmp/pause.json)" = true
+
+    # A stopped computer stays stopped across an agent service restart.
+    stop_agent
+    /opt/tewake-agent serve \
+      --state-dir /state/agent \
+      --local-control \
+      --connection-timeout 2s \
+      --reconnect-delay 50ms >/tmp/agent-restart.log 2>&1 &
+    agent_pid=$!
+    await_field controllerConnected true
+    test "$(status_field intent)" = stopped
+
+    # Resuming adds capacity, so it is pending until the controller confirms it,
+    # and then becomes effective.
+    /opt/tewake node resume --state-dir /state/agent --source tray --json >/tmp/resume.json
+    test "$(field intent </tmp/resume.json)" = accepting
+    test "$(field pendingResume </tmp/resume.json)" = true
+    await_field pendingResume false
+
+    # Losing the controller withdraws confirmation instead of retaining a stale
+    # acceptance, and stopping still applies locally.
+    kill -TERM "${controller_pid}"
+    wait "${controller_pid}" 2>/dev/null || true
+    controller_pid=
+    await_field controllerConnected false
+    test "$(status_field pendingResume)" = true
+    /opt/tewake node pause --state-dir /state/agent --source cli --json >/tmp/offline-pause.json
+    test "$(field intent </tmp/offline-pause.json)" = stopped
+
+    # The control surface is non-secret: no join code or credential material may
+    # appear in its documents.
+    if grep -R -F "${join_code}" /tmp/pause.json /tmp/resume.json /tmp/offline-pause.json; then
+      echo "join code leaked into the node control documents" >&2
+      exit 1
+    fi
+
+    echo "node availability control verified"
+  '
