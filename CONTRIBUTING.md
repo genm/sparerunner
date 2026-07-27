@@ -24,6 +24,25 @@ Do not use `.env` files. Development-only non-secret settings belong in document
 CLI flags or versioned configuration; credentials use the OS secret-store boundary
 defined by the design.
 
+### macOS: Keychain prompts on every rebuild
+
+macOS records a `partition_id` ACL naming the process that created a Keychain
+item. Go links host binaries with an ad-hoc signature and no team identifier, so
+that entry is a `cdhash:` value that changes with every rebuild, and the rebuilt
+binary is asked for the login password on each run. The trust-all decrypt ACL the
+store already sets does not cover the partition check.
+
+After enrolling this host, run:
+
+```bash
+just trust-macos-keychain
+```
+
+It empties the partition list of the enrolled items, which keeps access within the
+same boundary the trust-all ACL already grants — any process of the same user, and
+still not the separate runner UID. Re-run it whenever an enrollment creates new
+Keychain items.
+
 ## Pull requests
 
 - Use one task ID per pull request and open it as Draft.

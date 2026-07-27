@@ -81,6 +81,11 @@ smoke-embedded-ui-linux: build
   test "$(go env GOOS)" = linux
   ./scripts/smoke-embedded-ui.sh bin/tewake
 
+# macOS only. Clears the partition list of the enrolled Keychain items so a
+# rebuilt local binary reads them without a login-password prompt.
+trust-macos-keychain:
+  ./scripts/trust-macos-keychain.sh
+
 check: generate-api-check generate-web-check fmt-check lint test test-platform-linux build
 
 check-quick: generate-api-check generate-web-check fmt-check
