@@ -66,6 +66,8 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	})
 	var stateDirectory string
 	var connectionTimeout, reconnectDelay time.Duration
+	var localControl bool
+	var ownerUIDs []int
 	native := defaultNativeRunnerOptions()
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -85,6 +87,10 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 				ConnectionTimeout: connectionTimeout,
 				ReconnectDelay:    reconnectDelay,
 				CommandRuntime:    commandRuntime,
+				LocalControl: app.AgentLocalControlOptions{
+					Enabled:   localControl,
+					OwnerUIDs: ownerUIDs,
+				},
 			})
 		},
 	}
@@ -96,6 +102,8 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	serve.Flags().StringVar(&native.SupervisorSocket, "supervisor-socket", native.SupervisorSocket, "local privileged supervisor socket")
 	serve.Flags().StringVar(&native.RunnerIdentityService, "runner-identity-service", native.RunnerIdentityService, "Windows runner identity service")
 	serve.Flags().BoolVar(&native.Required, "require-native-runner", false, "fail startup unless the native runner boundary is available")
+	serve.Flags().BoolVar(&localControl, "local-control", false, "serve the same-host availability endpoint used by the tray, launcher, and CLI")
+	serve.Flags().IntSliceVar(&ownerUIDs, "owner-uid", nil, "additional local user IDs authorized to control this node's availability")
 	root.AddCommand(serve)
 	root.AddCommand(platformCommands()...)
 	return root

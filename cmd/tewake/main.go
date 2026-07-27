@@ -278,6 +278,9 @@ func newNodeCommand() *cobra.Command {
 	add.Flags().StringVar(&stateDirectory, "state-dir", "", "controller state directory used to authorize the local admin session")
 	add.Flags().StringSliceVar(&hints, "hint", nil, "HTTPS controller endpoint hint embedded in the join code")
 	node.AddCommand(add)
+	for _, availability := range newNodeAvailabilityCommands() {
+		node.AddCommand(availability)
+	}
 	return node
 }
 

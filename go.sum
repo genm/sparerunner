@@ -1,3 +1,5 @@
+fyne.io/systray v1.12.2 h1:Y8DZxgLHsVQt6rY9Zrkkg+j67S7vv/1F2viOWKPpVeA=
+fyne.io/systray v1.12.2/go.mod h1:RVwqP9nYMo7h5zViCBHri2FgjXF7H2cub7MAq4NSoLs=
 github.com/RaveNoX/go-jsoncommentstrip v1.0.0/go.mod h1:78ihd09MekBnJnxpICcwzCMzGrKSKYe4AqU6PDYYpjk=
 github.com/actions/scaleset v0.4.0 h1:691GC2AkHb3ZGjfNvatboYoRS7CLr3+4VcZk/6w9IbM=
 github.com/actions/scaleset v0.4.0/go.mod h1:2L2I6rggFWV+zprDet6y7y7Vkm3HPudaup78eSc79Uo=

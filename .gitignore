@@ -16,6 +16,9 @@
 /web/playwright-report/
 /web/test-results/
 /api/codegen/node_modules/
+/extensions/raycast/node_modules/
+/extensions/raycast/dist/
+/extensions/raycast/raycast-env.d.ts
 *.tsbuildinfo
 
 # Local runtime state

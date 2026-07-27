@@ -133,7 +133,11 @@ func JoinAgent(ctx context.Context, options JoinOptions) (string, error) {
 }
 
 type AgentServeOptions struct {
-	StateDirectory    string
+	StateDirectory string
+	// LocalControl serves the node-local availability endpoint for the tray,
+	// launcher, and CLI. It is disabled by default so an unconfigured owner
+	// identity never widens the Agent's local surface implicitly.
+	LocalControl      AgentLocalControlOptions
 	ConnectionTimeout time.Duration
 	ReconnectDelay    time.Duration
 	HeartbeatInterval time.Duration
@@ -154,6 +158,23 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	availability, err := newAgentAvailability(ctx, state.Store, domain.NodeID(state.NodeID))
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil
+		}
+		return err
+	}
+	if options.LocalControl.Enabled {
+		control, err := startAgentLocalControl(state.Directory, availability, options.LocalControl, logger)
+		if err != nil {
+			// The owner's control surface is part of this node's contract. A
+			// half-open endpoint would silently strand the tray, so startup
+			// fails rather than running without it.
+			return err
+		}
+		defer control.Close()
 	}
 	var commandRuntime *AgentCommandRuntime
 	if options.CommandRuntime != nil {
@@ -200,10 +221,13 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 			}
 			offline = false
 			connectedOnce = true
+			availability.setConnected(true)
 			err = runAgentSessionWithOptions(ctx, connection, state, commandRuntime, agentSessionOptions{
 				heartbeatInterval: options.HeartbeatInterval,
 				readinessTimeout:  options.ReadinessTimeout,
+				availability:      availability,
 			})
+			availability.setConnected(false)
 			connection.CloseNow()
 		}
 		if ctx.Err() != nil {
@@ -249,6 +273,7 @@ func runAgentSession(ctx context.Context, connection *websocket.Conn, state *Age
 type agentSessionOptions struct {
 	heartbeatInterval time.Duration
 	readinessTimeout  time.Duration
+	availability      *agentAvailability
 }
 
 func (options agentSessionOptions) normalized() agentSessionOptions {
@@ -278,11 +303,21 @@ func runAgentSessionWithOptions(
 	if commandRuntime != nil {
 		runnerVersion = commandRuntime.RunnerVersion()
 	}
+	nativeReady := probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout)
+	intent := domain.AvailabilityAccepting
+	if options.availability != nil {
+		options.availability.setNativeReady(nativeReady)
+		intent = options.availability.Intent()
+	}
 	snapshot, err := buildAgentSnapshot(
 		ctx,
 		state,
 		runnerVersion,
-		probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout),
+		// Capacity is the conjunction of native readiness and the owner's
+		// intent, so a stopped computer advertises nothing even when its
+		// runtime is perfectly healthy.
+		nativeReady && intent.Accepts(),
+		intent,
 	)
 	if err != nil {
 		return ErrAgentRuntimeDegraded
@@ -311,6 +346,7 @@ func buildAgentSnapshot(
 	state *AgentState,
 	runnerVersion string,
 	nativeRunnerReady bool,
+	availabilityIntent domain.AvailabilityIntent,
 ) (transport.AgentSnapshot, error) {
 	if state == nil || state.Store == nil || state.NodeID == "" ||
 		runnerVersion == "" {
@@ -324,6 +360,7 @@ func buildAgentSnapshot(
 		NodeID:             domain.NodeID(state.NodeID),
 		RunnerVersion:      runnerVersion,
 		NativeRunnerReady:  nativeRunnerReady,
+		AvailabilityIntent: availabilityIntent,
 		MaxControllerEpoch: journal.MaxControllerEpoch,
 		Commands:           journal.Commands,
 	}
@@ -408,6 +445,7 @@ func runAgentSessionActor(
 
 	awaitingUpdateAck := ""
 	awaitingHeartbeatAck := ""
+	inFlightIntent := domain.AvailabilityAccepting
 	for {
 		if commandRuntime != nil && awaitingUpdateAck == "" {
 			pending, err := commandRuntime.PendingUpdates(ctx)
@@ -445,13 +483,20 @@ func runAgentSessionActor(
 			if awaitingHeartbeatAck != "" {
 				return errors.New("controller heartbeat acknowledgement missing")
 			}
+			heartbeatNativeReady := probeAgentRuntimeReadiness(
+				ctx,
+				commandRuntime,
+				options.readinessTimeout,
+			)
+			heartbeatIntent := domain.AvailabilityAccepting
+			if options.availability != nil {
+				options.availability.setNativeReady(heartbeatNativeReady)
+				heartbeatIntent = options.availability.Intent()
+			}
 			payload, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
-				NodeID: nodeID,
-				NativeRunnerReady: probeAgentRuntimeReadiness(
-					ctx,
-					commandRuntime,
-					options.readinessTimeout,
-				),
+				NodeID:             nodeID,
+				NativeRunnerReady:  heartbeatNativeReady && heartbeatIntent.Accepts(),
+				AvailabilityIntent: heartbeatIntent,
 			})
 			if err != nil {
 				return errors.New("agent heartbeat is invalid")
@@ -472,6 +517,7 @@ func runAgentSessionActor(
 				return writeErr
 			}
 			awaitingHeartbeatAck = messageID
+			inFlightIntent = heartbeatIntent
 			// The ACK gets a full heartbeat interval even when the live
 			// readiness probe itself was slow.
 			heartbeat.Reset(options.heartbeatInterval)
@@ -515,6 +561,12 @@ func runAgentSessionActor(
 				}
 				if matchesHeartbeat {
 					awaitingHeartbeatAck = ""
+					// The Controller has now observed this exact intent, which
+					// is the only evidence that lets a resume stop reporting as
+					// pending.
+					if options.availability != nil {
+						options.availability.confirm(inFlightIntent)
+					}
 					continue
 				}
 				if commandRuntime == nil {
