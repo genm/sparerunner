@@ -80,6 +80,56 @@ func CreatePrivateDirectory(path string) error {
 	return nil
 }
 
+// CreatePrivateFile creates a new regular file with the same protected ACL
+// before any caller can write private material into it.
+func CreatePrivateFile(path string) (*os.File, error) {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return nil, ErrUnsafePrivatePath
+	}
+	if !NoReparseComponents(filepath.Dir(path)) {
+		return nil, ErrUnsafePrivatePath
+	}
+	current, err := CurrentProcessSID()
+	if err != nil {
+		return nil, err
+	}
+	descriptor, err := privateSecurityDescriptor(current, false)
+	if err != nil {
+		return nil, err
+	}
+	name, err := syswindows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, err
+	}
+	attributes := &syswindows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(syswindows.SecurityAttributes{})),
+		SecurityDescriptor: descriptor,
+	}
+	handle, err := syswindows.CreateFile(
+		name,
+		syswindows.GENERIC_READ|syswindows.GENERIC_WRITE,
+		syswindows.FILE_SHARE_READ|syswindows.FILE_SHARE_WRITE|syswindows.FILE_SHARE_DELETE,
+		attributes,
+		syswindows.CREATE_NEW,
+		syswindows.FILE_ATTRIBUTE_NORMAL|syswindows.FILE_FLAG_WRITE_THROUGH,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	file := os.NewFile(uintptr(handle), path)
+	if file == nil {
+		syswindows.CloseHandle(handle)
+		return nil, errors.New("open private Windows file")
+	}
+	if err := ValidatePrivateFile(path); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, err
+	}
+	return file, nil
+}
+
 // SecureEmptyPrivateDirectory gives a just-created directory the exact private
 // ACL. It never repairs a non-empty or foreign-owned directory.
 func SecureEmptyPrivateDirectory(path string) error {
