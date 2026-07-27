@@ -62,9 +62,10 @@ archives:
       - LICENSE
       - README.md
       - docs/security/*.md
-      - licenses/*
+      - licenses/NOTICE
+      - licenses/THIRD_PARTY_LICENSES.csv
+      - licenses/THIRD_PARTY_LICENSES/**/*
       - packaging/**/*
-      - licenses/**/*
 
 checksum:
   name_template: checksums.txt

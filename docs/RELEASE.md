@@ -12,9 +12,12 @@ amd64 and arm64. The archive contains both binaries, the Apache-2.0 license,
 security contracts, and all platform service/install files.
 
 ```bash
-goreleaser release --snapshot --clean --skip=sbom
-# GoReleaser also creates the dependency license/NOTICE bundle under licenses/
-# and Syft generates one CycloneDX JSON document beside every archive
+# Put the pinned Syft binary on PATH before running the snapshot. The same
+# command is used by the tag workflow after its Syft download step.
+syft version
+goreleaser release --snapshot --clean
+# GoReleaser creates the dependency license/NOTICE bundle under licenses/ and
+# invokes Syft to generate one CycloneDX JSON document beside every archive.
 just check-release-artifacts dist
 ```
 
