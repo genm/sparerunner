@@ -43,7 +43,10 @@ run_tool() {
   shift
   if [[ "$test_enabled" == "1" ]]; then
     "${test_tools}/${name}" "$@"
-    return
+    local rc=$?
+    # Preserve the helper's exit status explicitly so test indirection has the
+    # same fail-closed behavior as the production command surface.
+    return "$rc"
   fi
   case "$name" in
     cmp) /usr/bin/cmp "$@" ;;
