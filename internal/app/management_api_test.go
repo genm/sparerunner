@@ -4,6 +4,9 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math"
@@ -18,6 +21,7 @@ import (
 	"github.com/genm/tewake/internal/config"
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/github"
 	"github.com/genm/tewake/internal/reconcile"
 	"github.com/genm/tewake/internal/store"
 )
@@ -597,6 +601,129 @@ func TestManagementTargetVerificationFailsClosedAndAcceptsOnlyVerifiedPrivateAut
 	if err != nil || applied.Revision != "2" || len(applied.Targets) != 1 {
 		t.Fatalf("verified private target apply = (%#v, %v)", applied, err)
 	}
+}
+
+// TestSetupKeepsTargetCreationAvailableWhileRuntimeIsUnverified pins the
+// live-deployment regression: creating the first organization Target left its
+// GitHub message session unestablished — the normal state until the runner
+// coordinator polls — and the old Setup folded that into githubAppState. The
+// console then reported that no verified GitHub installation existed and
+// refused every further Target, while the installation was in fact verified.
+func TestSetupKeepsTargetCreationAvailableWhileRuntimeIsUnverified(t *testing.T) {
+	ctx := context.Background()
+	backend, _ := newManagementBackendForTest(t)
+	current, err := backend.state.Store.ReadManagementConfiguration(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document, err := managementConfigurationDocument(current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	document.RunnerProfiles = []config.RunnerProfileConfiguration{{
+		ID: "profile-default", Label: "tewake",
+		VersionPolicy: domain.RunnerVersionAutoUpdate,
+		Runtime:       domain.RuntimeNative,
+	}}
+	document.Targets = []config.GitHubTargetConfiguration{{
+		ID: "target-org", InstallationID: "installation-41",
+		ScopeKind: domain.TargetOrganization, Scope: "example-org",
+		ScaleSetName: "tewake", RunnerProfileID: "profile-default",
+	}}
+	payload, err := config.EncodeJSON(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.targetVerifier = managementTargetVerifierFunc(func(
+		_ context.Context,
+		requested config.GitHubTargetConfiguration,
+	) (store.ManagementGitHubTarget, error) {
+		return store.ManagementGitHubTarget{
+			Target: domain.GitHubTarget{
+				ID: requested.ID, InstallationID: requested.InstallationID,
+				ScopeKind: requested.ScopeKind, Scope: requested.Scope,
+				Visibility: domain.TargetPrivate, RunnerGroupAccessSafe: true,
+				ScaleSetName:    requested.ScaleSetName,
+				RunnerProfileID: requested.RunnerProfileID,
+			},
+			ScaleSetID: 41,
+		}, nil
+	})
+	if _, err := backend.ApplyConfiguration(
+		ctx, current.Revision, "application/json", payload, managementTestRequestID,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	// A connected App plus an unverified Target runtime is the exact live state:
+	// the App state must stay connected so the console keeps offering Target
+	// creation. Before the fix this returned degraded.
+	credentialStore := &github.MemoryAppCredentialStore{}
+	if err := credentialStore.Save(managementTestAppCredential(t)); err != nil {
+		t.Fatal(err)
+	}
+	authority, err := github.NewAuthority(github.AuthorityOptions{CredentialStore: credentialStore})
+	if err != nil {
+		t.Fatal(err)
+	}
+	backend.state.GitHubAuthority = authority
+
+	setup, err := backend.Setup(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if setup.GithubAppState != gen.SetupGithubAppStateConnected {
+		t.Fatalf("connected app with an unverified target runtime = %q", setup.GithubAppState)
+	}
+	if setup.TargetCount != 1 {
+		t.Fatalf("target count = %d", setup.TargetCount)
+	}
+	// The unverified runtime is still reported, in the place that describes
+	// runtime rather than App authority.
+	found := false
+	for _, condition := range setup.Conditions {
+		if condition.Code == "github_target_runtime_unverified" {
+			if condition.Status != gen.ConditionStatusDegraded {
+				t.Fatalf("runtime condition status = %q", condition.Status)
+			}
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("unverified target runtime was not reported: %#v", setup.Conditions)
+	}
+	overview, err := backend.Overview(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	overviewFound := false
+	for _, condition := range overview.Conditions {
+		if condition.Code == "github_target_runtime_unverified" {
+			overviewFound = true
+		}
+	}
+	if !overviewFound {
+		t.Fatalf("overview omitted the runtime condition: %#v", overview.Conditions)
+	}
+}
+
+// managementTestAppCredential builds a syntactically valid App credential so a
+// test can exercise the connected path without a platform credential store.
+func managementTestAppCredential(t *testing.T) github.AppCredential {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	credential, err := github.NewAppCredential(4409279, "Iv1.testclientid", string(encoded))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return credential
 }
 
 func TestManagementBackendConsumedJoinCodeCannotImplicitlyRevokeNode(t *testing.T) {
