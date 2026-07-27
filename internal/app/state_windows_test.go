@@ -13,7 +13,15 @@ import (
 func TestWindowsStateInitializationSecuresOnlyEmptyOwnedDirectory(t *testing.T) {
 	directory := filepath.Clean(filepath.Join(t.TempDir(), "state"))
 	if err := ensurePrivateStateDirectory(directory); err != nil {
-		t.Fatal(err)
+		currentSID, _ := winacl.CurrentProcessSID()
+		t.Fatalf(
+			"initialize Windows state directory %q: %v (noReparse=%t currentSID=%q existingACL=%v)",
+			directory,
+			err,
+			winacl.NoReparseComponents(directory),
+			currentSID,
+			winacl.ValidatePrivateDirectory(directory),
+		)
 	}
 	if err := winacl.ValidatePrivateDirectory(directory); err != nil {
 		t.Fatalf("initialized state ACL: %v", err)

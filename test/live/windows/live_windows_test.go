@@ -3,6 +3,7 @@
 package windows_test
 
 import (
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -266,14 +267,7 @@ catch {}
 
 func TestWindowsLivePowerShellParses(t *testing.T) {
 	for _, name := range []string{"live-support.ps1", "run.ps1"} {
-		command := exec.Command(
-			"powershell.exe",
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			`$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$tokens,[ref]$errors); if ($errors.Count -ne 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }`,
-			livePath(t, name),
-		)
+		command := powershellFileCommand(t, `$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$tokens,[ref]$errors); if ($errors.Count -ne 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }`, livePath(t, name))
 		if output, err := command.CombinedOutput(); err != nil {
 			t.Fatalf("%s parse: %v\n%s", name, err, output)
 		}
@@ -282,19 +276,20 @@ func TestWindowsLivePowerShellParses(t *testing.T) {
 
 func runPowerShell(t *testing.T, script string, arguments ...string) {
 	t.Helper()
-	commandArguments := []string{
-		"-NoProfile",
-		"-NonInteractive",
-		"-Command",
-		script,
-	}
-	commandArguments = append(commandArguments, arguments...)
-	if output, err := exec.Command(
-		"powershell.exe",
-		commandArguments...,
-	).CombinedOutput(); err != nil {
+	if output, err := powershellFileCommand(t, script, arguments...).CombinedOutput(); err != nil {
 		t.Fatalf("PowerShell contract: %v\n%s", err, output)
 	}
+}
+
+func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
+	t.Helper()
+	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
+	commandArguments = append(commandArguments, arguments...)
+	return exec.Command("powershell.exe", commandArguments...)
 }
 
 func livePath(t *testing.T, parts ...string) string {

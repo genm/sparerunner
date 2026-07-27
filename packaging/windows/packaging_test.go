@@ -119,19 +119,23 @@ func TestPowerShellPackagingParsesOnWindows(t *testing.T) {
 		"uninstall.ps1",
 	} {
 		path := packagingPath(t, name)
-		command := exec.Command(
-			"powershell.exe",
-			"-NoProfile",
-			"-NonInteractive",
-			"-Command",
-			`$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$tokens,[ref]$errors); if ($errors.Count -ne 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }`,
-			path,
-		)
+		command := powershellFileCommand(t, `$tokens=$null; $errors=$null; [void][System.Management.Automation.Language.Parser]::ParseFile($args[0],[ref]$tokens,[ref]$errors); if ($errors.Count -ne 0) { $errors | ForEach-Object { [Console]::Error.WriteLine($_.Message) }; exit 1 }`, path)
 		output, err := command.CombinedOutput()
 		if err != nil {
 			t.Fatalf("%s parse: %v\n%s", name, err, output)
 		}
 	}
+}
+
+func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
+	t.Helper()
+	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
+	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
+	commandArguments = append(commandArguments, arguments...)
+	return exec.Command("powershell.exe", commandArguments...)
 }
 
 func TestOwnershipMarkersRejectForeignCrossRoleCrossInstallAndTamperedRoots(
