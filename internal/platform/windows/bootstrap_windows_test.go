@@ -202,9 +202,16 @@ func TestBootstrapRequestDetectsClientDisconnectBeforeAck(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	file, _, err := connectBootstrapPipe(context.Background())
+	connectContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	file, _, err := connectBootstrapPipe(connectContext)
 	if err != nil {
-		t.Fatal(err)
+		select {
+		case receiveErr := <-serverErr:
+			t.Fatalf("bootstrap server rejected the pipe: %v", receiveErr)
+		default:
+			t.Fatal(err)
+		}
 	}
 	if _, err := file.Write(payload); err != nil {
 		t.Fatal(err)

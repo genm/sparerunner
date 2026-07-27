@@ -217,7 +217,15 @@ func windowsPrivateDirectory(t *testing.T) string {
 	t.Helper()
 	directory := filepath.Clean(t.TempDir())
 	if err := winacl.SecureEmptyPrivateDirectory(directory); err != nil {
-		t.Fatal(err)
+		currentSID, _ := winacl.CurrentProcessSID()
+		t.Fatalf(
+			"secure Windows private directory %q: %v (noReparse=%t currentSID=%q existingACL=%v)",
+			directory,
+			err,
+			winacl.NoReparseComponents(directory),
+			currentSID,
+			winacl.ValidatePrivateDirectory(directory),
+		)
 	}
 	return directory
 }

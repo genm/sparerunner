@@ -520,7 +520,10 @@ func validateBootstrapResponseFrame(frame bootstrapResponseFrame) error {
 func validateBootstrapPipeACL(handle syswindows.Handle) error {
 	descriptor, err := syswindows.GetSecurityInfo(
 		handle,
-		syswindows.SE_KERNEL_OBJECT,
+		// Named pipes are file objects. Using the kernel-object selector can
+		// reject an otherwise valid descriptor on Windows hosted runners before
+		// the client ever gets a chance to connect.
+		syswindows.SE_FILE_OBJECT,
 		syswindows.OWNER_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION,
 	)
 	if err != nil || descriptor == nil || !descriptor.IsValid() {
