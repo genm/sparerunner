@@ -555,8 +555,8 @@ func validateBootstrapPipeACL(handle syswindows.Handle) error {
 		return bootstrapIdentityError(fmt.Sprintf("dacl count=%d defaulted=%t err=%v", aceCount, defaulted, err))
 	}
 	expected := map[string]syswindows.ACCESS_MASK{
-		"S-1-5-18":     syswindows.GENERIC_ALL,
-		"S-1-5-32-544": syswindows.GENERIC_READ | syswindows.GENERIC_WRITE,
+		"S-1-5-18":     0x001f01ff,
+		"S-1-5-32-544": 0x0012019f,
 	}
 	seen := map[string]bool{}
 	for index := uint32(0); index < uint32(dacl.AceCount); index++ {

@@ -122,30 +122,13 @@ func atomicWindowsPrivateFile(path string, contents []byte) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	pointer, err := syswindows.UTF16PtrFromString(path)
-	if err != nil {
-		return err
-	}
-	handle, err := syswindows.CreateFile(
-		pointer,
-		syswindows.GENERIC_READ|syswindows.GENERIC_WRITE,
-		syswindows.FILE_SHARE_READ|syswindows.FILE_SHARE_WRITE|syswindows.FILE_SHARE_DELETE,
-		nil,
-		syswindows.CREATE_NEW,
-		syswindows.FILE_ATTRIBUTE_NORMAL|syswindows.FILE_FLAG_WRITE_THROUGH,
-		0,
-	)
+	file, err := winacl.CreatePrivateFile(path)
 	if err != nil {
 		if errors.Is(err, syswindows.ERROR_FILE_EXISTS) ||
 			errors.Is(err, syswindows.ERROR_ALREADY_EXISTS) {
 			return errors.New("private material already exists")
 		}
 		return err
-	}
-	file := os.NewFile(uintptr(handle), path)
-	if file == nil {
-		syswindows.CloseHandle(handle)
-		return errors.New("open Windows private material")
 	}
 	closed := false
 	defer func() {
@@ -159,9 +142,6 @@ func atomicWindowsPrivateFile(path string, contents []byte) error {
 			_ = os.Remove(path)
 		}
 	}()
-	if err := winacl.SecurePrivateFile(path); err != nil {
-		return err
-	}
 	if written, err := file.Write(contents); err != nil || written != len(contents) {
 		if err == nil {
 			err = io.ErrShortWrite

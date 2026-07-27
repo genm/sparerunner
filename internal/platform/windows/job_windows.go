@@ -963,30 +963,8 @@ func ensurePrivateFenceDirectory(path string) error {
 }
 
 func openPrivateFenceFile(path string) (*os.File, error) {
-	pointer, err := syswindows.UTF16PtrFromString(path)
-	if err != nil {
-		return nil, err
-	}
-	handle, err := syswindows.CreateFile(
-		pointer,
-		syswindows.GENERIC_READ|syswindows.GENERIC_WRITE,
-		syswindows.FILE_SHARE_READ|syswindows.FILE_SHARE_WRITE|syswindows.FILE_SHARE_DELETE,
-		nil,
-		syswindows.CREATE_NEW,
-		syswindows.FILE_ATTRIBUTE_NORMAL|syswindows.FILE_FLAG_WRITE_THROUGH,
-		0,
-	)
+	file, err := winacl.CreatePrivateFile(path)
 	if err == nil {
-		file := os.NewFile(uintptr(handle), path)
-		if file == nil {
-			syswindows.CloseHandle(handle)
-			return nil, runner.ErrCleanupFailed
-		}
-		if err := winacl.SecurePrivateFile(path); err != nil {
-			_ = file.Close()
-			_ = os.Remove(path)
-			return nil, err
-		}
 		return file, nil
 	}
 	if !errors.Is(err, syswindows.ERROR_FILE_EXISTS) &&
