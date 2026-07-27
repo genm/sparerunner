@@ -123,11 +123,31 @@ func writeAvailabilityText(writer io.Writer, status nodectl.Status) {
 	fmt.Fprintf(writer, "Runner:     %s\n", readinessText(status.NativeRunnerReady))
 	if len(status.RunningExecutions) == 0 {
 		fmt.Fprintln(writer, "Running:    none")
+	} else {
+		fmt.Fprintf(writer, "Running:    %d execution(s)\n", len(status.RunningExecutions))
+		for _, execution := range status.RunningExecutions {
+			fmt.Fprintf(writer, "  - %s (%s)\n", execution.ExecutionID, execution.State)
+		}
+	}
+	writeAvailabilityTargets(writer, status.EligibleTargets)
+}
+
+// writeAvailabilityTargets renders the eligible-target list a heartbeat ack
+// last confirmed. An absent or empty list is display fact, not an error: it
+// means either no configured Target currently matches this node's platform,
+// or the Agent has not completed its first heartbeat round trip yet.
+func writeAvailabilityTargets(writer io.Writer, targets []nodectl.EligibleTarget) {
+	if len(targets) == 0 {
+		fmt.Fprintln(writer, "Targets:    none reported")
 		return
 	}
-	fmt.Fprintf(writer, "Running:    %d execution(s)\n", len(status.RunningExecutions))
-	for _, execution := range status.RunningExecutions {
-		fmt.Fprintf(writer, "  - %s (%s)\n", execution.ExecutionID, execution.State)
+	fmt.Fprintf(writer, "Targets:    %d scope(s)\n", len(targets))
+	for _, target := range targets {
+		suffix := ""
+		if target.Excluded {
+			suffix = " (excluded)"
+		}
+		fmt.Fprintf(writer, "  - %s [%s]%s\n", target.Scope, target.ScopeKind, suffix)
 	}
 }
 

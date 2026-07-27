@@ -9,6 +9,7 @@ import (
 	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/nodectl"
 	"github.com/genm/tewake/internal/store"
+	"github.com/genm/tewake/internal/transport"
 )
 
 // agentAvailability owns the node-local half of availability. The Controller
@@ -29,6 +30,12 @@ type agentAvailability struct {
 	connected       bool
 	confirmedIntent domain.AvailabilityIntent
 	nativeReady     bool
+	// eligible is the last-known eligible-target list confirmed by a heartbeat
+	// ack. It is converted once here (rather than at every Status() read) and
+	// deliberately survives a disconnect: ControllerConnected already tells the
+	// owner the session is down, so this stays the last-known list instead of
+	// blanking to nothing.
+	eligible []nodectl.EligibleTarget
 }
 
 func newAgentAvailability(
@@ -82,6 +89,32 @@ func (availability *agentAvailability) setNativeReady(ready bool) {
 	availability.nativeReady = ready
 }
 
+// setEligibleTargets applies a heartbeat ack's eligible-target list. present
+// must be false for a nil (absent) wire value and true otherwise, including
+// for a confirmed-empty list: present=false keeps the last-known list rather
+// than blanking it, matching the wire's own nil-vs-empty distinction.
+func (availability *agentAvailability) setEligibleTargets(
+	targets []transport.EligibleTarget,
+	present bool,
+) {
+	if !present {
+		return
+	}
+	converted := make([]nodectl.EligibleTarget, len(targets))
+	for index, target := range targets {
+		converted[index] = nodectl.EligibleTarget{
+			TargetID:     target.TargetID,
+			ScopeKind:    target.ScopeKind,
+			Scope:        target.Scope,
+			ScaleSetName: target.ScaleSetName,
+			Excluded:     target.Excluded,
+		}
+	}
+	availability.mu.Lock()
+	availability.eligible = converted
+	availability.mu.Unlock()
+}
+
 // SetIntent durably records the owner's decision before returning it. A failed
 // write reports the failure rather than an optimistic new state.
 func (availability *agentAvailability) SetIntent(
@@ -108,6 +141,7 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 	connected := availability.connected
 	confirmed := availability.confirmedIntent
 	nativeReady := availability.nativeReady
+	eligible := append([]nodectl.EligibleTarget(nil), availability.eligible...)
 	availability.mu.Unlock()
 
 	status := nodectl.Status{
@@ -120,6 +154,7 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 		ControllerConnected:     connected,
 		PendingResume:           record.Intent.Accepts() && confirmed != record.Intent,
 		NativeRunnerReady:       nativeReady,
+		EligibleTargets:         eligible,
 		ObservedAtUnixNano:      time.Now().UnixNano(),
 		AgentVersion:            buildinfo.String(),
 	}

@@ -164,12 +164,41 @@ func (consumer AgentDisconnectConsumerFunc) HandleAgentDisconnect(
 // without a scheduler projection. A nil mandatory owner fails closed before
 // its corresponding ACK or command write. Consumers are commit boundaries and
 // must not synchronously call this broker's Send methods.
+//
+// Eligibility is deliberately not mandatory: it is informational display data,
+// not a correctness or security boundary, so its absence degrades a heartbeat
+// ack to carrying no eligible-target list rather than failing the session.
 type AgentConsumers struct {
 	Commands         AgentCommandConsumer
 	Snapshot         AgentSnapshotConsumer
 	Readiness        AgentReadinessConsumer
 	ExecutionUpdates ExecutionUpdateConsumer
 	Disconnects      AgentDisconnectConsumer
+	Eligibility      AgentEligibilityConsumer
+}
+
+// AgentEligibilityConsumer reports which configured GitHub Targets currently
+// match a node's platform. It is read-only display data derived from
+// configuration, never a scheduling decision or a capacity guarantee.
+type AgentEligibilityConsumer interface {
+	EligibleTargets(
+		ctx context.Context,
+		os domain.OperatingSystem,
+		architecture domain.Architecture,
+	) ([]transport.EligibleTarget, error)
+}
+
+type AgentEligibilityConsumerFunc func(
+	context.Context, domain.OperatingSystem, domain.Architecture,
+) ([]transport.EligibleTarget, error)
+
+func (consumer AgentEligibilityConsumerFunc) EligibleTargets(
+	ctx context.Context, os domain.OperatingSystem, architecture domain.Architecture,
+) ([]transport.EligibleTarget, error) {
+	if consumer == nil {
+		return nil, nil
+	}
+	return consumer(ctx, os, architecture)
 }
 
 // AgentSnapshot is the authenticated, non-secret journal evidence used to
@@ -1168,7 +1197,55 @@ func (actor *agentSessionActor) handleHeartbeat(envelope transport.Envelope) err
 	}
 	actor.stateMu.Unlock()
 	lifecycle.Unlock()
-	return actor.acknowledge(envelope.MessageID)
+	return actor.acknowledgeHeartbeat(envelope.MessageID)
+}
+
+// acknowledgeHeartbeat piggybacks the current eligible-target list onto the
+// heartbeat's own acknowledgement rather than a separate message type, so a
+// desktop client's view of "which org/repo scopes could route here" refreshes
+// at the same 1 Hz cadence as liveness with no additional protocol surface. A
+// failed or absent eligibility lookup still acknowledges the heartbeat; it
+// only leaves the desktop-visible list unrefreshed until the next tick.
+func (actor *agentSessionActor) acknowledgeHeartbeat(messageID string) error {
+	// A *slice, not a slice, carries the field: nil means "lookup failed or
+	// absent, keep the Agent's previously known list"; a non-nil pointer to an
+	// empty slice means "a successful lookup confirmed zero eligible targets".
+	// A plain slice with omitempty cannot express that second case, since Go's
+	// JSON encoder treats nil and empty slices identically.
+	var eligible *[]transport.EligibleTarget
+	if actor.broker.consumers.Eligibility != nil {
+		actor.stateMu.Lock()
+		nodeOS, nodeArch := actor.snapshot.OS, actor.snapshot.Arch
+		actor.stateMu.Unlock()
+		if targets, err := actor.broker.consumers.Eligibility.EligibleTargets(
+			actor.ctx, nodeOS, nodeArch,
+		); err == nil {
+			if targets == nil {
+				targets = []transport.EligibleTarget{}
+			}
+			eligible = &targets
+		}
+	}
+	payload, err := json.Marshal(struct {
+		MessageID       string                      `json:"messageId"`
+		EligibleTargets *[]transport.EligibleTarget `json:"eligibleTargets,omitempty"`
+	}{MessageID: messageID, EligibleTargets: eligible})
+	if err != nil {
+		return ErrAgentProtocol
+	}
+	ackID, err := randomMessageID()
+	if err != nil {
+		return ErrAgentProtocol
+	}
+	if err := actor.write(actor.ctx, transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       ackID,
+		Type:            transport.MessageAck,
+		Payload:         payload,
+	}); err != nil {
+		return classifyAgentSessionError(err)
+	}
+	return nil
 }
 
 func (actor *agentSessionActor) replaceReadinessStateLocked(ready bool, receivedAt time.Time) {

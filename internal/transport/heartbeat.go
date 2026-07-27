@@ -18,6 +18,10 @@ type AgentHeartbeat struct {
 	// display and audit; capacity itself is withheld by NativeRunnerReady, so a
 	// Controller that ignores this field can never over-admit because of it.
 	AvailabilityIntent domain.AvailabilityIntent `json:"availabilityIntent,omitempty"`
+	// ExcludedTargets mirrors the AgentSnapshot field at heartbeat cadence.
+	// Absent means "no change reported"; an Agent that never populates it
+	// (this PR) always omits the field.
+	ExcludedTargets []domain.TargetID `json:"excludedTargets,omitempty"`
 }
 
 func (heartbeat AgentHeartbeat) Validate() error {
@@ -31,6 +35,11 @@ func (heartbeat AgentHeartbeat) Validate() error {
 	if heartbeat.AvailabilityIntent != "" &&
 		heartbeat.AvailabilityIntent.Validate("agent_heartbeat.availability_intent") != nil {
 		return ErrInvalidCommand
+	}
+	if heartbeat.ExcludedTargets != nil {
+		if err := ValidateExcludedTargets(heartbeat.ExcludedTargets); err != nil {
+			return ErrInvalidCommand
+		}
 	}
 	return nil
 }
@@ -57,6 +66,7 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 		NodeID             domain.NodeID              `json:"nodeId"`
 		NativeRunnerReady  *bool                      `json:"nativeRunnerReady"`
 		AvailabilityIntent *domain.AvailabilityIntent `json:"availabilityIntent"`
+		ExcludedTargets    *[]domain.TargetID         `json:"excludedTargets"`
 	}
 	if err := decoder.Decode(&wire); err != nil {
 		return AgentHeartbeat{}, ErrInvalidCommand
@@ -74,6 +84,9 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 	}
 	if wire.AvailabilityIntent != nil {
 		heartbeat.AvailabilityIntent = *wire.AvailabilityIntent
+	}
+	if wire.ExcludedTargets != nil {
+		heartbeat.ExcludedTargets = append([]domain.TargetID{}, *wire.ExcludedTargets...)
 	}
 	if err := heartbeat.Validate(); err != nil {
 		return AgentHeartbeat{}, err

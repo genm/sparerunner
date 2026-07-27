@@ -546,6 +546,14 @@ func runAgentSessionActor(
 			case transport.MessageAck:
 				var acknowledgement struct {
 					MessageID string `json:"messageId"`
+					// EligibleTargets rides the heartbeat's own ack rather than a
+					// separate message type. A nil field means "no refresh, keep
+					// the previously known list"; a non-nil-but-empty field means
+					// "the controller confirmed zero eligible targets". Omitting
+					// this field previously made the whole session die the first
+					// time a heartbeat ack carried any eligible targets at all,
+					// because decodeStrictJSON disallows unknown fields.
+					EligibleTargets []transport.EligibleTarget `json:"eligibleTargets"`
 				}
 				if err := decodeStrictJSON(envelope.Payload, &acknowledgement); err != nil {
 					clear(envelope.Payload)
@@ -566,6 +574,17 @@ func runAgentSessionActor(
 					// pending.
 					if options.availability != nil {
 						options.availability.confirm(inFlightIntent)
+					}
+					if acknowledgement.EligibleTargets != nil {
+						// A malformed list fails the session rather than silently
+						// dropping it: an Agent must never display a corrupted
+						// eligible-target set to the owner.
+						if err := transport.ValidateEligibleTargets(acknowledgement.EligibleTargets); err != nil {
+							return errors.New("controller acknowledgement mismatch")
+						}
+						if options.availability != nil {
+							options.availability.setEligibleTargets(acknowledgement.EligibleTargets, true)
+						}
 					}
 					continue
 				}
@@ -686,6 +705,11 @@ func sendAgentMessage(ctx context.Context, connection *websocket.Conn, messageTy
 	}
 	var ackPayload struct {
 		MessageID string `json:"messageId"`
+		// EligibleTargets may arrive on this ack path too (the controller does
+		// not distinguish it from a heartbeat ack encoder). It is harmless here:
+		// this path only confirms the Hello/Snapshot ack, so the field is
+		// accepted and ignored rather than routed anywhere.
+		EligibleTargets []transport.EligibleTarget `json:"eligibleTargets"`
 	}
 	if err := decodeStrictJSON(ack.Payload, &ackPayload); err != nil || ackPayload.MessageID != messageID {
 		return errors.New("controller acknowledgement mismatch")
