@@ -553,6 +553,7 @@ tasks:
       - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until TWK-014/live/signing gates pass."
       - "2026-07-27: The local release runbook now keeps Syft enabled for snapshots and puts root license files and nested third-party files in the archive with explicit non-overlapping globs. A fresh v2.17.0/Syft v1.49.0 snapshot produced all six archives with no duplicate-entry warnings and passed the artifact checker."
       - "2026-07-27: The release evidence validator now resolves the Go module from its own repository path, so the documented gate can be invoked from an external evidence directory and still fails closed on missing manifests."
+      - "2026-07-27: Hosted PR #17 run 30266682090 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 29a1b64. This validates the release plumbing only; no tagged artifact or live-fleet evidence was published."
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.
