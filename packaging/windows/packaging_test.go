@@ -196,11 +196,15 @@ function Get-TreeSnapshot([string] $root) {
                     "d|$relative|$sddl"
                 }
                 else {
-                    $hash = [Convert]::ToHexString(
-                        [System.Security.Cryptography.SHA256]::HashData(
-                            [System.IO.File]::ReadAllBytes($_.FullName)
+                    $sha = [System.Security.Cryptography.SHA256]::Create()
+                    try {
+                        $hash = [Convert]::ToHexString(
+                            $sha.ComputeHash([System.IO.File]::ReadAllBytes($_.FullName))
                         )
-                    )
+                    }
+                    finally {
+                        $sha.Dispose()
+                    }
                     "f|$relative|$($_.Length)|$hash|$sddl"
                 }
             }
