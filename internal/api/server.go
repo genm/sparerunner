@@ -39,9 +39,10 @@ const (
 )
 
 var (
-	ErrBackendUnavailable = errors.New("management backend is unavailable")
-	ErrResourceNotFound   = errors.New("management resource was not found")
-	ErrDomainConflict     = errors.New("management operation conflicts with current state")
+	ErrBackendUnavailable     = errors.New("management backend is unavailable")
+	ErrResourceNotFound       = errors.New("management resource was not found")
+	ErrDomainConflict         = errors.New("management operation conflicts with current state")
+	ErrGitHubCallbackConflict = errors.New("GitHub App callback state conflicts with current state")
 )
 
 // RevisionConflict is the safe optimistic-lock failure returned by a Backend.
@@ -116,6 +117,16 @@ type Backend interface {
 	CancelJoinCode(context.Context, string, string) error
 	SetNodeAdministrativeState(context.Context, domain.NodeID, domain.NodeAdministrativeState, uint64, string) (gen.Node, gen.Revision, error)
 	CurrentRevision(context.Context) (gen.Revision, error)
+}
+
+// GitHubBackend is optional so existing embedders and focused API tests do not
+// need to implement provider operations. A Controller enables it only after
+// the credential-store and signed Manifest boundaries are initialized.
+type GitHubBackend interface {
+	StartGitHubAppManifest(context.Context, string, string) (gen.GitHubManifestStart, error)
+	CompleteGitHubAppManifest(context.Context, string, string) error
+	ListGitHubInstallations(context.Context) (gen.GitHubInstallationList, error)
+	CreateGitHubTarget(context.Context, uint64, gen.CreateGitHubTargetRequest, string) (gen.GitHubTargetMutation, error)
 }
 
 // EventBus coalesces invalidations for each slow subscriber. It retains no event
@@ -246,7 +257,7 @@ func setManagementStaticHeaders(header http.Header) {
 	header.Set(
 		"Content-Security-Policy",
 		"default-src 'self'; base-uri 'none'; object-src 'none'; "+
-			"frame-ancestors 'none'; form-action 'self'; script-src 'self'; "+
+			"frame-ancestors 'none'; form-action 'self' https://github.com; script-src 'self'; "+
 			"style-src 'self'; connect-src 'self'",
 	)
 	header.Set("Cross-Origin-Opener-Policy", "same-origin")
@@ -280,6 +291,14 @@ func (server *server) route(writer http.ResponseWriter, request *http.Request, r
 		)
 	case path == "/setup" && request.Method == http.MethodGet:
 		contract.GetSetup(writer, request)
+	case path == "/github/app/manifest" && request.Method == http.MethodPost:
+		contract.StartGitHubAppManifest(writer, request, gen.StartGitHubAppManifestParams{})
+	case path == "/github/app/callback" && request.Method == http.MethodGet:
+		contract.CompleteGitHubAppManifest(writer, request, gen.CompleteGitHubAppManifestParams{})
+	case path == "/github/installations" && request.Method == http.MethodGet:
+		contract.ListGitHubInstallations(writer, request)
+	case path == "/github/targets" && request.Method == http.MethodPost:
+		contract.CreateGitHubTarget(writer, request, gen.CreateGitHubTargetParams{})
 	case path == "/overview" && request.Method == http.MethodGet:
 		contract.GetOverview(writer, request)
 	case path == "/nodes" && request.Method == http.MethodGet:
@@ -734,6 +753,109 @@ func (server *server) listTargets(writer http.ResponseWriter, request *http.Requ
 		Targets               []gen.Target `json:"targets"`
 		ConfigurationRevision gen.Revision `json:"configurationRevision"`
 	}{Targets: nonNil(targets), ConfigurationRevision: revision})
+}
+
+func (server *server) startGitHubAppManifest(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if _, authorized := server.authorizeMutation(writer, request, requestID); !authorized {
+		return
+	}
+	backend, ok := server.backend.(GitHubBackend)
+	if !ok {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	var input gen.GitHubManifestStartRequest
+	if err := decodeJSONBody(writer, request, &input); err != nil {
+		server.writeDecodeError(writer, request, requestID, err)
+		return
+	}
+	callback := requestScheme(request) + "://" + request.Host + Prefix + "/github/app/callback"
+	account := ""
+	if input.RegistrationAccount != nil {
+		account = *input.RegistrationAccount
+	}
+	result, err := backend.StartGitHubAppManifest(request.Context(), callback, account)
+	if err != nil {
+		server.writeBackendError(writer, request, requestID, err)
+		return
+	}
+	server.writeJSON(writer, http.StatusOK, result)
+}
+
+func (server *server) completeGitHubAppManifest(writer http.ResponseWriter, request *http.Request, requestID string) {
+	backend, ok := server.backend.(GitHubBackend)
+	if !ok {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	code := request.URL.Query().Get("code")
+	state := request.URL.Query().Get("state")
+	if code == "" || state == "" {
+		server.writeProblem(writer, request, requestID, http.StatusBadRequest,
+			"invalid_body", "Invalid GitHub callback", "The GitHub callback is missing its one-time state.", nil)
+		return
+	}
+	if err := backend.CompleteGitHubAppManifest(request.Context(), code, state); err != nil {
+		if errors.Is(err, ErrDomainConflict) || errors.Is(err, ErrGitHubCallbackConflict) {
+			server.writeProblem(writer, request, requestID, http.StatusConflict,
+				"state_conflict", "GitHub callback was already used", "Start a new GitHub App connection.", nil)
+			return
+		}
+		server.writeBackendError(writer, request, requestID, err)
+		return
+	}
+	http.Redirect(writer, request, "/", http.StatusFound)
+}
+
+func (server *server) listGitHubInstallations(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if !server.authenticate(writer, request, requestID) {
+		return
+	}
+	backend, ok := server.backend.(GitHubBackend)
+	if !ok {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	result, err := backend.ListGitHubInstallations(request.Context())
+	if err != nil {
+		server.writeBackendError(writer, request, requestID, err)
+		return
+	}
+	server.writeJSON(writer, http.StatusOK, result)
+}
+
+func (server *server) createGitHubTarget(writer http.ResponseWriter, request *http.Request, requestID string) {
+	if _, authorized := server.authorizeMutation(writer, request, requestID); !authorized {
+		return
+	}
+	backend, ok := server.backend.(GitHubBackend)
+	if !ok {
+		server.writeUnavailable(writer, request, requestID)
+		return
+	}
+	expected, ok := server.requireRevision(writer, request, requestID)
+	if !ok {
+		return
+	}
+	var input gen.CreateGitHubTargetRequest
+	if err := decodeJSONBody(writer, request, &input); err != nil {
+		server.writeDecodeError(writer, request, requestID, err)
+		return
+	}
+	result, err := backend.CreateGitHubTarget(request.Context(), expected, input, requestID)
+	if err != nil {
+		server.writeBackendError(writer, request, requestID, err)
+		return
+	}
+	server.events.Publish()
+	server.writeJSON(writer, http.StatusOK, result)
+}
+
+func requestScheme(request *http.Request) string {
+	if request != nil && request.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 func (server *server) listRuns(writer http.ResponseWriter, request *http.Request, requestID string) {

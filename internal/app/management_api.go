@@ -29,14 +29,19 @@ import (
 // deliberately leaves this nil and rejects new or identity-changing targets.
 // Implementations return a managementapi.ValidationError for an authoritatively
 // unsafe/public target and another error for unavailable or uncertain authority.
-// Verification is strictly read-only: provider provisioning belongs to a later
-// durable intent/reconciler boundary so a concurrent configuration CAS failure
-// cannot orphan an external scale set.
+// Provider creation is fenced by a durable provisioning intent before the
+// configuration CAS; a concurrent CAS failure is therefore observable as an
+// ambiguous intent instead of being reported as a successful local-only write.
 type ManagementTargetVerifier interface {
 	VerifyManagementTarget(
 		context.Context,
 		config.GitHubTargetConfiguration,
 	) (store.ManagementGitHubTarget, error)
+}
+
+type ManagementTargetIntentRecorder interface {
+	MarkManagementTargetCommitted(context.Context, store.ManagementGitHubTarget) error
+	MarkManagementTargetAmbiguous(context.Context, store.ManagementGitHubTarget, string) error
 }
 
 type managementBackend struct {
@@ -80,8 +85,19 @@ func (backend *managementBackend) Setup(ctx context.Context) (gen.Setup, error) 
 		return gen.Setup{}, err
 	}
 	appState := gen.SetupGithubAppStateDisconnected
+	manifestFlowSupported := backend.state.GitHubAuthority != nil
+	if backend.state.GitHubAuthority != nil {
+		connected, connectedErr := backend.state.GitHubAuthority.Connected()
+		if connectedErr != nil {
+			appState = gen.SetupGithubAppStateDegraded
+		} else if connected {
+			appState = gen.SetupGithubAppStateConnected
+		}
+	}
 	if len(configuration.GitHubTargets) > 0 {
-		appState = gen.SetupGithubAppStateConnected
+		if appState == gen.SetupGithubAppStateDisconnected {
+			appState = gen.SetupGithubAppStateDegraded
+		}
 		for _, target := range configuration.GitHubTargets {
 			freshness, freshnessErr := backend.state.Store.ReadGitHubRuntimeFreshness(
 				ctx,
@@ -101,7 +117,7 @@ func (backend *managementBackend) Setup(ctx context.Context) (gen.Setup, error) 
 	return gen.Setup{
 		ControllerInitialized: true,
 		GithubAppState:        appState,
-		ManifestFlowSupported: false,
+		ManifestFlowSupported: manifestFlowSupported,
 		NodeCount:             len(configuration.Nodes),
 		TargetCount:           len(configuration.GitHubTargets),
 		Conditions:            backend.conditions(),
@@ -377,7 +393,20 @@ func (backend *managementBackend) ApplyConfiguration(
 		},
 	)
 	if err != nil {
+		if recorder, ok := backend.targetVerifier.(ManagementTargetIntentRecorder); ok {
+			for _, target := range verified.GitHubTargets {
+				_ = recorder.MarkManagementTargetAmbiguous(ctx, target, "configuration_commit_failed")
+			}
+		}
 		return gen.Configuration{}, managementStoreError(err)
+	}
+	if recorder, ok := backend.targetVerifier.(ManagementTargetIntentRecorder); ok {
+		for _, target := range verified.GitHubTargets {
+			if err := recorder.MarkManagementTargetCommitted(ctx, target); err != nil {
+				_ = recorder.MarkManagementTargetAmbiguous(ctx, target, "intent_commit_failed")
+				return gen.Configuration{}, &managementapi.CommittedMutationError{Current: applied.Revision}
+			}
+		}
 	}
 	if err := backend.state.Reconciler.ApplyNodeConfigurations(
 		managementNodeConfigurations(applied.Nodes),
@@ -617,6 +646,13 @@ func (backend *managementBackend) resolveManagementAuthorities(
 		existing, exists := currentTargets[target.ID]
 		if exists && sameManagementTargetIdentity(existing.Target, target) {
 			continue
+		}
+		if exists {
+			// A target ID is the durable external identity. Mutating its scope or
+			// scale-set name would provision a second provider object before the
+			// old one can be safely retired, so require an explicit delete/recreate
+			// workflow instead of risking an orphan or shared route.
+			return store.ManagementVerifiedAuthorities{}, managementapi.ErrDomainConflict
 		}
 		if backend.targetVerifier == nil {
 			return store.ManagementVerifiedAuthorities{}, managementapi.ErrBackendUnavailable

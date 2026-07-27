@@ -562,8 +562,10 @@ available to the dedicated runner account.
 The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The API
 provides:
 
-- setup state; GitHub App Manifest callback support remains unavailable until
-  TWK-016 implements its provider and signed callback-state authority
+- setup state; GitHub App Manifest setup is exposed through a signed, one-use
+  callback state and controller-owned credential-store boundary. Native
+  Keychain/DPAPI adapters remain platform-task work; Linux uses the service-user
+  private credential file boundary until those adapters land
 - node inventory, join-code creation/cancellation, drain/resume, revoke, and the
   node-reported availability intent with its observation age
 - target and runner-profile configuration

@@ -2,6 +2,7 @@ import AxeBuilder from "@axe-core/playwright";
 import { expect, test } from "@playwright/experimental-ct-react";
 
 import { App } from "./App";
+import type { ManagementClient } from "./api/client";
 import { createScenarioClient } from "./test/scenario-client";
 import type { ScenarioName, ScreenName } from "./ui/state-registry";
 
@@ -132,4 +133,44 @@ test("field validation identifies the invalid control", async ({ mount, page }, 
   await expect(component.locator("#scheduler-max-error")).toHaveText("must be positive");
   expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
   await captureState(testInfo, page, `validation-error-${testInfo.project.name}`);
+});
+
+test("connected GitHub Target dialog exposes only the verified creation journey", async ({
+  mount,
+  page,
+}, testInfo) => {
+  const base = createScenarioClient("empty");
+  const api: ManagementClient = {
+    ...base,
+    getSetup: async () => ({
+      ...(await base.getSetup()),
+      githubAppState: "connected",
+      manifestFlowSupported: true,
+    }),
+    listGitHubInstallations: async () => ({
+      installations: [
+        { id: "42", accountLogin: "acme", accountType: "Organization", repositorySelection: "all" },
+      ],
+    }),
+    createGitHubTarget: async () => ({
+      target: {
+        id: "target-test",
+        installationId: "42",
+        scopeKind: "repository",
+        scope: "acme/private",
+        scaleSetName: "tewake",
+        runnerProfileId: "profile-tewake",
+        status: "ready",
+        freshness: { state: "unknown" },
+      },
+      configurationRevision: "1",
+    }),
+  };
+  const component = await mount(<App api={api} initialRoute="targets" />);
+  await component.getByRole("button", { name: "Create target" }).click();
+  await expect(component.getByRole("dialog")).toBeVisible();
+  await expect(component.getByRole("combobox", { name: "GitHub account" })).toHaveValue("42");
+  await expect(component.getByRole("button", { name: "Verify and create" })).toBeVisible();
+  expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+  await captureState(testInfo, page, `target-dialog-${testInfo.project.name}`);
 });

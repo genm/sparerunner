@@ -18,10 +18,12 @@ Tewake is under active pre-alpha development. The repository currently contains
 the accepted specification, durable domain/store foundations, the isolated GitHub
 scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
-work for development, including pinned enrollment, mTLS WebSockets, and reconnect.
-Scheduling, OS service installation, GitHub job execution, cleanup, the
-management API, the desktop tray client, and the Raycast extension remain
-incomplete. Do not install it on a production runner fleet.
+work for development, including pinned enrollment, mTLS WebSockets, reconnect,
+the signed GitHub App Manifest flow, installation discovery, private Target
+verification, and the generated management UI/API. Scheduling, OS service
+installation, GitHub job execution, cleanup, the desktop tray client, the
+Raycast extension, and live three-OS sandbox evidence remain incomplete. Do
+not install it on a production runner fleet.
 
 The specification is the project source of truth:
 

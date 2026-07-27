@@ -48,6 +48,74 @@ describe("createManagementClient", () => {
     });
   });
 
+  it("keeps GitHub setup mutations on the authenticated API contract", async () => {
+    server.use(
+      http.post("http://tewake.test/api/v1/github/app/manifest", async ({ request }) => {
+        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+        expect(await request.json()).toEqual({ registrationAccount: "acme" });
+        return HttpResponse.json({
+          actionUrl: "https://github.com/settings/apps/new",
+          manifest: '{"name":"Tewake"}',
+          state: "twm1_test",
+          expiresAt: "2026-07-27T00:10:00Z",
+        });
+      }),
+      http.get("http://tewake.test/api/v1/github/installations", () =>
+        HttpResponse.json({
+          installations: [
+            {
+              id: "42",
+              accountLogin: "acme",
+              accountType: "Organization",
+              repositorySelection: "all",
+            },
+          ],
+        }),
+      ),
+      http.post("http://tewake.test/api/v1/github/targets", async ({ request }) => {
+        expect(request.headers.get("If-Match")).toBe('"cfg-0"');
+        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+        expect(await request.json()).toMatchObject({
+          installationId: "42",
+          scopeKind: "repository",
+        });
+        return HttpResponse.json({
+          target: {
+            id: "target-test",
+            installationId: "42",
+            scopeKind: "repository",
+            scope: "acme/private",
+            scaleSetName: "tewake",
+            runnerProfileId: "profile-tewake",
+            status: "ready",
+            freshness: { state: "unknown" },
+          },
+          configurationRevision: "1",
+        });
+      }),
+    );
+    const client = createManagementClient("http://tewake.test/api/v1");
+    await expect(client.startGitHubAppManifest?.("acme", "csrf")).resolves.toMatchObject({
+      state: "twm1_test",
+    });
+    await expect(client.listGitHubInstallations?.()).resolves.toMatchObject({
+      installations: [{ id: "42" }],
+    });
+    await expect(
+      client.createGitHubTarget?.(
+        {
+          installationId: "42",
+          scopeKind: "repository",
+          scope: "acme/private",
+          scaleSetName: "tewake",
+          runnerProfileId: "profile-tewake",
+        },
+        "0",
+        "csrf",
+      ),
+    ).resolves.toMatchObject({ configurationRevision: "1" });
+  });
+
   it("posts the exact code and browser-held secret and preserves a 202 pending state", async () => {
     server.use(
       http.post("http://tewake.test/api/v1/browser-handoffs/claim", async ({ request }) => {

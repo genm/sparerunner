@@ -202,6 +202,121 @@ paths:
           $ref: "#/components/responses/Misdirected"
         "503":
           $ref: "#/components/responses/Unavailable"
+  /github/app/manifest:
+    post:
+      operationId: startGitHubAppManifest
+      summary: Start a signed one-time GitHub App Manifest registration
+      parameters:
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GitHubManifestStartRequest"
+      responses:
+        "200":
+          description: Manifest handoff
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubManifestStart"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /github/app/callback:
+    get:
+      operationId: completeGitHubAppManifest
+      summary: Complete a one-time GitHub App Manifest callback
+      security: []
+      parameters:
+        - name: code
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 512
+        - name: state
+          in: query
+          required: true
+          schema:
+            type: string
+            minLength: 1
+            maxLength: 4096
+      responses:
+        "302":
+          description: Return to the local setup screen
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /github/installations:
+    get:
+      operationId: listGitHubInstallations
+      summary: List GitHub App installations without credentials
+      responses:
+        "200":
+          description: Installed accounts
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubInstallationList"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "503":
+          $ref: "#/components/responses/Unavailable"
+  /github/targets:
+    post:
+      operationId: createGitHubTarget
+      summary: Verify and persist one private GitHub Target
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRFToken"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGitHubTargetRequest"
+      responses:
+        "200":
+          description: Target created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GitHubTargetMutation"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "421":
+          $ref: "#/components/responses/Misdirected"
+        "422":
+          $ref: "#/components/responses/ValidationFailed"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "503":
+          $ref: "#/components/responses/Unavailable"
   /overview:
     get:
       operationId: getOverview
@@ -809,7 +924,7 @@ components:
           enum: [disconnected, connected, degraded]
         manifestFlowSupported:
           type: boolean
-          description: False until signed one-time callback state is implemented.
+          description: Controller exposes the signed one-time GitHub App Manifest callback.
         nodeCount:
           type: integer
           minimum: 0
@@ -820,6 +935,76 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Condition"
+    GitHubManifestStartRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        registrationAccount:
+          type: string
+          pattern: "^[A-Za-z0-9_-]{1,100}$"
+    GitHubManifestStart:
+      type: object
+      required: [actionUrl, manifest, state, expiresAt]
+      properties:
+        actionUrl:
+          type: string
+          format: uri
+        manifest:
+          type: string
+          description: Unsigned public App Manifest JSON; it contains no credential.
+        state:
+          type: string
+          description: Signed, one-use callback state.
+        expiresAt:
+          type: string
+          format: date-time
+    GitHubInstallation:
+      type: object
+      required: [id, accountLogin, accountType, repositorySelection]
+      properties:
+        id:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        accountLogin:
+          type: string
+        accountType:
+          type: string
+          enum: [User, Organization]
+        repositorySelection:
+          type: string
+    GitHubInstallationList:
+      type: object
+      required: [installations]
+      properties:
+        installations:
+          type: array
+          items:
+            $ref: "#/components/schemas/GitHubInstallation"
+    CreateGitHubTargetRequest:
+      type: object
+      additionalProperties: false
+      required: [installationId, scopeKind, scope, scaleSetName, runnerProfileId]
+      properties:
+        installationId:
+          type: string
+          pattern: "^[1-9][0-9]*$"
+        scopeKind:
+          type: string
+          enum: [repository, organization]
+        scope:
+          type: string
+        scaleSetName:
+          type: string
+        runnerProfileId:
+          type: string
+    GitHubTargetMutation:
+      type: object
+      required: [target, configurationRevision]
+      properties:
+        target:
+          $ref: "#/components/schemas/Target"
+        configurationRevision:
+          $ref: "#/components/schemas/Revision"
     Overview:
       type: object
       required:
