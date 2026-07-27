@@ -661,11 +661,29 @@ func validateElevatedProcess(processID uint32) error {
 	if err != nil {
 		return bootstrapIdentityError(fmt.Sprintf("administrator sid id=%d err=%v", processID, err))
 	}
-	member, err := token.IsMember(administrators)
+	member, err := tokenHasEnabledGroup(token, administrators)
 	if err != nil || !member || !token.IsElevated() {
 		return bootstrapIdentityError(fmt.Sprintf("elevated membership id=%d member=%t elevated=%t err=%v", processID, member, token.IsElevated(), err))
 	}
 	return nil
+}
+
+// tokenHasEnabledGroup reads the primary token directly. CheckTokenMembership
+// requires an impersonation token when a non-zero handle is supplied, while a
+// process token is exactly the authority we need to inspect here.
+func tokenHasEnabledGroup(token syswindows.Token, expected *syswindows.SID) (bool, error) {
+	groups, err := token.GetTokenGroups()
+	if err != nil {
+		return false, err
+	}
+	for _, group := range groups.AllGroups() {
+		if group.Sid != nil && syswindows.EqualSid(group.Sid, expected) &&
+			group.Attributes&syswindows.SE_GROUP_ENABLED != 0 &&
+			group.Attributes&syswindows.SE_GROUP_USE_FOR_DENY_ONLY == 0 {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func rejectDuplicateBootstrapJSONKeys(payload []byte) error {
