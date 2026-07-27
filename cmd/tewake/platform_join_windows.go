@@ -29,6 +29,6 @@ func platformJoinAgent(
 	})
 }
 
-func printPlatformJoinNextStep(output io.Writer, _ string) {
+func printPlatformJoinNextStep(output io.Writer, _, _ string) {
 	fmt.Fprintln(output, "TewakeAgent service is enrolled and running.")
 }

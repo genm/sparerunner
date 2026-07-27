@@ -222,7 +222,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			printPlatformJoinNextStep(command.OutOrStdout(), directory)
+			printPlatformJoinNextStep(command.OutOrStdout(), goos, directory)
 			return nil
 		},
 	}
