@@ -7,7 +7,7 @@ toolchain go1.26.5
 require (
 	github.com/actions/scaleset v0.4.0
 	github.com/coder/websocket v1.8.15
-	github.com/getkin/kin-openapi v0.142.0
+	github.com/getkin/kin-openapi v0.144.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/mdns v1.0.7
 	github.com/lexfrei/keychain v1.1.1
