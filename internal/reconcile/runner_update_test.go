@@ -170,6 +170,25 @@ func TestEvaluatePinnedRunnerObservationClockBoundary(t *testing.T) {
 	}
 }
 
+func TestRunnerUpdateAdmissionRejectsFutureObservation(t *testing.T) {
+	now := time.Unix(100, 0).UTC()
+	observed := now.Add(time.Hour)
+	status := RunnerUpdateStatus{
+		State:            RunnerUpdateCurrent,
+		PinnedVersion:    "2.336.0",
+		LatestVersion:    "2.336.0",
+		LatestReleasedAt: now,
+		ObservedAt:       observed,
+		FreshUntil:       observed.Add(GitHubRunnerUpdateWindow),
+	}
+	if err := status.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	if status.AllowsAdmissionAt(now) {
+		t.Fatal("future release observation admitted new capacity")
+	}
+}
+
 func TestEvaluatePinnedRunnerWithoutObservationIsExplicitUnknown(t *testing.T) {
 	now := time.Unix(100, 0).UTC()
 	status, err := EvaluateRunnerUpdate(now, domain.RunnerVersionPinned, RunnerReleaseObservation{

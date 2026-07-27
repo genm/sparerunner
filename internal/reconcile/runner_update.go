@@ -54,9 +54,13 @@ func (status RunnerUpdateStatus) AllowsAdmissionAt(now time.Time) bool {
 	case RunnerUpdateManaged:
 		return true
 	case RunnerUpdateCurrent:
-		return !now.IsZero() && now.Before(status.FreshUntil)
+		return !now.IsZero() &&
+			!now.Before(status.ObservedAt) &&
+			now.Before(status.FreshUntil)
 	case RunnerUpdateDue:
-		return !now.IsZero() && now.Before(status.Deadline) &&
+		return !now.IsZero() &&
+			!now.Before(status.ObservedAt) &&
+			now.Before(status.Deadline) &&
 			now.Before(status.FreshUntil)
 	default:
 		return false
