@@ -89,7 +89,7 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", err
 	}
-	staging, err := os.MkdirTemp(parent, ".tewake-controller-init-")
+	staging, err := createPrivateStateTempDirectory(parent)
 	if err != nil {
 		return "", err
 	}
@@ -600,7 +600,7 @@ func ensurePrivateStateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
 	created := false
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
+		if err := createPrivateStateDirectoryPlatform(directory); err != nil {
 			return err
 		}
 		created = true

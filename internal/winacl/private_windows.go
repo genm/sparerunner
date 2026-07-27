@@ -36,6 +36,50 @@ func ValidatePrivateFile(path string) error {
 	return validatePrivatePath(path, false)
 }
 
+// CreatePrivateDirectory creates one new directory with the protected ACL
+// already attached. os.Mkdir inherits the creator's parent ACL and may also
+// inherit an Administrators-group owner on hosted Windows images. Creating
+// with security attributes avoids a window where private state is owned by a
+// broader authority than the service identity.
+func CreatePrivateDirectory(path string) error {
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return ErrUnsafePrivatePath
+	}
+	if _, err := os.Lstat(path); err == nil {
+		return os.ErrExist
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	parent := filepath.Dir(path)
+	if !NoReparseComponents(parent) {
+		return ErrUnsafePrivatePath
+	}
+	current, err := CurrentProcessSID()
+	if err != nil {
+		return err
+	}
+	descriptor, err := privateSecurityDescriptor(current, true)
+	if err != nil {
+		return err
+	}
+	name, err := syswindows.UTF16PtrFromString(path)
+	if err != nil {
+		return err
+	}
+	attributes := &syswindows.SecurityAttributes{
+		Length:             uint32(unsafe.Sizeof(syswindows.SecurityAttributes{})),
+		SecurityDescriptor: descriptor,
+	}
+	if err := syswindows.CreateDirectory(name, attributes); err != nil {
+		return err
+	}
+	if err := ValidatePrivateDirectory(path); err != nil {
+		_ = os.Remove(path)
+		return err
+	}
+	return nil
+}
+
 // SecureEmptyPrivateDirectory gives a just-created directory the exact private
 // ACL. It never repairs a non-empty or foreign-owned directory.
 func SecureEmptyPrivateDirectory(path string) error {
@@ -226,24 +270,9 @@ func pathOwner(path string, directory bool) (string, error) {
 }
 
 func setPrivateACL(path string, directory bool, ownerText string) error {
-	flags := ""
-	if directory {
-		flags = "OICI"
-	}
-	var builder strings.Builder
-	builder.WriteString("O:")
-	builder.WriteString(ownerText)
-	builder.WriteString("D:P")
-	for _, sid := range orderedPrivateSIDs(ownerText) {
-		builder.WriteString("(A;")
-		builder.WriteString(flags)
-		builder.WriteString(";FA;;;")
-		builder.WriteString(sid)
-		builder.WriteByte(')')
-	}
-	descriptor, err := syswindows.SecurityDescriptorFromString(builder.String())
+	descriptor, err := privateSecurityDescriptor(ownerText, directory)
 	if err != nil {
-		return privatePathError("build acl descriptor")
+		return err
 	}
 	owner, _, err := descriptor.Owner()
 	if err != nil || owner == nil {
@@ -267,6 +296,32 @@ func setPrivateACL(path string, directory bool, ownerText string) error {
 		return privatePathError("set acl")
 	}
 	return nil
+}
+
+func privateSecurityDescriptor(
+	ownerText string,
+	directory bool,
+) (*syswindows.SECURITY_DESCRIPTOR, error) {
+	flags := ""
+	if directory {
+		flags = "OICI"
+	}
+	var builder strings.Builder
+	builder.WriteString("O:")
+	builder.WriteString(ownerText)
+	builder.WriteString("D:P")
+	for _, sid := range orderedPrivateSIDs(ownerText) {
+		builder.WriteString("(A;")
+		builder.WriteString(flags)
+		builder.WriteString(";FA;;;")
+		builder.WriteString(sid)
+		builder.WriteByte(')')
+	}
+	descriptor, err := syswindows.SecurityDescriptorFromString(builder.String())
+	if err != nil {
+		return nil, privatePathError("build acl descriptor")
+	}
+	return descriptor, nil
 }
 
 func openSecurityHandle(

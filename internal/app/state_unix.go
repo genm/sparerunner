@@ -25,3 +25,11 @@ func initializePrivateStateDirectoryPlatform(
 ) error {
 	return privateStateDirectoryPlatform(path, info)
 }
+
+func createPrivateStateDirectoryPlatform(path string) error {
+	return os.MkdirAll(path, 0o700)
+}
+
+func createPrivateStateTempDirectory(parent string) (string, error) {
+	return os.MkdirTemp(parent, ".tewake-controller-init-")
+}
