@@ -2,10 +2,25 @@ package main
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/genm/tewake/internal/runner"
 )
+
+type fakeNativeRunnerLifecycle struct {
+	nativeRunnerLifecycle
+	readyErr   error
+	readyCalls int
+}
+
+func (fake *fakeNativeRunnerLifecycle) Ready(context.Context) error {
+	fake.readyCalls++
+	return fake.readyErr
+}
 
 func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	var stdout, stderr bytes.Buffer
@@ -40,5 +55,53 @@ func TestRunWithoutArgumentsRequiresACommand(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "command is required") {
 		t.Fatalf("default stderr = %q, want explicit command requirement", stderr.String())
+	}
+}
+
+func TestNativeRunnerReadinessIncludesDurableAgentCredential(t *testing.T) {
+	lifecycle := &fakeNativeRunnerLifecycle{}
+	probeCalls := 0
+	bound, err := bindNativeRunnerCredential(lifecycle, func(context.Context) error {
+		probeCalls++
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bound.Ready(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if lifecycle.readyCalls != 1 || probeCalls != 1 {
+		t.Fatalf("ready calls=%d credential probes=%d", lifecycle.readyCalls, probeCalls)
+	}
+
+	lifecycle.readyErr = runner.ErrStrongOwnershipUnavailable
+	if err := bound.Ready(context.Background()); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+		t.Fatalf("platform readiness error=%v", err)
+	}
+	if probeCalls != 1 {
+		t.Fatalf("credential probed after platform failure: %d", probeCalls)
+	}
+
+	lifecycle.readyErr = nil
+	credentialFailure := errors.New("credential store locked")
+	bound, err = bindNativeRunnerCredential(lifecycle, func(context.Context) error {
+		return credentialFailure
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := bound.Ready(context.Background()); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {
+		t.Fatalf("credential readiness error=%v", err)
+	}
+}
+
+func TestNativeRunnerCredentialBindingRejectsMissingAuthority(t *testing.T) {
+	if _, err := bindNativeRunnerCredential(nil, func(context.Context) error { return nil }); err == nil {
+		t.Fatal("nil lifecycle was accepted")
+	}
+	lifecycle := &fakeNativeRunnerLifecycle{}
+	if _, err := bindNativeRunnerCredential(lifecycle, nil); err == nil {
+		t.Fatal("nil credential probe was accepted")
 	}
 }

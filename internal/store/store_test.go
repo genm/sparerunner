@@ -93,17 +93,26 @@ func TestAssignmentCanonicalIdentityAndDatabaseInvariants(t *testing.T) {
 	if _, replayed, err := store.Assign(ctx, boundary); err != nil || replayed {
 		t.Fatalf("maximum signed SQLite IDs = (%t, %v)", replayed, err)
 	}
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'unknown', 1)`); err == nil {
+		t.Fatal("direct invalid execution state bypassed CHECK")
+	}
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('node-direct', 0, 'target-direct', 'execution-direct')`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'target-direct', 'node-direct', 0, 'running', 1)`); err == nil {
-		t.Fatal("direct invalid execution state bypassed CHECK")
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-execution', 'target-direct', 'node-direct', 1, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-execution', 'target-direct', 'node-direct', 0, 'reserved', 1)`); err == nil {
-		t.Fatal("execution-to-reservation identity mismatch bypassed composite foreign key")
+	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('different-node', 1, 'target-direct', 'different-execution')`); err == nil {
+		t.Fatal("reservation-to-execution node mismatch bypassed composite foreign key")
 	}
-	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-direct', 'different-target', 'node-direct', 0, 'reserved', 1)`); err == nil {
-		t.Fatal("execution-to-reservation target mismatch bypassed composite foreign key")
+	if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('different-target-execution', 'target-direct', 'node-direct', 2, 'reserved', 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('node-direct', 2, 'different-target', 'different-target-execution')`); err == nil {
+		t.Fatal("reservation-to-execution target mismatch bypassed composite foreign key")
 	}
 	if _, err := store.db.Exec(`INSERT INTO processed_messages(scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano) VALUES (0, 1, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', 'execution-direct', 1)`); err == nil {
 		t.Fatal("zero numeric message identity bypassed CHECK")
@@ -112,6 +121,142 @@ func TestAssignmentCanonicalIdentityAndDatabaseInvariants(t *testing.T) {
 	if strings.Join(columns, ",") != "scale_set_id,message_id,message_digest,execution_id,created_at_unix_nano" {
 		t.Fatalf("processed_messages has redundant drift columns: %v", columns)
 	}
+}
+
+func TestActiveExecutionReservationCannotBeDeleted(t *testing.T) {
+	ctx := context.Background()
+	store := openController(t, "controller.db")
+	defer store.Close()
+
+	const executionID = "execution-active-lease"
+	if _, replayed, err := store.Assign(ctx, testAssignment(92, executionID, "node-active-lease", 0)); err != nil || replayed {
+		t.Fatalf("assign active execution = (%t, %v)", replayed, err)
+	}
+	if _, err := store.db.Exec(`DELETE FROM slot_reservations WHERE execution_id = ?`, executionID); err == nil {
+		t.Fatal("active execution reservation was deleted")
+	}
+	assertCount(t, store.db, `SELECT count(*) FROM slot_reservations WHERE execution_id = 'execution-active-lease'`, 1)
+}
+
+func TestExecutionReservationDataInvariantFailsClosedOnOpen(t *testing.T) {
+	tests := []struct {
+		name      string
+		statement string
+	}{
+		{
+			name: "active execution without reservation",
+			statement: `
+				UPDATE executions SET state = 'released' WHERE id = 'execution-reservation-invariant';
+				DELETE FROM slot_reservations WHERE execution_id = 'execution-reservation-invariant';
+				UPDATE executions SET state = 'running' WHERE id = 'execution-reservation-invariant';`,
+		},
+		{
+			name:      "terminal execution with reservation",
+			statement: `UPDATE executions SET state = 'released' WHERE id = 'execution-reservation-invariant';`,
+		},
+		{
+			name:      "quarantined execution with reservation",
+			statement: `UPDATE executions SET state = 'quarantined' WHERE id = 'execution-reservation-invariant';`,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			ctx := context.Background()
+			path := filepath.Join(privateTestDir(t), "controller.db")
+			controller := openControllerPath(t, path)
+			if _, replayed, err := controller.Assign(ctx, testAssignment(
+				93,
+				"execution-reservation-invariant",
+				"node-reservation-invariant",
+				0,
+			)); err != nil || replayed {
+				t.Fatalf("assign execution = (%t, %v)", replayed, err)
+			}
+			if err := controller.Close(); err != nil {
+				t.Fatal(err)
+			}
+
+			execRaw(t, path, test.statement)
+			degraded, err := OpenController(ctx, path, Options{})
+			if degraded == nil || !errors.Is(err, ErrRecoveryMode) || !errors.Is(err, ErrCorruptBackup) {
+				t.Fatalf("invalid reservation database open = (%v, %v)", degraded, err)
+			}
+			if readyErr := degraded.Ready(); !errors.Is(readyErr, ErrRecoveryMode) {
+				t.Fatalf("invalid reservation database readiness = %v", readyErr)
+			}
+			_ = degraded.Close()
+		})
+	}
+}
+
+func TestUnpickedRequeueIntentDataInvariantFailsClosedOnOpen(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller-intent-invariant.db")
+	controller := openControllerPath(t, path)
+	fixture := prepareGitHubStartedTerminalRequeueFixture(
+		t,
+		controller,
+		8,
+		96,
+		1601,
+		2601,
+		domain.ExecutionReleased,
+		domain.ExecutionErrorNone,
+	)
+	fresh := githubQueueMessageForTest(
+		fixture.current.ScaleSetID,
+		1602,
+		fixture.current.RunnerRequestID,
+	)
+	fresh.Jobs[0].ExecutionID = "execution-intent-proposed"
+	commit, err := controller.CommitGitHubQueueMessage(
+		ctx,
+		fresh,
+		fixture.binding,
+	)
+	if err != nil || commit.RequeueIntent == nil {
+		_ = controller.Close()
+		t.Fatalf("create valid requeue intent = (%#v, %v)", commit, err)
+	}
+	if _, err := controller.db.ExecContext(ctx, `INSERT INTO executions(
+			id, target_id, node_id, slot_index, state, created_at_unix_nano
+		) VALUES (
+			'execution-unrelated-terminal', 'target-unrelated',
+			'node-unrelated', 0, 'released', ?
+		)`,
+		time.Unix(200, 0).UnixNano(),
+	); err != nil {
+		_ = controller.Close()
+		t.Fatal(err)
+	}
+	if _, err := controller.db.ExecContext(ctx, `UPDATE
+			github_unpicked_requeue_intents
+		SET old_execution_id = 'execution-unrelated-terminal'
+		WHERE scale_set_id = ? AND runner_request_id = ?`,
+		fixture.current.ScaleSetID,
+		fixture.current.RunnerRequestID,
+	); err != nil {
+		_ = controller.Close()
+		t.Fatal(err)
+	}
+	if err := validateForeignKeys(ctx, controller.db); err != nil {
+		_ = controller.Close()
+		t.Fatalf("corruption fixture must retain valid foreign keys: %v", err)
+	}
+	if err := controller.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	degraded, err := OpenController(ctx, path, Options{})
+	if degraded == nil ||
+		!errors.Is(err, ErrRecoveryMode) ||
+		!errors.Is(err, ErrCorruptBackup) {
+		t.Fatalf("invalid intent database open = (%v, %v)", degraded, err)
+	}
+	if readyErr := degraded.Ready(); !errors.Is(readyErr, ErrRecoveryMode) {
+		t.Fatalf("invalid intent database readiness = %v", readyErr)
+	}
+	_ = degraded.Close()
 }
 
 func TestAssignmentRollbackAndConcurrentSlotConstraint(t *testing.T) {
@@ -368,6 +513,636 @@ func TestMigrationRecoveryPreservesOriginalAndRejectsUnknownVersions(t *testing.
 	_ = degraded.Close()
 }
 
+func TestAgentRuntimeMigrationPreservesHistoricalAssignmentAndSeedsNodeAuthority(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller-v2.db")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := applyLoadedMigrations(ctx, db, "controller", migrations[:2], func() time.Time {
+		return time.Unix(100, 0)
+	}, nil); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	nodeID := enrollmentNodeID(6)
+	if _, err := db.Exec(`INSERT INTO enrolled_nodes(
+		node_id, current_serial, credential_epoch, not_before_unix_nano,
+		not_after_unix_nano, revoked
+	) VALUES (?, 'a6', 1, 1, 2, 0)`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO slot_reservations(
+		node_id, slot_index, target_id, execution_id
+	) VALUES (?, 0, 'target-v2', 'execution-v2')`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO executions(
+		id, target_id, node_id, slot_index, state, created_at_unix_nano
+	) VALUES ('execution-v2', 'target-v2', ?, 0, 'reserved', 1)`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO processed_messages(
+		scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano
+	) VALUES (1, 1, ?, 'execution-v2', 1)`, digestForTest("v2-message")); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := openControllerPath(t, path)
+	defer upgraded.Close()
+	snapshot, err := upgraded.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Nodes) != 1 ||
+		snapshot.Nodes[0] != (NodeAdministration{NodeID: domain.NodeID(nodeID), State: domain.NodeActive}) ||
+		len(snapshot.Reservations) != 1 ||
+		len(snapshot.Executions) != 1 ||
+		snapshot.Executions[0].ID != "execution-v2" {
+		t.Fatalf("upgraded controller snapshot = %+v", snapshot)
+	}
+	if err := validateForeignKeys(ctx, upgraded.db); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQuarantinedTerminalLeaseMigrationUpgradesVersionSixAuthority(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller-v6-quarantined.db")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := applyLoadedMigrations(
+		ctx,
+		db,
+		"controller",
+		migrations[:6],
+		func() time.Time { return time.Unix(100, 0) },
+		nil,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	const nodeID = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if _, err := db.Exec(`INSERT INTO enrolled_nodes(
+		node_id, current_serial, credential_epoch, not_before_unix_nano,
+		not_after_unix_nano, revoked
+	) VALUES (?, 'a6', 1, 1, 2, 0)`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE node_administrative_states
+		SET administrative_state = 'quarantined' WHERE node_id = ?`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO executions(
+		id, target_id, node_id, slot_index, state, created_at_unix_nano
+	) VALUES ('execution-v6-quarantined', 'target-v6', ?, 0, 'quarantined', 1)`,
+		nodeID,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO slot_reservations(
+		node_id, slot_index, target_id, execution_id
+	) VALUES (?, 0, 'target-v6', 'execution-v6-quarantined')`, nodeID); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := openControllerPath(t, path)
+	defer upgraded.Close()
+	if err := upgraded.Ready(); err != nil {
+		t.Fatal(err)
+	}
+	assertCount(
+		t,
+		upgraded.db,
+		`SELECT count(*) FROM slot_reservations
+		 WHERE execution_id = 'execution-v6-quarantined'`,
+		0,
+	)
+	assertNodeAdministrativeState(
+		t,
+		upgraded,
+		nodeID,
+		domain.NodeQuarantined,
+	)
+	snapshot, err := upgraded.RestartSnapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snapshot.Controller.Executions) != 1 ||
+		snapshot.Controller.Executions[0].State != domain.ExecutionQuarantined ||
+		len(snapshot.Controller.Reservations) != 0 {
+		t.Fatalf("upgraded quarantined authority = %#v", snapshot.Controller)
+	}
+}
+
+func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(privateTestDir(t), "controller-v8-unpicked-requeue.db")
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if len(migrations) < 9 {
+		_ = db.Close()
+		t.Fatalf("controller migrations = %d, want at least 9", len(migrations))
+	}
+	if err := applyLoadedMigrations(
+		ctx,
+		db,
+		"controller",
+		migrations[:8],
+		func() time.Time { return time.Unix(100, 0) },
+		nil,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	const (
+		scaleSetID      ScaleSetID = 93
+		messageID       MessageID  = 1221
+		runnerRequestID int64      = 2321
+		executionID                = "execution-v8-migration"
+		controllerEpoch            = domain.ControllerEpoch(1)
+	)
+	attempt := GitHubJITAttempt{
+		ScaleSetID:      scaleSetID,
+		RunnerRequestID: runnerRequestID,
+		Attempt:         1,
+		ControllerEpoch: controllerEpoch,
+		RunnerName:      "tewake-v8-migration",
+		State:           GitHubJITGenerationAmbiguous,
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(
+			id, target_id, node_id, slot_index, state, created_at_unix_nano
+		) VALUES (?, 'target-v8-migration', 'node-v8-migration', 0,
+			'released', ?)`,
+		executionID,
+		time.Unix(101, 0).UnixNano(),
+	); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO github_queue_messages(
+			scale_set_id, message_id, message_digest, committed_at_unix_nano
+		) VALUES (?, ?, ?, ?)`,
+		scaleSetID,
+		messageID,
+		digestForTest("v8-migration-message"),
+		time.Unix(101, 0).UnixNano(),
+	); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO github_job_claims(
+			scale_set_id, runner_request_id, source_message_id, execution_id,
+			state, current_jit_attempt, created_at_unix_nano,
+			updated_at_unix_nano
+		) VALUES (?, ?, ?, ?, 'reconciliation_required', 1, ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		messageID,
+		executionID,
+		time.Unix(101, 0).UnixNano(),
+		time.Unix(101, 0).UnixNano(),
+	); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO github_jit_attempts(
+			scale_set_id, runner_request_id, attempt, controller_epoch,
+			runner_name, state, runner_id, jit_digest, start_command_id,
+			created_at_unix_nano, updated_at_unix_nano
+		) VALUES (?, ?, 1, ?, ?, 'generation_ambiguous', NULL, NULL, '', ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		controllerEpoch,
+		attempt.RunnerName,
+		time.Unix(101, 0).UnixNano(),
+		time.Unix(101, 0).UnixNano(),
+	); err != nil {
+		_ = tx.Rollback()
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := tx.Commit(); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	snapshotDigest := digestForTest("v8-migration-snapshot")
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_jit_snapshot_authority(
+			scale_set_id, runner_request_id, attempt, snapshot_digest,
+			controller_epoch, decision, updated_at_unix_nano,
+			github_session_generation
+		) VALUES (?, ?, ?, ?, ?, 'generation_absence_pending', ?, 7)`,
+		scaleSetID,
+		runnerRequestID,
+		attempt.Attempt,
+		snapshotDigest,
+		controllerEpoch,
+		time.Unix(102, 0).UnixNano(),
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := openControllerPath(t, path)
+	defer upgraded.Close()
+	var (
+		gotDigest     string
+		gotEpoch      domain.ControllerEpoch
+		gotDecision   string
+		gotGeneration uint64
+	)
+	if err := upgraded.db.QueryRowContext(ctx, `SELECT snapshot_digest,
+			controller_epoch, decision, github_session_generation
+		FROM github_jit_snapshot_authority
+		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		scaleSetID,
+		runnerRequestID,
+		attempt.Attempt,
+	).Scan(
+		&gotDigest,
+		&gotEpoch,
+		&gotDecision,
+		&gotGeneration,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if gotDigest != snapshotDigest ||
+		gotEpoch != controllerEpoch ||
+		gotDecision != "generation_absence_pending" ||
+		gotGeneration != 7 {
+		t.Fatalf(
+			"upgraded v8 authority = digest %q epoch %d decision %q generation %d",
+			gotDigest,
+			gotEpoch,
+			gotDecision,
+			gotGeneration,
+		)
+	}
+	assertCount(
+		t,
+		upgraded.db,
+		`SELECT count(*) FROM sqlite_schema
+			WHERE type = 'table' AND name = 'github_unpicked_requeue_intents'`,
+		1,
+	)
+	if _, err := upgraded.db.ExecContext(ctx, `UPDATE github_jit_snapshot_authority
+		SET decision = 'unpicked_requeue_removal_issued'
+		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		scaleSetID,
+		runnerRequestID,
+		attempt.Attempt,
+	); err != nil {
+		t.Fatalf("new v9 authority decision rejected = %v", err)
+	}
+	if _, err := upgraded.db.ExecContext(ctx, `UPDATE github_jit_snapshot_authority
+		SET decision = 'unknown'
+		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		scaleSetID,
+		runnerRequestID,
+		attempt.Attempt,
+	); err == nil {
+		t.Fatal("v9 authority CHECK accepted unknown decision")
+	}
+	if err := validateForeignKeys(ctx, upgraded.db); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
+	t *testing.T,
+) {
+	ctx := context.Background()
+	path := filepath.Join(
+		privateTestDir(t),
+		"controller-v9-lifecycle-request.db",
+	)
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	dsn, err := sqliteDSN(path, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open(sqliteDriver, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := configure(ctx, db); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	migrations, err := loadMigrations("controller", controllerMigrations)
+	if err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if len(migrations) < 10 {
+		_ = db.Close()
+		t.Fatalf("controller migrations = %d, want at least 10", len(migrations))
+	}
+	if err := applyLoadedMigrations(
+		ctx,
+		db,
+		"controller",
+		migrations[:9],
+		func() time.Time { return time.Unix(100, 0) },
+		nil,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+
+	const (
+		scaleSetID      ScaleSetID = 109
+		runnerRequestID int64      = 4109
+		oldMessageID    MessageID  = 2101
+		freshMessageID  MessageID  = 2102
+		oldExecutionID             = "v9-lifecycle-old-execution"
+		replacementID              = "v9-lifecycle-replacement"
+		runnerName                 = "tewake-v9-lifecycle-runner"
+	)
+	now := time.Unix(101, 0).UnixNano()
+	for _, message := range []struct {
+		id     MessageID
+		digest string
+	}{
+		{oldMessageID, digestForTest("v9-lifecycle-old-message")},
+		{freshMessageID, digestForTest("v9-lifecycle-fresh-message")},
+	} {
+		if _, err := db.ExecContext(ctx, `INSERT INTO github_queue_messages(
+				scale_set_id, message_id, message_digest, committed_at_unix_nano
+			) VALUES (?, ?, ?, ?)`,
+			scaleSetID,
+			message.id,
+			message.digest,
+			now,
+		); err != nil {
+			_ = db.Close()
+			t.Fatal(err)
+		}
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_message_jobs(
+			scale_set_id, message_id, event_index, event_type,
+			runner_request_id, runner_id, runner_name, result,
+			repository_name, owner_name, job_id, workflow_run_id
+		) VALUES (?, ?, 0, 'JobAvailable', ?, 0, '', '', '', '', '', 0)`,
+		scaleSetID,
+		freshMessageID,
+		runnerRequestID,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO executions(
+			id, target_id, node_id, slot_index, state, created_at_unix_nano
+		) VALUES (?, 'target-v9', 'node-v9', 0, 'released', ?)`,
+		oldExecutionID,
+		now,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_job_claims(
+			scale_set_id, runner_request_id, source_message_id, execution_id,
+			state, current_jit_attempt, created_at_unix_nano,
+			updated_at_unix_nano
+		) VALUES (?, ?, ?, ?, 'reconciliation_required', 1, ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		oldMessageID,
+		oldExecutionID,
+		now,
+		now,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_jit_attempts(
+			scale_set_id, runner_request_id, attempt, controller_epoch,
+			runner_name, state, runner_id, jit_digest, start_command_id,
+			created_at_unix_nano, updated_at_unix_nano
+		) VALUES (?, ?, 1, 1, ?, 'started', 91, ?, 'v9-start', ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		runnerName,
+		digestForTest("v9-lifecycle-jit"),
+		now,
+		now,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_acquire_attempts(
+			scale_set_id, runner_request_id, attempt, evidence_message_id,
+			controller_epoch, state, created_at_unix_nano,
+			updated_at_unix_nano
+		) VALUES (?, ?, 1, ?, 1, 'acquired', ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		oldMessageID,
+		now,
+		now,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO github_unpicked_requeue_intents(
+			scale_set_id, runner_request_id, jit_attempt, old_execution_id,
+			replacement_execution_id, source_message_id, source_event_index,
+			controller_epoch, created_at_unix_nano, updated_at_unix_nano
+		) VALUES (?, ?, 1, ?, ?, ?, 0, 1, ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		oldExecutionID,
+		replacementID,
+		freshMessageID,
+		now,
+		now,
+	); err != nil {
+		_ = db.Close()
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded := openControllerPath(t, path)
+	defer upgraded.Close()
+	assertCount(t, upgraded.db, "SELECT count(*) FROM github_message_jobs", 1)
+	assertCount(
+		t,
+		upgraded.db,
+		"SELECT count(*) FROM github_unpicked_requeue_intents",
+		1,
+	)
+	if err := validateForeignKeys(ctx, upgraded.db); err != nil {
+		t.Fatal(err)
+	}
+	zeroLifecycle := GitHubQueueMessage{
+		ScaleSetID: scaleSetID,
+		MessageID:  2103,
+		Digest:     digestForTest("v10-zero-request-lifecycle"),
+		Jobs: []GitHubJobEvent{{
+			Type:            GitHubJobStarted,
+			RunnerRequestID: 0,
+			RunnerID:        91,
+			RunnerName:      runnerName,
+		}},
+	}
+	if _, err := upgraded.CommitGitHubQueueMessage(
+		ctx,
+		zeroLifecycle,
+		SingleSlotBinding{
+			TargetID: "target-v9",
+			NodeID:   "node-v9",
+			Slot:     0,
+		},
+	); err != nil {
+		t.Fatalf("zero-request lifecycle commit = %v", err)
+	}
+	replayed, err := upgraded.CommitGitHubQueueMessage(
+		ctx,
+		zeroLifecycle,
+		SingleSlotBinding{
+			TargetID: "target-v9",
+			NodeID:   "node-v9",
+			Slot:     0,
+		},
+	)
+	if err != nil || !replayed.Replayed {
+		t.Fatalf("zero-request lifecycle replay = (%#v, %v)", replayed, err)
+	}
+	assertCount(
+		t,
+		upgraded.db,
+		`SELECT count(*) FROM github_message_jobs
+			WHERE runner_request_id = 0 AND event_type = 'JobStarted'`,
+		1,
+	)
+	if _, err := upgraded.db.ExecContext(ctx, `INSERT INTO github_message_jobs(
+			scale_set_id, message_id, event_index, event_type,
+			runner_request_id, runner_id, runner_name, result,
+			repository_name, owner_name, job_id, workflow_run_id
+		) VALUES (?, ?, 1, 'JobAvailable', 0, 0, '', '', '', '', '', 0)`,
+		scaleSetID,
+		zeroLifecycle.MessageID,
+	); err == nil {
+		t.Fatal("v10 lifecycle schema accepted zero-request JobAvailable")
+	}
+	if _, err := upgraded.db.ExecContext(ctx, `INSERT INTO github_jit_attempts(
+			scale_set_id, runner_request_id, attempt, controller_epoch,
+			runner_name, state, runner_id, jit_digest, start_command_id,
+			created_at_unix_nano, updated_at_unix_nano
+		) VALUES (?, ?, 2, 1, 'duplicate-runner-name', 'generated', 91, ?,
+			'duplicate-start', ?, ?)`,
+		scaleSetID,
+		runnerRequestID,
+		digestForTest("v10-duplicate-runner"),
+		now,
+		now,
+	); err == nil {
+		t.Fatal("v10 lifecycle schema accepted duplicate provider runner identity")
+	}
+}
+
 func TestInjectedPendingMigrationPreservesExistingDataAndVersion(t *testing.T) {
 	ctx := context.Background()
 	db := openRawTestDatabase(t)
@@ -489,13 +1264,22 @@ func TestAgentJournalAllowlistedTombstoneAndSecretCanaryRejection(t *testing.T) 
 	}
 	defer store.Close()
 	command := domain.Command{ID: "command-1", ControllerEpoch: 1, ExecutionID: "execution-1", ExpectedState: domain.ExecutionReserved, PayloadDigest: domain.PayloadDigest([]byte("only-digest"))}
+	if replay, err := store.LookupCommand(ctx, command); err != nil || replay {
+		t.Fatalf("missing command lookup = (%t, %v)", replay, err)
+	}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || replay {
 		t.Fatalf("initial command = (%t, %v)", replay, err)
+	}
+	if replay, err := store.LookupCommand(ctx, command); err != nil || !replay {
+		t.Fatalf("exact command lookup = (%t, %v)", replay, err)
 	}
 	if replay, err := store.RecordCommand(ctx, command); err != nil || !replay {
 		t.Fatalf("exact replay = (%t, %v)", replay, err)
 	}
 	command.PayloadDigest = domain.PayloadDigest([]byte("changed"))
+	if _, err := store.LookupCommand(ctx, command); !errors.Is(err, ErrReplayMismatch) {
+		t.Fatalf("changed command lookup = %v", err)
+	}
 	if _, err := store.RecordCommand(ctx, command); !errors.Is(err, ErrReplayMismatch) {
 		t.Fatalf("changed command = %v", err)
 	}
@@ -610,6 +1394,86 @@ func TestAgentEpochFenceAndSnapshotSurviveRestart(t *testing.T) {
 	}
 	if final.MaxControllerEpoch != 4 || len(final.Commands) != 3 {
 		t.Fatalf("final agent snapshot = %+v", final)
+	}
+}
+
+func TestAgentObservationOrderingSurvivesWallClockRegressionAndRejectsStateRegression(t *testing.T) {
+	ctx := context.Background()
+	now := time.Unix(300, 0)
+	store, err := OpenAgent(ctx, filepath.Join(privateTestDir(t), "agent-monotonic.db"), Options{
+		Now: func() time.Time { return now },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	executionID := domain.ExecutionID("execution-monotonic")
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionPreparing,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now = time.Unix(100, 0)
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionRunning,
+	}); err != nil {
+		t.Fatalf("forward observation after wall-clock regression = %v", err)
+	}
+	second, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first.Observations) != 1 || len(second.Observations) != 1 ||
+		second.Observations[0].ObservedAtUnixNano <= first.Observations[0].ObservedAtUnixNano {
+		t.Fatalf("observation ordering regressed: first=%+v second=%+v", first.Observations, second.Observations)
+	}
+	if err := store.RecordObservation(ctx, Observation{
+		ExecutionID: executionID,
+		State:       domain.ExecutionPreparing,
+	}); err == nil {
+		t.Fatal("Agent journal accepted a lifecycle state regression")
+	}
+
+	tombstoneID := domain.ExecutionID("cleanup-monotonic")
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupProcessResidue,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	beforeReplay, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now = time.Unix(50, 0)
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupProcessResidue,
+	}); err != nil {
+		t.Fatalf("exact tombstone replay after wall-clock regression = %v", err)
+	}
+	afterReplay, err := store.Snapshot(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(beforeReplay.CleanupTombstones) != 1 || len(afterReplay.CleanupTombstones) != 1 ||
+		afterReplay.CleanupTombstones[0].RecordedAtUnixNano <= beforeReplay.CleanupTombstones[0].RecordedAtUnixNano {
+		t.Fatalf("tombstone ordering regressed: before=%+v after=%+v",
+			beforeReplay.CleanupTombstones, afterReplay.CleanupTombstones)
+	}
+	if err := store.RecordCleanupTombstone(ctx, CleanupTombstone{
+		ExecutionID: tombstoneID,
+		FailureCode: CleanupWorkspaceRemoval,
+	}); err == nil {
+		t.Fatal("cleanup tombstone classification changed after persistence")
 	}
 }
 
@@ -775,6 +1639,73 @@ func TestSchemaObjectsAndForeignKeysFailClosedOnOpen(t *testing.T) {
 	}
 }
 
+func TestControllerAgentRuntimeColumnAllowlistRejectsSecretCanaryColumns(t *testing.T) {
+	tables := []string{
+		"node_administrative_states",
+		"agent_commands",
+		"agent_session_snapshots",
+		"agent_snapshot_commands",
+		"agent_snapshot_observations",
+		"agent_snapshot_cleanup_tombstones",
+		"agent_execution_updates",
+		"agent_snapshot_authority",
+		"agent_current_snapshot_commands",
+		"agent_current_snapshot_observations",
+		"agent_current_snapshot_tombstones",
+		"reconciliation_agent_commands",
+		"github_session_demand",
+		"github_queue_messages",
+		"github_message_jobs",
+		"github_job_claims",
+		"github_jit_attempts",
+		"github_acquire_attempts",
+		"github_jit_snapshot_authority",
+		"github_unpicked_requeue_intents",
+		"runner_profile_update_policies",
+		"github_target_runtime_bindings",
+		"github_runner_release_state",
+		"github_scale_set_session_health",
+		"management_configuration_state",
+		"management_node_configurations",
+		"management_runner_profiles",
+		"management_github_targets",
+		"management_audit_events",
+	}
+	for _, table := range tables {
+		t.Run(table, func(t *testing.T) {
+			path := filepath.Join(privateTestDir(t), "controller.db")
+			controller := openControllerPath(t, path)
+			if err := controller.Close(); err != nil {
+				t.Fatal(err)
+			}
+			execRaw(t, path, fmt.Sprintf(
+				`ALTER TABLE %s ADD COLUMN jit_config TEXT NOT NULL DEFAULT 'jit-secret-canary.example.test'`,
+				table,
+			))
+			dsn, err := sqliteDSN(path, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			db, err := sql.Open(sqliteDriver, dsn)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := validateColumnAllowlist(context.Background(), db, "controller"); !errors.Is(err, ErrCorruptBackup) {
+				_ = db.Close()
+				t.Fatalf("secret column allowlist error = %v", err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			degraded, err := OpenController(context.Background(), path, Options{})
+			if degraded == nil || !errors.Is(err, ErrRecoveryMode) {
+				t.Fatalf("secret-column database open = (%v, %v)", degraded, err)
+			}
+			_ = degraded.Close()
+		})
+	}
+}
+
 func TestPageCorruptionEntersRecoveryBeforeMigration(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(privateTestDir(t), "controller.db")
@@ -829,6 +1760,9 @@ func TestSnapshotsAndWritesRejectInvalidPersistedRanges(t *testing.T) {
 		store := openController(t, "reservation.db")
 		defer store.Close()
 		if _, err := store.db.Exec("PRAGMA ignore_check_constraints=ON"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.db.Exec(`INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES ('execution-invalid', 'target-1', '', 0, 'reserved', 1)`); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := store.db.Exec(`INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES ('', 0, 'target-1', 'execution-invalid')`); err != nil {

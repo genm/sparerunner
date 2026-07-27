@@ -37,11 +37,57 @@ type ProcessedMessage struct {
 	CreatedAtUnixNano int64
 }
 
+type NodeAdministration struct {
+	NodeID domain.NodeID
+	State  domain.NodeAdministrativeState
+}
+
 type ControllerSnapshot struct {
 	ControllerEpoch   domain.ControllerEpoch
+	Nodes             []NodeAdministration
 	Reservations      []SlotReservation
 	Executions        []domain.ExecutionSnapshot
 	ProcessedMessages []ProcessedMessage
+}
+
+// RestartNodeTopology is the non-secret node authority needed to rebuild the
+// Controller projection after a process restart. PlatformObserved distinguishes
+// a node that has never completed an authenticated Agent snapshot from one whose
+// last-known platform can be used as immutable topology. The last-known ready
+// bit remains evidence only; restart admission still begins at capacity zero.
+type RestartNodeTopology struct {
+	NodeID                     domain.NodeID
+	DisplayName                string
+	CertificateSerial          string
+	CredentialEpoch            uint64
+	AdministrativeState        domain.NodeAdministrativeState
+	MaxRunners                 int
+	PlatformObserved           bool
+	OS                         domain.OperatingSystem
+	Architecture               domain.Architecture
+	LastRunnerVersion          string
+	LastNativeRunnerReady      bool
+	LastAgentControllerEpoch   domain.ControllerEpoch
+	LastSnapshotReceivedAtNano int64
+}
+
+// GitHubReconciliationFence is durable provider ambiguity that must be resolved
+// before the corresponding slot can be advertised again. Attempt contains only
+// runner identity and digests; the JIT body is never persisted or returned.
+type GitHubReconciliationFence struct {
+	Claim   GitHubJobClaim
+	Attempt *GitHubJITAttempt
+}
+
+// ControllerRestartSnapshot is one transactionally consistent, secret-free
+// restart read model. It deliberately excludes enrollment secrets, GitHub App
+// credentials, raw command payloads, JIT configuration, and Agent private keys.
+type ControllerRestartSnapshot struct {
+	Controller      ControllerSnapshot
+	FleetMaxRunners *int
+	NodeTopology    []RestartNodeTopology
+	IssuedCommands  []IssuedAgentCommand
+	GitHubFences    []GitHubReconciliationFence
 }
 
 func (a Assignment) Validate() error {
@@ -118,10 +164,10 @@ func (s *ControllerStore) assignOnce(ctx context.Context, assignment Assignment)
 		return existing, true, nil
 	}
 	e := assignment.Execution
-	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES (?, ?, ?, ?)`, e.Slot.NodeID, e.Slot.Index, e.TargetID, e.ID); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES (?, ?, ?, ?, ?, ?)`, e.ID, e.TargetID, e.Slot.NodeID, e.Slot.Index, e.State, createdAt); err != nil {
 		return domain.ExecutionSnapshot{}, false, mapAssignmentError(err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(id, target_id, node_id, slot_index, state, created_at_unix_nano) VALUES (?, ?, ?, ?, ?, ?)`, e.ID, e.TargetID, e.Slot.NodeID, e.Slot.Index, e.State, createdAt); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(node_id, slot_index, target_id, execution_id) VALUES (?, ?, ?, ?)`, e.Slot.NodeID, e.Slot.Index, e.TargetID, e.ID); err != nil {
 		return domain.ExecutionSnapshot{}, false, mapAssignmentError(err)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO processed_messages(scale_set_id, message_id, message_digest, execution_id, created_at_unix_nano) VALUES (?, ?, ?, ?, ?)`, assignment.ScaleSetID, assignment.MessageID, assignment.MessageDigest, e.ID, createdAt); err != nil {
@@ -153,7 +199,14 @@ func findMessage(ctx context.Context, tx *sql.Tx, assignment Assignment) (domain
 		return domain.ExecutionSnapshot{}, false, err
 	}
 	existing := domain.ExecutionSnapshot{ID: domain.ExecutionID(executionID), TargetID: domain.TargetID(targetID), Slot: domain.SlotKey{NodeID: domain.NodeID(nodeID), Index: slotIndex}, State: domain.ExecutionState(state)}
-	if digest != assignment.MessageDigest || existing != assignment.Execution {
+	// Desired state may have advanced after the message was first committed.
+	// Replay identity is the immutable message digest plus execution/slot
+	// ownership, so comparing the caller's original Reserved state here would
+	// reject a legitimate GitHub redelivery after the Agent started.
+	if digest != assignment.MessageDigest ||
+		existing.ID != assignment.Execution.ID ||
+		existing.TargetID != assignment.Execution.TargetID ||
+		existing.Slot != assignment.Execution.Slot {
 		return domain.ExecutionSnapshot{}, false, fmt.Errorf("%w: scale set message %d", ErrReplayMismatch, assignment.MessageID)
 	}
 	return existing, true, nil
@@ -240,13 +293,62 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 		return ControllerSnapshot{}, err
 	}
 	defer tx.Rollback()
+	result, err := readControllerSnapshot(ctx, tx)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+	return result, nil
+}
+
+func readControllerSnapshot(ctx context.Context, tx *sql.Tx) (ControllerSnapshot, error) {
 	rawEpoch, err := readUintMetadata(ctx, tx, "controller_epoch")
 	if err != nil {
 		return ControllerSnapshot{}, err
 	}
 	result := ControllerSnapshot{ControllerEpoch: domain.ControllerEpoch(rawEpoch)}
 
-	rows, err := tx.QueryContext(ctx, `SELECT node_id, slot_index, target_id, execution_id FROM slot_reservations ORDER BY node_id, slot_index`)
+	rows, err := tx.QueryContext(ctx, `SELECT n.node_id, a.administrative_state, n.revoked
+		FROM enrolled_nodes n
+		LEFT JOIN node_administrative_states a ON a.node_id = n.node_id
+		ORDER BY n.node_id`)
+	if err != nil {
+		return ControllerSnapshot{}, err
+	}
+	for rows.Next() {
+		var node NodeAdministration
+		var state sql.NullString
+		var revoked int
+		if err := rows.Scan(&node.NodeID, &state, &revoked); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		if node.NodeID == "" || !state.Valid {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored node administrative authority failed validation")
+		}
+		node.State = domain.NodeAdministrativeState(state.String)
+		if err := node.State.Validate("controller_snapshot.node.administrative_state"); err != nil {
+			rows.Close()
+			return ControllerSnapshot{}, err
+		}
+		if (revoked != 0) != (node.State == domain.NodeRevoked) {
+			rows.Close()
+			return ControllerSnapshot{}, errors.New("stored node revocation authority is inconsistent")
+		}
+		result.Nodes = append(result.Nodes, node)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
+	}
+	if err := rows.Close(); err != nil {
+		return ControllerSnapshot{}, err
+	}
+
+	rows, err = tx.QueryContext(ctx, `SELECT node_id, slot_index, target_id, execution_id FROM slot_reservations ORDER BY node_id, slot_index`)
 	if err != nil {
 		return ControllerSnapshot{}, err
 	}
@@ -270,6 +372,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 			rows.Close()
 			return ControllerSnapshot{}, err
 		}
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
@@ -303,6 +409,10 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 		}
 		result.Executions = append(result.Executions, execution)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
 	}
@@ -323,11 +433,197 @@ func (s *ControllerStore) Snapshot(ctx context.Context) (ControllerSnapshot, err
 		}
 		result.ProcessedMessages = append(result.ProcessedMessages, message)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return ControllerSnapshot{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return ControllerSnapshot{}, err
 	}
+	return result, nil
+}
+
+// RestartSnapshot reads Controller desired state, node topology, exact issued
+// command identity, and provider ambiguity under one SQLite read transaction.
+// Callers must advance the process epoch before this read and reject a mismatch.
+func (s *ControllerStore) RestartSnapshot(ctx context.Context) (ControllerRestartSnapshot, error) {
+	if err := s.requireReady(); err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	defer tx.Rollback()
+
+	controller, err := readControllerSnapshot(ctx, tx)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	_, fleetMaximum, err := readManagementState(ctx, tx)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	nodes, err := readRestartNodeTopology(ctx, tx)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	commands, err := readRestartIssuedCommands(ctx, tx, controller.ControllerEpoch)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	fences, err := readGitHubReconciliationFences(ctx, tx, controller.ControllerEpoch)
+	if err != nil {
+		return ControllerRestartSnapshot{}, err
+	}
+	result := ControllerRestartSnapshot{
+		Controller:      controller,
+		FleetMaxRunners: cloneOptionalInt(fleetMaximum),
+		NodeTopology:    nodes,
+		IssuedCommands:  commands,
+		GitHubFences:    fences,
+	}
 	if err := tx.Commit(); err != nil {
-		return ControllerSnapshot{}, err
+		return ControllerRestartSnapshot{}, err
+	}
+	return result, nil
+}
+
+func readRestartNodeTopology(ctx context.Context, tx *sql.Tx) ([]RestartNodeTopology, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT
+		n.node_id, c.display_name, n.current_serial, n.credential_epoch, n.revoked,
+		a.administrative_state,
+		c.max_runners,
+		s.operating_system, s.architecture, s.runner_version,
+		s.native_runner_ready,
+		s.max_controller_epoch, s.received_at_unix_nano
+		FROM enrolled_nodes n
+		JOIN node_administrative_states a ON a.node_id = n.node_id
+		JOIN management_node_configurations c ON c.node_id = n.node_id
+		LEFT JOIN agent_session_snapshots s ON s.node_id = n.node_id
+		ORDER BY n.node_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []RestartNodeTopology
+	for rows.Next() {
+		var node RestartNodeTopology
+		var revoked int
+		var operatingSystem, architecture, runnerVersion sql.NullString
+		var nativeRunnerReady, maxControllerEpoch, receivedAt sql.NullInt64
+		if err := rows.Scan(
+			&node.NodeID,
+			&node.DisplayName,
+			&node.CertificateSerial,
+			&node.CredentialEpoch,
+			&revoked,
+			&node.AdministrativeState,
+			&node.MaxRunners,
+			&operatingSystem,
+			&architecture,
+			&runnerVersion,
+			&nativeRunnerReady,
+			&maxControllerEpoch,
+			&receivedAt,
+		); err != nil {
+			return nil, err
+		}
+		if node.NodeID == "" || node.DisplayName == "" ||
+			node.CertificateSerial == "" || node.CredentialEpoch == 0 ||
+			node.MaxRunners < 1 {
+			return nil, errors.New("stored restart node topology failed validation")
+		}
+		if err := node.AdministrativeState.Validate("restart_snapshot.node.administrative_state"); err != nil {
+			return nil, err
+		}
+		if (revoked != 0) != (node.AdministrativeState == domain.NodeRevoked) {
+			return nil, errors.New("stored restart node revocation authority is inconsistent")
+		}
+		platformColumns := []bool{
+			operatingSystem.Valid,
+			architecture.Valid,
+			runnerVersion.Valid,
+			nativeRunnerReady.Valid,
+			maxControllerEpoch.Valid,
+			receivedAt.Valid,
+		}
+		for _, valid := range platformColumns[1:] {
+			if valid != platformColumns[0] {
+				return nil, errors.New("stored restart node platform evidence is incomplete")
+			}
+		}
+		if operatingSystem.Valid {
+			node.PlatformObserved = true
+			node.OS = domain.OperatingSystem(operatingSystem.String)
+			node.Architecture = domain.Architecture(architecture.String)
+			node.LastRunnerVersion = runnerVersion.String
+			if err := node.OS.Validate("restart_snapshot.node.os"); err != nil {
+				return nil, err
+			}
+			if err := node.Architecture.Validate("restart_snapshot.node.architecture"); err != nil {
+				return nil, err
+			}
+			if node.LastRunnerVersion != "" &&
+				(strings.TrimSpace(node.LastRunnerVersion) != node.LastRunnerVersion ||
+					len(node.LastRunnerVersion) > 64) {
+				return nil, errors.New("stored restart node runner version failed validation")
+			}
+			if nativeRunnerReady.Int64 < 0 || nativeRunnerReady.Int64 > 1 ||
+				maxControllerEpoch.Int64 < 0 || receivedAt.Int64 <= 0 {
+				return nil, errors.New("stored restart node observation failed validation")
+			}
+			node.LastNativeRunnerReady = nativeRunnerReady.Int64 == 1
+			node.LastAgentControllerEpoch = domain.ControllerEpoch(maxControllerEpoch.Int64)
+			node.LastSnapshotReceivedAtNano = receivedAt.Int64
+		}
+		result = append(result, node)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
+func readRestartIssuedCommands(
+	ctx context.Context,
+	tx *sql.Tx,
+	controllerEpoch domain.ControllerEpoch,
+) ([]IssuedAgentCommand, error) {
+	rows, err := tx.QueryContext(ctx, `SELECT node_id, command_type, command_id,
+		controller_epoch, execution_id, expected_state, payload_digest
+		FROM agent_commands
+		ORDER BY node_id, controller_epoch, command_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var result []IssuedAgentCommand
+	for rows.Next() {
+		var issued IssuedAgentCommand
+		if err := rows.Scan(
+			&issued.NodeID,
+			&issued.Type,
+			&issued.Command.ID,
+			&issued.Command.ControllerEpoch,
+			&issued.Command.ExecutionID,
+			&issued.Command.ExpectedState,
+			&issued.Command.PayloadDigest,
+		); err != nil {
+			return nil, err
+		}
+		if err := validateIssuedAgentCommand(issued); err != nil {
+			return nil, fmt.Errorf("stored restart command failed validation: %w", err)
+		}
+		if issued.Command.ControllerEpoch > controllerEpoch {
+			return nil, errors.New("stored restart command belongs to a future controller epoch")
+		}
+		result = append(result, issued)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 	return result, nil
 }

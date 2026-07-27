@@ -133,6 +133,47 @@ func validExecutionTransition(current, next ExecutionState) bool {
 	}
 }
 
+// CanReachExecutionState reports whether next is current or can be reached by
+// one or more valid lifecycle transitions. Reconciliation snapshots retain only
+// the latest local observation, so they may legitimately omit intermediate
+// states while still being required to move forward.
+func CanReachExecutionState(current, next ExecutionState) bool {
+	if !isKnownExecutionState(current) || !isKnownExecutionState(next) {
+		return false
+	}
+	if current == next {
+		return true
+	}
+	visited := map[ExecutionState]bool{current: true}
+	queue := []ExecutionState{current}
+	states := [...]ExecutionState{
+		ExecutionPending,
+		ExecutionReserved,
+		ExecutionPreparing,
+		ExecutionRunning,
+		ExecutionCleaning,
+		ExecutionReleased,
+		ExecutionFailed,
+		ExecutionCleanupFailed,
+		ExecutionQuarantined,
+	}
+	for len(queue) > 0 {
+		state := queue[0]
+		queue = queue[1:]
+		for _, candidate := range states {
+			if visited[candidate] || !validExecutionTransition(state, candidate) {
+				continue
+			}
+			if candidate == next {
+				return true
+			}
+			visited[candidate] = true
+			queue = append(queue, candidate)
+		}
+	}
+	return false
+}
+
 func isTerminalExecutionState(state ExecutionState) bool {
 	switch state {
 	case ExecutionReleased, ExecutionFailed, ExecutionQuarantined:

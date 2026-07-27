@@ -75,6 +75,25 @@ type Journal interface {
 	CompareAndSwap(context.Context, string, uint64, string, Record) (VersionedRecord, bool, error)
 }
 
+// ValidateRecord is the single persistence-facing authority for lifecycle
+// invariants. Journal adapters call this before writing or accepting a stored
+// row so their schemas do not grow a second, drift-prone state machine.
+func ValidateRecord(record Record) error {
+	if !validRecord(record) {
+		return ErrJournal
+	}
+	return nil
+}
+
+// ValidateVersionedRecord extends ValidateRecord with the concurrency metadata
+// required for a durable journal observation.
+func ValidateVersionedRecord(record VersionedRecord) error {
+	if !validVersionedRecord(record) {
+		return ErrJournal
+	}
+	return nil
+}
+
 type MemoryJournal struct {
 	mu      sync.Mutex
 	records map[string]VersionedRecord

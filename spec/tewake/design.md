@@ -133,6 +133,14 @@ Target creation verifies private visibility and safe runner-group access. A
 repository-level target and organization-level target may not route the same
 repository/label pair.
 
+Each scale set is created and exclusively managed by exactly one Tewake Target;
+attaching an arbitrary pre-existing or shared scale set is not supported. The
+Controller store enforces a unique scale-set-to-Target binding. This ownership
+contract is required because GitHub runner records do not expose
+`RunnerRequestID`: generation-ambiguity cleanup may use only the deterministic
+Tewake runner name inside that exclusively owned scale set, followed by two
+durable absence reads before clearing the fence.
+
 ### Runner Profile
 
 A profile owns the externally visible scale-set label and internal platform
@@ -149,6 +157,13 @@ requirements:
 A node has concrete slot identities from 0 to `maxRunners - 1`. A slot is either free
 or owned by exactly one reservation/execution. The scheduler may temporarily grant a
 free slot to one GitHub Target when advertising `maxCapacity`.
+
+The reservation is an active SQLite lease, not derived best-effort state. Every
+non-terminal execution has exactly one matching reservation and every terminal
+execution has none. SQLite rejects deletion of an active lease; a terminal update
+must delete exactly one lease in the same transaction. Controller startup validates
+the complete relation and enters read-only recovery mode if corruption or manual
+drift would otherwise make a live slot appear free.
 
 The fleet maximum is optional. If absent, it equals the sum of node maxima. Capacity
 advertised to all Targets is backed by concrete non-overlapping slots, preventing
@@ -256,7 +271,7 @@ advertisement.
 {
   "protocolVersion": 1,
   "messageId": "opaque-id",
-  "type": "hello|snapshot|heartbeat|start|cancel|execution_update|log|ack",
+  "type": "hello|snapshot|heartbeat|prepare|start|cancel|execution_update|log|ack",
   "payload": {}
 }
 ```
@@ -276,6 +291,27 @@ operations are idempotent:
 - `EnsureRunning`
 - `Inspect`
 - `Destroy`
+
+Before a newly observed command is recorded or acknowledged, the Agent compares
+`ExpectedState` with its authoritative local runner observation while holding an
+execution-scoped command lock. A command that fails this comparison is not
+inserted into the replay journal, so retransmitting an initially rejected command
+cannot later acquire authority merely by being classified as a replay. A
+previously admitted identical command may resume its idempotent operation after a
+crash; a changed payload or a second command whose state precondition is stale is
+rejected before JIT delivery, process start, or cleanup.
+
+Runner admission is a two-command exchange. `prepare` carries only the pinned
+runner version and non-secret runtime options, expects Controller state
+`Reserved`, and invokes `EnsurePrepared`. After the Agent durably reports
+`Preparing` with a prepared local workspace, the Controller generates JIT
+configuration and sends `start` with expected state `Preparing`. A start command
+is never used as an implicit package download or workspace-preparation request.
+Once a secret-bearing start command has been durably accepted, its execution is
+owned by the Agent process rather than the WebSocket: loss of the command ACK
+does not discard the command or cancel the local start. The Controller does not
+automatically regenerate or replay JIT after an ambiguous write; reconciliation
+first determines whether the Agent journal accepted that exact command.
 
 Runner-journal records carry a monotonically increasing storage revision. Creating
 an execution is an insert-only `Preparing` claim made before its execution root is
@@ -302,6 +338,23 @@ The agent uses a dedicated service account and OS process containment:
   owning the root agent service
 - Job Object and Windows Service recovery on Windows
 
+On Linux, the outbound network Agent itself runs as an unprivileged
+`tewake-agent` account. A separate root-owned local Supervisor service owns the
+delegated cgroup subtree, durable start fences, slot-account handoff, and verified
+cleanup. The two services communicate only over a root-created Unix socket. The
+Supervisor authenticates the Agent with the peer credential supplied by the
+kernel, accepts a versioned fixed-operation protocol, and derives every cgroup,
+workspace, executable, argument, and runner UID from its local configuration.
+It never accepts an arbitrary command, path, environment, UID, or GID from the
+network-facing process. Losing the Supervisor or failing any peer, filesystem,
+cgroup-v2, or protocol check makes native runner admission unavailable while the
+Agent may remain connected for diagnostics.
+
+Every authenticated snapshot carries an explicit `nativeRunnerReady` observation.
+The Controller treats a missing or false value as zero capacity even if the Agent
+transport is online. Eligibility additionally requires a fresh, reconciled
+snapshot; connectivity is not evidence that the local runner backend is usable.
+
 A macOS process group is only a cleanup aid: a workflow can call `setsid()` and
 leave that group. Strong macOS admission therefore requires an exclusive slot UID
 whose complete process inventory can be terminated and proven empty after restart.
@@ -316,9 +369,18 @@ exist as an absolute, service-owned `0700` directory; every original path compon
 must be a real directory rather than a symlink, and unsafe owners or writable
 ancestors fail before download. Cache validation returns a single-use capability
 holding the exact open archive object whose manifest, regular-file identity, exact
-size, and SHA-256 were checked. The Agent extracts from that same object into the
-execution-specific directory, so a later cache path rename, symlink retarget, or
-directory-entry replacement cannot substitute executable input.
+size, and SHA-256 were checked.
+
+On Linux that Agent cache capability is not privileged launch authority. The root
+Supervisor independently fixes the official package for its own platform, opens
+the cache object, and copies it to a root-owned execution-local archive while
+checking the exact pinned size and SHA-256. It extracts only from that same
+root-owned descriptor, removes the temporary archive, and hands the completed
+tree to the dedicated runner identity last. At the launch boundary it opens both
+the workspace directory and `run.sh`, rechecks their inode, owner, and durable
+`WorkspaceRef`, and passes those descriptors to the downgraded launcher. The
+launcher changes directory and executes through `/proc/self/fd`; it never reopens
+an Agent-writable pathname after verification.
 
 Preparation captures a typed, opaque platform workspace identity containing a
 versioned backend and canonical owner value. The Cleaner and Supervisor must name
@@ -340,8 +402,8 @@ destructive teardown; overlapping managers return reconciliation instead of raci
 the same workspace. Once absence is verified, a transient or ambiguous terminal
 journal write is resolved before the slot can become `Released` or `Failed`.
 
-The runtime is prepared before JIT generation. The Agent passes the opaque value to
-the platform Supervisor through a synchronous one-shot callback with no raw
+The runtime is prepared and reported before JIT generation. The Agent passes the
+opaque value to the platform Supervisor through a synchronous one-shot callback with no raw
 accessor. The Supervisor consumes it only after the workspace and start fence are
 validated, then supplies it to the official runner through the required
 `--jitconfig` argument; the official runner writes the decoded settings,
@@ -352,6 +414,129 @@ explicit retention policy, workspace, and execution directory after the expected
 identity is re-observed, then verifies absence. Tewake does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
+
+Linux runner environment state is execution-scoped: `HOME`,
+`XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, and `TMPDIR` all resolve below the
+descriptor-pinned disposable workspace. The persistent slot-account home is not
+writable by the Supervisor service. Removal and absence verification therefore
+cover runner credentials and files that honor those home/cache/temp variables.
+Native mode does not create a mount namespace per job: a workflow that bypasses
+`TMPDIR` and writes an absolute `/tmp` path may leave data visible to a later job
+inside the Supervisor service's `PrivateTmp` namespace. This is part of the
+trusted-workflow limitation rather than a sandbox guarantee.
+
+After the listener starts, the Agent monitors the complete platform containment
+rather than only the listener PID. There is no controller-connection or arbitrary
+job-duration timeout: an Agent/WebSocket disconnect leaves the job running. When
+the containment becomes empty, `Destroy` first commits the local revisioned
+`Cleaning` intent, performs teardown, and commits the terminal local state. Only
+the resulting `Released` or `CleanupFailed` observation is then persisted to the
+durable Agent outbox before network delivery. The outbox entry is removed only
+after a matching Controller acknowledgement, so cleanup and its quarantine result
+survive reconnects without exposing a synthetic Controller-side `Cleaning` state
+that is ahead of the Agent runtime SSOT, and without retaining raw process output
+or JIT material.
+
+The local runner journal and terminal outbox are admission authorities, not
+best-effort telemetry. A read, write, or acknowledgement failure in either surface
+terminates the Agent process with an explicit degraded error so the OS service can
+restart it. Reconnecting forever with an unreadable local authority is forbidden.
+
+The authenticated reconnect snapshot includes the Agent's maximum accepted
+Controller epoch, non-secret command replay identities and payload digests,
+execution observations, and cleanup tombstones. The Controller commits that
+snapshot before activating the session or acknowledging it. This is the evidence
+used to resolve an ambiguous secret-bearing command write; absence is never
+inferred from a connection alone, and a new JIT configuration is not generated
+until the previous command is proven unaccepted or terminal.
+
+An Agent snapshot and its durable outbox have distinct authority. A terminal
+snapshot may prove that the local runtime no longer exists, but it does not mutate
+the Controller execution to a terminal state or release its slot. The exact
+`execution_update` outbox record is the sole owner of those mutations and is
+processed in Agent sequence order. Authenticated `CleanupFailed` or `Quarantined`
+snapshot evidence may latch the node quarantine before the matching outbox record;
+this is a deliberate fail-closed capacity guard, not an alternate terminal-state
+owner. A `Released` or `Failed` snapshot without its exact terminal outbox record
+does not make the node idle.
+
+Snapshot capture and command dispatch are linearized per Node. The Controller
+records a command-sequence baseline before acknowledging `hello`, because the
+Agent constructs its journal snapshot only after that acknowledgement. A snapshot
+is rejected before the durable snapshot consumer when any command was in flight
+at capture start, began during capture, or remains in flight at commit. Snapshot
+commit and command dispatch share the same Node lifecycle lock and revalidate the
+current projected Agent actor. Therefore a replacement snapshot cannot erase a
+command accepted by an older overlapping Agent process, and an older actor cannot
+receive a command after a replacement snapshot wins. A newer valid handshake
+supersedes an older incomplete capture. Recovery-only Prepare replay additionally
+requires the same exact current snapshot digest and Controller epoch in both the
+broker and SQLite transaction.
+
+The lifecycle lock covers the atomic full-snapshot store transition, but does not
+extend into protocol ACK I/O or disconnect persistence. After snapshot commit
+and actor replacement, the snapshot ACK is written without the lock; the actor
+remains unavailable for commands until that ACK succeeds, and another handshake
+can supersede a stalled write. Disconnect projection records an in-flight fence
+under the lock, performs the SQLite consumer call outside it using the Controller
+lifetime context, then clears the fence under the lock. A reconnect that arrives
+while this projection is unresolved receives an explicit fail-closed error and
+may retry; it never waits behind the store call. Controller shutdown cancels the
+lifetime context.
+
+For an accepted `start`, only an exact durable `Running` or `Cleaning` Agent update
+proves that the official runner actually started. A later `Released`, `Failed`, or
+`CleanupFailed` observation without that history instead identifies a lost-JIT
+case: local recovery cleaned a prepared runtime after accepting the command but
+before a process start was proven. Controller restart and Agent acknowledgement may
+prune the Agent-side command and runner journal, so the Controller retains issued
+command and execution-update history as the durable source for this distinction.
+
+Lost-JIT provider cleanup is exact and ordered. Tewake queries the runner identity
+bound to the original scale set and attempt, removes that runner when present, then
+requires two post-removal absence reads separated by the durable confirmation
+interval under unchanged Controller, GitHub-session, and Agent-snapshot authority.
+The DELETE response itself and any pre-DELETE absence never count as absence
+confirmation. Cleanup failure keeps the slot reserved, the node quarantined, and
+advertised capacity at zero even after provider absence is proven.
+
+An Agent `Running` update proves that the local runner process started; it does
+not prove that GitHub assigned work to that process. Pickup authority is an exact
+`JobStarted`, or an exact `JobCompleted` with a known non-`canceled` result, whose
+scale set, runner ID, and runner name all match the JIT attempt. Availability and
+assignment require a non-zero runner request ID. GitHub lifecycle events may omit
+that ID; a non-zero value must match the attempt, while zero may fall back only
+when the exact provider runner ID and name identify one durable attempt in the
+scale set. A partial unique index on provider runner identity and a single
+read-transaction correlation query make ambiguity fail closed.
+`JobCompleted(result: "canceled")` is not pickup authority because GitHub emits
+that event when a scale-set assignment times out and the job is requeued.
+
+Provider reconciliation never rewinds the old terminal execution or delivers a
+second JIT configuration for it. Once the exact terminal outbox update is durable,
+a fresh, non-replayed `JobAvailable` from the current poll session persists only
+an unpicked-requeue intent: the old terminal execution remains the claim identity,
+the proposed replacement ID has no execution row or reservation, and capacity
+stays zero. If the fresh availability races ahead of the terminal outbox update,
+the whole message transaction is rolled back and left unacknowledged for
+redelivery. The same rollback applies while recovery admission is temporarily
+disabled, the concrete slot is occupied, or the poll authority is stale; none of
+those conditions may consume the one fresh message needed to create or rearm
+recovery state.
+
+The Controller commits and acknowledges that intent before touching the provider.
+It then performs a zero-capacity poll before the first exact query/delete and
+between every destructive or absence-confirmation step. A late exact pickup event
+keeps the old claim and discards the proposed replacement. Only two post-removal
+absence reads under unchanged Controller, GitHub-session, and Agent-snapshot
+authority atomically create the replacement execution, reservation, and next
+acquire attempt. That acquire is durably marked `reconciled_pending`, and startup
+validates its exact claim, source availability, old JIT absence, and attempt
+lineage before driving it ahead of the first long poll. An ordinary pre-ACK
+`pending` acquire remains poll-first. This distinction preserves immediate
+dispatch even if the Controller stops after the final absence transaction commits
+but before the in-memory projection advances. Replayed availability cannot create
+an intent or rearm the claim.
 
 The JIT lease records the required verify-then-deliver order. Delivery before the
 exec-boundary workspace check invokes no consumer, a failed check permanently
@@ -377,7 +562,8 @@ available to the dedicated runner account.
 The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The API
 provides:
 
-- setup and GitHub App Manifest lifecycle
+- setup state; GitHub App Manifest callback support remains unavailable until its
+  one-time signed callback-state contract is implemented
 - node inventory, join-code creation/cancellation, drain/resume, revoke, and the
   node-reported availability intent with its observation age
 - target and runner-profile configuration
@@ -387,10 +573,105 @@ provides:
 
 Live list state uses SSE rather than a second browser WebSocket protocol.
 
-The listener binds loopback by default. A single-admin secure cookie is HttpOnly,
-SameSite, and Secure when TLS is enabled. Every mutation requires authentication,
-CSRF token, matching Origin, and audit persistence. CORS is disabled by default.
-Audit persistence failure blocks new high-impact mutations and runner admission.
+The first-release management mode is `loopback_http`. Its listener accepts only a
+loopback TCP address and derives one canonical `http` origin from the actual listener
+address. Direct TLS and authenticated reverse-proxy modes are intentionally not
+claimed by this release: both need a separate administrator bootstrap authority,
+and the proxy mode additionally needs a verifiable peer boundary. `Forwarded` and
+`X-Forwarded-*` headers are never trusted for Host, scheme, or administrator
+identity.
+
+Every UI and API request first compares the request Host with the canonical
+authority exactly. A mismatch returns 421 and never issues a cookie. Static UI GETs
+do not create an administrator session. Session bootstrap is an explicit
+same-origin `POST /api/v1/session` with an empty body and a mandatory
+`X-Tewake-Admin-Bootstrap` header. The CLI reads the private
+`admin-session.key` through the owning platform credential adapter and derives a
+domain-separated HMAC proof over the canonical origin, issue time, and a fresh
+128-bit nonce. Its `twb1` wire value is valid for two minutes, is consumed once by
+an in-memory replay ledger, is sent only in that request, and is then cleared. The
+root and proof are never placed in argv, environment variables, SQLite, config,
+logs, audit rows, or response bodies.
+
+TWK-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
+browser bootstrap. TWK-013 must add a separate one-time owner-authorized browser
+handoff before the embedded static UI can establish a session; JavaScript cannot
+read the Controller credential and a plain same-origin POST returns 401. After a
+valid proof, the Controller issues a random process-local session nonce signed with
+a separate domain-separated HMAC-SHA-256. The host-only cookie has `Path=/`,
+`HttpOnly`, and `SameSite=Strict`; a future explicit TLS mode must also set
+`Secure`. The session expires after twelve hours and is invalidated by logout or
+Controller restart. The per-session CSRF value is another domain-separated HMAC
+over the session nonce and canonical origin and is returned only by the
+authenticated session API.
+
+Known management operations use this rejection order:
+
+1. incorrect Host: 421;
+2. missing, malformed, or invalid session: 401;
+3. valid session without matching Origin or CSRF on a mutation: 403;
+4. media, size, schema, or domain validation failure: 400, 413, 415, or 422;
+5. stale optimistic configuration revision: 409;
+6. unavailable audit/store authority: 503.
+
+CORS headers are absent. The CLI obtains the same cookie and CSRF value, calls the
+same `/api/v1` contract, and sends `DELETE /session` in a detached bounded context
+after every bootstrapped operation. A logout failure never replaces the primary
+operation error. Only initialization before the Controller starts may write local
+bootstrap state directly.
+
+The OpenAPI source of truth is `api/openapi.yaml`. Generated Go and TypeScript
+contracts are never edited by hand. Transport DTOs are explicit safe projections;
+store and reconciliation structs, certificate data, command or payload digests,
+raw provider errors, and credential material are not serialized directly. GitHub
+IDs, byte counts, and the global configuration revision use decimal JSON strings.
+Timestamps use RFC 3339 with fractional precision. Collection fields are present as
+arrays, including when empty. Provider-backed state carries explicit
+`fresh`, `stale`, or `unknown` metadata, and a provider failure retains the
+last-known value rather than replacing it with an empty healthy value.
+
+Configuration reads return an ETag derived from the global revision. Mutations
+require the corresponding `If-Match`; the JSON or versioned YAML revision must also
+match. A stale value returns 409 and never overwrites newer desired state. One
+SQLite transaction compares the revision, replaces desired settings, inserts an
+allowlisted append-only audit event, and increments the revision. Audit rows never
+contain request bodies, YAML, headers, cookies, CSRF values, join codes, provider
+credentials, or arbitrary detail maps. Audit insertion or commit failure rolls back
+the whole mutation. An audit persistence failure also closes the global admission
+gate: subsequent high-impact mutations return 503 and new GitHub capacity is zero,
+while existing runners continue.
+
+`GET /audit-events` is cursor-paginated with a default of 100 and a hard maximum of
+500 events per response; the store fetches at most `limit + 1` rows to determine
+the next cursor. Authentication rejections on the loopback API and unauthenticated
+enrollment rejections are bounded or coalesced before persistence so an attacker
+cannot turn an error path into unbounded SQLite growth. Enrollment admission is
+also checked before join-code decoding, CSR work, or certificate signing. Agent
+session rejections persist only the authenticated Node ID and a closed reason
+(`node_credential_rejected` or `agent_protocol_rejected`). A client-certificate
+failure rejected by TLS before HTTP is outside this audit hook and remains a
+transport metric or health boundary.
+
+Join-code creation is a deliberately narrower credential-delivery operation. It is
+available only to an authenticated administrator on the loopback origin after an
+explicit user action. The successful response contains the code once; the response
+is never stored for replay, the UI must not persist it after the one-time display,
+and subsequent reads expose only non-secret metadata. Cancellation and consumption
+remain auditable. The database continues to retain only the code digest.
+
+SSE is an authenticated, same-origin, invalidation-only stream. Events contain a
+schema version, opaque cursor, and safe resource names, not resource snapshots.
+`ready`, `invalidate`, and `reset` are the only event kinds. Slow subscribers have
+at most one pending invalidation, and an absent, old, or unknown cursor produces a
+`reset` so the client refetches REST state; the Controller does not retain an
+unbounded event history.
+
+The configuration request-body limit is a transport memory boundary, not a fleet,
+Node, Target, or history quota. It is applied before JSON or YAML decoding and
+protects chunked requests as well as Content-Length requests. Unknown fields,
+trailing documents, and truncated over-limit bodies are rejected. The selected
+budget must be tested against a measured realistic large valid configuration and
+recorded beside the implementation.
 
 The API never returns credential material. Configuration apply uses an optimistic
 revision and fails on stale input rather than silently overwriting newer state.

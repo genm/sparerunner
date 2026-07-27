@@ -1,0 +1,55 @@
+[Unit]
+Description=Tewake privileged native runner supervisor
+Documentation=https://github.com/genm/tewake
+ConditionPathIsDirectory=/sys/fs/cgroup
+After=systemd-tmpfiles-setup.service
+
+[Service]
+Type=simple
+User=root
+# Delegate= changes the service cgroup ownership to the service user and group.
+# Keep both root-owned so the Supervisor can reject a replaced cgroup boundary;
+# tmpfiles owns the separate local socket directory for the Agent group.
+Group=root
+ExecStart=/usr/local/bin/tewake-agent supervisor \
+    --socket=/run/tewake-supervisor/supervisor.sock \
+    --runtime-root=/var/lib/tewake-runtime \
+    --cache-root=/var/cache/tewake-agent \
+    --fence-root=/var/lib/tewake-supervisor/fences \
+    --runner-user=tewake-runner-0 \
+    --agent-user=tewake-agent
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+# In-process ambiguous-session cleanup is bounded at 20s; systemd owns the
+# outer service cgroup and gets a separate margin to complete final teardown.
+TimeoutStopSec=30s
+Delegate=yes
+
+# The Supervisor has no remote listener and accepts only the fixed local
+# protocol from the kernel-authenticated tewake-agent UID. These are the
+# capabilities needed for slot ownership and complete cgroup cleanup.
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_KILL CAP_SETGID CAP_SETUID
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateDevices=yes
+
+# These restrictions are inherited by the trusted native workflow. They reduce
+# accidental host exposure but are not a hostile-code sandbox.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=no
+ProtectProc=invisible
+ProcSubset=all
+ReadWritePaths=/var/lib/tewake-supervisor /var/lib/tewake-runtime
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

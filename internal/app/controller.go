@@ -14,6 +14,9 @@ import (
 	"strconv"
 	"time"
 
+	managementapi "github.com/genm/tewake/internal/api"
+	"github.com/genm/tewake/internal/auth"
+	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 	"github.com/genm/tewake/internal/webui"
 )
@@ -28,7 +31,7 @@ type ControllerServeOptions struct {
 }
 
 func ServeController(ctx context.Context, state *ControllerState, options ControllerServeOptions) error {
-	if state == nil || state.Store == nil || options.AgentListener == nil {
+	if state == nil || state.Store == nil || state.AgentBroker == nil || options.AgentListener == nil {
 		return errors.New("controller serve dependencies are incomplete")
 	}
 	if err := ValidateAdminListener(options.AdminListener); err != nil {
@@ -53,11 +56,35 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 	}
 	var adminServer *http.Server
 	if options.AdminListener != nil {
+		origin, err := adminListenerOrigin(options.AdminListener)
+		if err != nil {
+			return err
+		}
+		adminAuth, err := auth.NewManager(state.AdminSession, origin, false)
+		if err != nil {
+			return err
+		}
+		backend, err := newManagementBackend(state, state.TargetVerifier)
+		if err != nil {
+			return err
+		}
+		events := managementapi.NewEventBus()
+		handler, err := managementapi.NewHandler(managementapi.Options{
+			Auth:    adminAuth,
+			Backend: backend,
+			Events:  events,
+			UI:      embeddedUIHandler(),
+			Epoch:   state.Epoch,
+		})
+		if err != nil {
+			return err
+		}
 		adminServer = &http.Server{
-			Handler:           embeddedUIHandler(),
+			Handler:           handler,
 			ReadHeaderTimeout: readHeaderTimeout,
 			MaxHeaderBytes:    http.DefaultMaxHeaderBytes,
 		}
+		go publishManagementInvalidations(serveContext, state, events)
 	}
 	var advertiser transport.Advertiser
 	if options.AdvertiseMDNS {
@@ -96,6 +123,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 	}
 	go func() {
 		<-serveContext.Done()
+		state.AgentBroker.Close()
 		state.Sessions.CloseAll()
 		_ = agentServer.Close()
 		if adminServer != nil {
@@ -107,6 +135,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 		if err := <-results; err != nil && firstErr == nil {
 			firstErr = err
 			cancel()
+			state.AgentBroker.Close()
 			state.Sessions.CloseAll()
 			_ = agentServer.Close()
 			if adminServer != nil {
@@ -134,8 +163,50 @@ func ValidateAdminListener(listener net.Listener) error {
 	return nil
 }
 
+func adminListenerOrigin(listener net.Listener) (string, error) {
+	if err := ValidateAdminListener(listener); err != nil {
+		return "", err
+	}
+	address, ok := listener.Addr().(*net.TCPAddr)
+	if !ok || address.Port < 1 || address.Port > 65535 {
+		return "", errors.New("management listener has an invalid TCP authority")
+	}
+	host := net.JoinHostPort(address.IP.String(), strconv.Itoa(address.Port))
+	return "http://" + host, nil
+}
+
+func publishManagementInvalidations(
+	ctx context.Context,
+	state *ControllerState,
+	events *managementapi.EventBus,
+) {
+	if state == nil || state.Store == nil || events == nil {
+		return
+	}
+	auditChanged := state.Store.ManagementAuditChange()
+	for {
+		var reconcilerChanged <-chan struct{}
+		if state.Reconciler != nil {
+			reconcilerChanged = state.Reconciler.Change()
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-reconcilerChanged:
+			events.Publish()
+		case <-auditChanged:
+			// Audit degradation is process-terminal for this store. Publish
+			// exactly once, then disable this select arm so the closed channel
+			// cannot create a busy loop.
+			events.Publish()
+			auditChanged = nil
+		}
+	}
+}
+
 func controllerAgentHandler(state *ControllerState) http.Handler {
-	enrollment := transport.EnrollmentHandler(state.Service)
+	enrollment := auditedEnrollmentHTTPHandler(state)
+	agentAudit := newAgentSessionAuditGuard(time.Now)
 	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		switch request.URL.Path {
 		case "/enroll":
@@ -145,7 +216,16 @@ func controllerAgentHandler(state *ControllerState) http.Handler {
 				http.Error(writer, "invalid agent request", http.StatusBadRequest)
 				return
 			}
-			if err := transport.UpgradeAuthenticatedWithSessions(writer, request, state.Store, handleAgentSession, state.Sessions); err != nil {
+			handler := func(ctx context.Context, session *transport.AuthenticatedSession) error {
+				err := state.AgentBroker.serveSession(ctx, session)
+				if errors.Is(err, transport.ErrProtocolVersion) ||
+					errors.Is(err, ErrAgentProtocol) {
+					return transport.AgentProtocolRejection(session.Credential(), err)
+				}
+				return err
+			}
+			if err := transport.UpgradeAuthenticatedWithSessions(writer, request, state.Store, handler, state.Sessions); err != nil {
+				appendAgentSessionRejectionAudit(request, state, agentAudit, err)
 				if transport.SessionWasUpgraded(err) {
 					return
 				}
@@ -159,65 +239,128 @@ func controllerAgentHandler(state *ControllerState) http.Handler {
 	})
 }
 
-func handleAgentSession(ctx context.Context, session *transport.AuthenticatedSession) error {
-	for {
-		envelope, err := session.Read(ctx)
-		if err != nil {
-			return err
-		}
-		if err := validateAgentMessage(session, envelope); err != nil {
-			return err
-		}
-		messageID, err := randomMessageID()
-		if err != nil {
-			return err
-		}
-		payload, err := json.Marshal(struct {
-			MessageID string `json:"messageId"`
-		}{MessageID: envelope.MessageID})
-		if err != nil {
-			return err
-		}
-		if err := session.Write(ctx, transport.Envelope{
-			ProtocolVersion: transport.ProtocolVersion,
-			MessageID:       messageID,
-			Type:            transport.MessageAck,
-			Payload:         payload,
-		}); err != nil {
-			return err
-		}
+func appendAgentSessionRejectionAudit(
+	request *http.Request,
+	state *ControllerState,
+	guard *agentSessionAuditGuard,
+	err error,
+) {
+	nodeID, kind, rejected := transport.AgentSessionRejection(err)
+	if !rejected || request == nil || state == nil || state.Store == nil ||
+		!guard.claim(nodeID, kind) {
+		return
 	}
+	errorCode := store.AuditErrorAgentProtocolRejected
+	if kind == transport.AgentSessionCredentialRejected {
+		errorCode = store.AuditErrorNodeCredentialRejected
+	}
+	auditContext, cancel := detachedManagementProjectionContext(request.Context())
+	defer cancel()
+	_, _ = state.Store.AppendAuditEvent(auditContext, store.AuditRecord{
+		Actor:        store.AuditActorNode,
+		Action:       store.AuditActionAgentSessionRejected,
+		Outcome:      store.AuditOutcomeRejected,
+		ResourceKind: store.AuditResourceNode,
+		ResourceID:   nodeID,
+		ErrorCode:    errorCode,
+		RequestID:    newEnrollmentAuditRequestID(),
+	})
 }
 
-func validateAgentMessage(session *transport.AuthenticatedSession, envelope transport.Envelope) error {
-	switch envelope.Type {
-	case transport.MessageHello:
-		var payload struct {
-			NodeID string `json:"nodeId"`
+func auditedEnrollmentHTTPHandler(state *ControllerState) http.Handler {
+	enrollment := transport.EnrollmentHandler(state.Service)
+	guard := newEnrollmentRequestGuard(time.Now)
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if !guard.admit(request.RemoteAddr) {
+			writer.Header().Set(
+				"Retry-After",
+				strconv.Itoa(int(enrollmentRequestWindow/time.Second)),
+			)
+			http.Error(writer, "enrollment rate limit exceeded", http.StatusTooManyRequests)
+			appendEnrollmentAudit(
+				request,
+				state,
+				guard,
+				enrollmentAuditRejected,
+				store.AuditActionEnrollmentRejected,
+				store.AuditOutcomeRejected,
+				store.AuditErrorEnrollmentRateLimited,
+			)
+			return
 		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID {
-			return errors.New("agent hello identity mismatch")
+		captured := &enrollmentStatusWriter{ResponseWriter: writer}
+		enrollment.ServeHTTP(captured, request)
+		if captured.status == http.StatusCreated {
+			return
 		}
-	case transport.MessageSnapshot:
-		var payload struct {
-			NodeID string `json:"nodeId"`
-			OS     string `json:"os"`
-			Arch   string `json:"arch"`
+		if captured.status == http.StatusServiceUnavailable {
+			appendEnrollmentAudit(
+				request,
+				state,
+				guard,
+				enrollmentAuditUnavailable,
+				store.AuditActionEnrollmentUnavailable,
+				store.AuditOutcomeFailed,
+				store.AuditErrorEnrollmentUnavailable,
+			)
+			return
 		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID || payload.OS == "" || payload.Arch == "" {
-			return errors.New("invalid agent snapshot")
-		}
-	case transport.MessageHeartbeat:
-		var payload struct {
-			NodeID string `json:"nodeId"`
-		}
-		if err := decodeStrictJSON(envelope.Payload, &payload); err != nil || payload.NodeID != session.Credential().NodeID {
-			return errors.New("invalid agent heartbeat")
-		}
-	default:
-		return errors.New("message type is not valid from an agent")
+		appendEnrollmentAudit(
+			request,
+			state,
+			guard,
+			enrollmentAuditRejected,
+			store.AuditActionEnrollmentRejected,
+			store.AuditOutcomeRejected,
+			store.AuditErrorEnrollmentRejected,
+		)
+	})
+}
+
+func appendEnrollmentAudit(
+	request *http.Request,
+	state *ControllerState,
+	guard *enrollmentRequestGuard,
+	kind enrollmentAuditKind,
+	action store.AuditAction,
+	outcome store.AuditOutcome,
+	errorCode store.AuditErrorCode,
+) {
+	if request == nil || state == nil || state.Store == nil || !guard.claimAudit(kind) {
+		return
 	}
-	return nil
+	auditContext, cancel := detachedManagementProjectionContext(request.Context())
+	defer cancel()
+	// Aggregate markers deliberately retain no token ID, CSR, path, source
+	// address, count, or provider detail. Successful enrollment is recorded
+	// atomically by ConsumeEnrollmentWithAudit.
+	_, _ = state.Store.AppendAuditEvent(auditContext, store.AuditRecord{
+		Actor:        store.AuditActorAnonymous,
+		Action:       action,
+		Outcome:      outcome,
+		ResourceKind: store.AuditResourceController,
+		ErrorCode:    errorCode,
+		RequestID:    newEnrollmentAuditRequestID(),
+	})
+}
+
+type enrollmentStatusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (writer *enrollmentStatusWriter) WriteHeader(status int) {
+	if writer.status == 0 {
+		writer.status = status
+	}
+	writer.ResponseWriter.WriteHeader(status)
+}
+
+func (writer *enrollmentStatusWriter) Write(payload []byte) (int, error) {
+	if writer.status == 0 {
+		writer.status = http.StatusOK
+	}
+	return writer.ResponseWriter.Write(payload)
 }
 
 func decodeStrictJSON(payload []byte, destination any) error {

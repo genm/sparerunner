@@ -11,7 +11,10 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"time"
 )
+
+const cleanupHousekeepingTimeout = time.Second
 
 // JITConfig is the narrow secret handoff used by the runtime. github.JITConfig
 // satisfies it, while this package never gains an accessor, formatter, logger,
@@ -121,9 +124,148 @@ type Manager struct {
 	mu           sync.Mutex
 }
 
+// Ready revalidates the complete platform admission boundary without creating
+// runtime state. Platform implementations may use this call for an actual
+// helper/socket round trip; a cached startup result is never sufficient.
+func (m *Manager) Ready(ctx context.Context) error {
+	if m == nil || ctx == nil || m.cleaner == nil || m.supervisor == nil {
+		return ErrStrongOwnershipUnavailable
+	}
+	if err := ctx.Err(); err != nil {
+		return ErrStrongOwnershipUnavailable
+	}
+	if _, ok := m.supervisor.(CompletionWaiter); !ok {
+		return ErrStrongOwnershipUnavailable
+	}
+	if _, ok := m.supervisor.(CleanupFinalizer); !ok {
+		return ErrStrongOwnershipUnavailable
+	}
+	cleanerBackend := m.cleaner.WorkspaceBackend()
+	if !m.cleaner.StrongWorkspaceOwnership() ||
+		!m.supervisor.StrongDescendantOwnership() ||
+		cleanerBackend == "" ||
+		m.supervisor.WorkspaceBackend() != cleanerBackend {
+		return ErrStrongOwnershipUnavailable
+	}
+	if err := m.cleaner.ValidateRuntimeRoot(ctx, m.runtimeRoot); err != nil {
+		return ErrStrongOwnershipUnavailable
+	}
+	return nil
+}
+
 type runtimeOwnership struct {
 	Revision    uint64
 	Containment ContainmentRef
+}
+
+// Recover re-establishes one durable runtime's in-process lifecycle owner after
+// an Agent restart. It never starts a process or consumes new JIT material.
+//
+// A persisted Running record is adopted only after the platform proves that the
+// exact workspace and containment still exist. Starting and Cleaning records
+// are destructive recovery intents: the old one-shot JIT cannot be replayed, so
+// recovery fences the containment and converges through verified cleanup.
+func (m *Manager) Recover(ctx context.Context, executionID string) (Snapshot, error) {
+	if executionID == "" {
+		return Snapshot{}, ErrInvalidRequest
+	}
+	m.mu.Lock()
+	record, found, err := m.load(ctx, executionID)
+	if err != nil {
+		m.mu.Unlock()
+		return Snapshot{}, err
+	}
+	if !found {
+		m.mu.Unlock()
+		return Snapshot{}, ErrExecutionNotFound
+	}
+	if !validVersionedRecord(record) {
+		m.mu.Unlock()
+		return Snapshot{}, ErrReconciliationRequired
+	}
+	switch record.State {
+	case StateReleased:
+		m.forget(record.ExecutionID)
+		m.forgetCleanup(record.ExecutionID)
+		m.mu.Unlock()
+		if finalizer, ok := m.supervisor.(CleanupFinalizer); ok &&
+			validFencedContainment(record.Containment) {
+			// Released is the journal authority that makes tombstone collection
+			// safe. Retrying here avoids platform startup guessing whether a
+			// finalized record preceded or followed the Released commit.
+			m.garbageCollectCleanup(finalizer, Process{Containment: record.Containment})
+		}
+		return snapshot(record.Record), nil
+	case StateFailed:
+		m.forget(record.ExecutionID)
+		m.forgetCleanup(record.ExecutionID)
+		m.mu.Unlock()
+		return snapshot(record.Record), nil
+	case StateCleanupFailed:
+		m.forget(record.ExecutionID)
+		m.forgetCleanup(record.ExecutionID)
+		m.mu.Unlock()
+		return snapshot(record.Record), ErrQuarantined
+	case StatePrepared:
+		// Prepared contains no JIT material or process. The Agent command journal
+		// decides whether it is a completed Prepare or an accepted Start whose
+		// secret was lost before delivery.
+		m.mu.Unlock()
+		return snapshot(record.Record), nil
+	case StateRunning:
+		if !m.supervisor.StrongDescendantOwnership() ||
+			!m.workspaceMatches(ctx, record.Record) ||
+			!validFencedContainment(record.Containment) {
+			record, err = m.claimRecoveryCleanup(ctx, record)
+			if err != nil {
+				m.mu.Unlock()
+				return snapshot(record.Record), err
+			}
+			break
+		}
+		// Alive also validates that the exact durable containment can be opened.
+		// A false result is a naturally completed cgroup and remains adoptable:
+		// CompletionWaiter will return immediately and the Agent will clean it.
+		if _, aliveErr := m.supervisor.Alive(Process{PID: record.PID, Containment: record.Containment}); aliveErr == nil {
+			m.remember(record)
+			m.mu.Unlock()
+			return snapshot(record.Record), nil
+		}
+		record, err = m.claimRecoveryCleanup(ctx, record)
+		if err != nil {
+			m.mu.Unlock()
+			return snapshot(record.Record), err
+		}
+	case StatePreparing, StateStarting:
+		record, err = m.claimRecoveryCleanup(ctx, record)
+		if err != nil {
+			m.mu.Unlock()
+			return snapshot(record.Record), err
+		}
+	case StateCleaning:
+		// Cleaning is a durable stop-before-delete intent. A restarted Agent may
+		// safely take over that idempotent work after revalidating the record.
+		m.rememberCleanup(record)
+	default:
+		m.mu.Unlock()
+		return snapshot(record.Record), ErrReconciliationRequired
+	}
+	m.mu.Unlock()
+	return m.Destroy(ctx, executionID)
+}
+
+func (m *Manager) claimRecoveryCleanup(ctx context.Context, record VersionedRecord) (VersionedRecord, error) {
+	if record.State != StateCleaning {
+		record.State = StateCleaning
+		updated, err := m.compareAndSwap(ctx, record)
+		if err != nil {
+			return updated, err
+		}
+		record = updated
+	}
+	m.forget(record.ExecutionID)
+	m.rememberCleanup(record)
+	return record, nil
 }
 
 func NewManager(options Options) (*Manager, error) {
@@ -469,6 +611,63 @@ func (m *Manager) Inspect(ctx context.Context, executionID string) (Snapshot, er
 	return snapshot(record.Record), stateError(record.Record)
 }
 
+// Wait observes completion of the exact descendant boundary owned by this
+// Manager. It does not mutate the runner journal or release the workspace:
+// callers must follow a successful observation with Destroy so cleanup remains
+// a separately durable, fail-closed transition.
+//
+// Agent shutdown cancels the caller context and leaves Running intact for later
+// reconciliation. Controller or transport disconnects must not be used as this
+// context because an already-running job continues locally.
+func (m *Manager) Wait(ctx context.Context, executionID string) (Snapshot, error) {
+	if executionID == "" {
+		return Snapshot{}, ErrInvalidRequest
+	}
+	m.mu.Lock()
+	record, found, err := m.load(ctx, executionID)
+	if err != nil {
+		m.mu.Unlock()
+		return Snapshot{}, err
+	}
+	if !found {
+		m.mu.Unlock()
+		return Snapshot{}, ErrExecutionNotFound
+	}
+	if !validVersionedRecord(record) {
+		m.mu.Unlock()
+		return Snapshot{}, ErrReconciliationRequired
+	}
+	current := snapshot(record.Record)
+	if record.State != StateRunning {
+		m.mu.Unlock()
+		if stateErr := stateError(record.Record); stateErr != nil {
+			return current, stateErr
+		}
+		return current, ErrExecutionConflict
+	}
+	if !m.owns(record) {
+		m.mu.Unlock()
+		return current, ErrReconciliationRequired
+	}
+	waiter, supported := m.supervisor.(CompletionWaiter)
+	if !supported || !m.supervisor.StrongDescendantOwnership() {
+		m.mu.Unlock()
+		return current, ErrStrongOwnershipUnavailable
+	}
+	process := Process{PID: record.PID, Containment: record.Containment}
+	m.mu.Unlock()
+
+	if err := waiter.Wait(ctx, process); err != nil {
+		if ctx.Err() != nil {
+			return current, ctx.Err()
+		}
+		// Raw platform errors may carry path or process detail. Preserve only the
+		// reconciliation classification at this lifecycle boundary.
+		return current, ErrReconciliationRequired
+	}
+	return current, nil
+}
+
 func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, error) {
 	if executionID == "" {
 		return Snapshot{}, ErrInvalidRequest
@@ -532,11 +731,19 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 	if !validWorkspaceRef(record.WorkspaceRef) {
 		return m.quarantine(ctx, record)
 	}
-	if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
-		return m.quarantine(ctx, record)
-	}
-	if err := m.removeRoot(ctx, record.RootName); err != nil {
-		return m.quarantine(ctx, record)
+	process := Process{PID: record.PID, Containment: record.Containment}
+	finalizer, supportsFinalization := m.supervisor.(CleanupFinalizer)
+	if supportsFinalization && validFencedContainment(record.Containment) {
+		if err := m.finalizeCleanup(ctx, finalizer, process, record.RootName, record.WorkspaceRef); err != nil {
+			return m.quarantine(ctx, record)
+		}
+	} else {
+		if ref, refErr := m.workspaceRef(ctx, record.RootName); refErr != nil || ref != record.WorkspaceRef {
+			return m.quarantine(ctx, record)
+		}
+		if err := m.removeRoot(ctx, record.RootName); err != nil {
+			return m.quarantine(ctx, record)
+		}
 	}
 	terminal := record.Record
 	terminal.State = StateReleased
@@ -546,7 +753,48 @@ func (m *Manager) Destroy(ctx context.Context, executionID string) (Snapshot, er
 		return Snapshot{}, err
 	}
 	m.forgetCleanup(record.ExecutionID)
+	if supportsFinalization && validFencedContainment(record.Containment) {
+		// The finalized tombstone bridges the filesystem/journal commit. Once
+		// Released is durable it is safe, bounded residue; try to collect it now,
+		// while Released recovery retries stale residue after an Agent crash.
+		m.garbageCollectCleanup(finalizer, process)
+	}
 	return snapshot(record.Record), nil
+}
+
+func (m *Manager) garbageCollectCleanup(finalizer CleanupFinalizer, process Process) {
+	housekeeping, cancel := context.WithTimeout(
+		context.Background(),
+		cleanupHousekeepingTimeout,
+	)
+	defer cancel()
+	// A failure leaves an inert finalized tombstone as observable residue. The
+	// Released recovery path retries it, but housekeeping never changes or
+	// blocks the already committed terminal state indefinitely.
+	_ = finalizer.GarbageCollectCleanup(housekeeping, process)
+}
+
+func (m *Manager) finalizeCleanup(
+	ctx context.Context,
+	finalizer CleanupFinalizer,
+	process Process,
+	name string,
+	expected WorkspaceRef,
+) error {
+	parent, err := os.OpenRoot(m.runtimeRoot)
+	if err != nil {
+		return ErrCleanupFailed
+	}
+	defer parent.Close()
+	executions, err := parent.OpenRoot("executions")
+	if err != nil {
+		return ErrCleanupFailed
+	}
+	defer executions.Close()
+	if err := finalizer.FinalizeCleanup(ctx, process, executions, name, expected); err != nil {
+		return ErrCleanupFailed
+	}
+	return nil
 }
 
 func (m *Manager) quarantine(ctx context.Context, record VersionedRecord) (Snapshot, error) {

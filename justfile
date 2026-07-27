@@ -7,14 +7,21 @@ default:
 bootstrap:
   mise install
   pnpm --dir web install --frozen-lockfile
+  pnpm --dir api/codegen install --frozen-lockfile
   lefthook install
 
+generate-api:
+  ./scripts/generate-api.sh
+
+generate-api-check:
+  ./scripts/check-generated-api.sh
+
 fmt:
-  gofmt -w cmd internal spec/tewake
+  gofmt -w cmd internal packaging test
   pnpm --dir web format
 
 fmt-check:
-  test -z "$(gofmt -l cmd internal spec/tewake)"
+  test -z "$(gofmt -l cmd internal packaging test)"
   pnpm --dir web format:check
 
 lint:
@@ -33,6 +40,9 @@ test-enrollment-cli-linux:
 test-runner-linux:
   ./scripts/test-runner-linux.sh
 
+test-platform-linux:
+  ./scripts/test-platform-linux.sh
+
 build:
   mkdir -p bin
   go build -trimpath -o bin/tewake ./cmd/tewake
@@ -42,9 +52,9 @@ build:
 build-all:
   ./scripts/cross-build.sh
 
-check: fmt-check lint test build
+check: generate-api-check fmt-check lint test test-platform-linux build
 
-check-quick: fmt-check
+check-quick: generate-api-check fmt-check
   go test ./...
   pnpm --dir web typecheck
 

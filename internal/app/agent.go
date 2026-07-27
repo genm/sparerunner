@@ -15,15 +15,22 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/tewake/internal/store"
 	"github.com/genm/tewake/internal/transport"
 )
 
 const (
-	DefaultDiscoveryTimeout = 3 * time.Second
-	DefaultConnectTimeout   = 30 * time.Second
-	DefaultReconnectDelay   = 5 * time.Second
+	DefaultDiscoveryTimeout       = 3 * time.Second
+	DefaultConnectTimeout         = 30 * time.Second
+	DefaultReconnectDelay         = 5 * time.Second
+	DefaultAgentHeartbeatInterval = time.Second
+	DefaultAgentReadinessTimeout  = 500 * time.Millisecond
 )
+
+var ErrAgentRuntimeDegraded = errors.New("agent runner runtime is degraded")
 
 type JoinOptions struct {
 	StateDirectory    string
@@ -129,7 +136,10 @@ type AgentServeOptions struct {
 	StateDirectory    string
 	ConnectionTimeout time.Duration
 	ReconnectDelay    time.Duration
+	HeartbeatInterval time.Duration
+	ReadinessTimeout  time.Duration
 	Logger            *slog.Logger
+	CommandRuntime    func(context.Context, *AgentState) (*AgentCommandRuntime, error)
 }
 
 func ServeAgent(ctx context.Context, options AgentServeOptions) error {
@@ -141,6 +151,35 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 		return err
 	}
 	defer state.Close()
+	logger := options.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	var commandRuntime *AgentCommandRuntime
+	if options.CommandRuntime != nil {
+		commandRuntime, err = options.CommandRuntime(ctx, state)
+		if err != nil {
+			if ctx.Err() != nil {
+				return nil
+			}
+			return err
+		}
+		if commandRuntime == nil {
+			// Optional native mode is an explicit degraded state: the Agent may
+			// remain reachable for diagnostics, but every snapshot and heartbeat
+			// advertises zero native capacity until a service restart can rebuild
+			// the local ownership boundary.
+			logger.Warn(
+				"agent native runner unavailable",
+				"state", "degraded",
+				"error_class", "native_runner_unavailable",
+			)
+		} else {
+			if err := commandRuntime.Start(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	connectTimeout := options.ConnectionTimeout
 	if connectTimeout <= 0 {
 		connectTimeout = DefaultConnectTimeout
@@ -148,10 +187,6 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 	reconnectDelay := options.ReconnectDelay
 	if reconnectDelay <= 0 {
 		reconnectDelay = DefaultReconnectDelay
-	}
-	logger := options.Logger
-	if logger == nil {
-		logger = slog.Default()
 	}
 	offline := false
 	connectedOnce := false
@@ -165,11 +200,20 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 			}
 			offline = false
 			connectedOnce = true
-			err = runAgentSession(ctx, connection, state)
+			err = runAgentSessionWithOptions(ctx, connection, state, commandRuntime, agentSessionOptions{
+				heartbeatInterval: options.HeartbeatInterval,
+				readinessTimeout:  options.ReadinessTimeout,
+			})
 			connection.CloseNow()
 		}
 		if ctx.Err() != nil {
 			return nil
+		}
+		if errors.Is(err, ErrAgentRuntimeDegraded) {
+			// Reconnecting cannot repair a local journal/outbox authority
+			// failure. Exit so the service manager can restart into the durable
+			// startup recovery path.
+			return ErrAgentRuntimeDegraded
 		}
 		if !offline {
 			logger.Warn("agent controller connection degraded", "state", "offline", "error_class", "controller_connection_failed")
@@ -198,24 +242,356 @@ func confirmAgent(ctx context.Context, state *AgentState, endpoint string) error
 	}{NodeID: state.NodeID})
 }
 
-func runAgentSession(ctx context.Context, connection *websocket.Conn, state *AgentState) error {
+func runAgentSession(ctx context.Context, connection *websocket.Conn, state *AgentState, commandRuntime *AgentCommandRuntime) error {
+	return runAgentSessionWithOptions(ctx, connection, state, commandRuntime, agentSessionOptions{})
+}
+
+type agentSessionOptions struct {
+	heartbeatInterval time.Duration
+	readinessTimeout  time.Duration
+}
+
+func (options agentSessionOptions) normalized() agentSessionOptions {
+	if options.heartbeatInterval <= 0 {
+		options.heartbeatInterval = DefaultAgentHeartbeatInterval
+	}
+	if options.readinessTimeout <= 0 {
+		options.readinessTimeout = DefaultAgentReadinessTimeout
+	}
+	return options
+}
+
+func runAgentSessionWithOptions(
+	ctx context.Context,
+	connection *websocket.Conn,
+	state *AgentState,
+	commandRuntime *AgentCommandRuntime,
+	options agentSessionOptions,
+) error {
+	options = options.normalized()
 	if err := sendAgentMessage(ctx, connection, transport.MessageHello, struct {
 		NodeID string `json:"nodeId"`
 	}{NodeID: state.NodeID}); err != nil {
 		return err
 	}
-	if err := sendAgentMessage(ctx, connection, transport.MessageSnapshot, struct {
-		NodeID string `json:"nodeId"`
-		OS     string `json:"os"`
-		Arch   string `json:"arch"`
-	}{NodeID: state.NodeID, OS: runtime.GOOS, Arch: runtime.GOARCH}); err != nil {
+	runnerVersion := runner.OfficialRunnerVersion
+	if commandRuntime != nil {
+		runnerVersion = commandRuntime.RunnerVersion()
+	}
+	snapshot, err := buildAgentSnapshot(
+		ctx,
+		state,
+		runnerVersion,
+		probeAgentRuntimeReadiness(ctx, commandRuntime, options.readinessTimeout),
+	)
+	if err != nil {
+		return ErrAgentRuntimeDegraded
+	}
+	if err := sendAgentMessage(ctx, connection, transport.MessageSnapshot, snapshot); err != nil {
 		return err
 	}
+	return runAgentSessionActor(ctx, connection, domain.NodeID(state.NodeID), commandRuntime, options)
+}
+
+func probeAgentRuntimeReadiness(
+	ctx context.Context,
+	commandRuntime *AgentCommandRuntime,
+	timeout time.Duration,
+) bool {
+	if commandRuntime == nil {
+		return false
+	}
+	probeContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	return commandRuntime.Ready(probeContext)
+}
+
+func buildAgentSnapshot(
+	ctx context.Context,
+	state *AgentState,
+	runnerVersion string,
+	nativeRunnerReady bool,
+) (transport.AgentSnapshot, error) {
+	if state == nil || state.Store == nil || state.NodeID == "" ||
+		runnerVersion == "" {
+		return transport.AgentSnapshot{}, transport.ErrInvalidCommand
+	}
+	journal, err := state.Store.Snapshot(ctx)
+	if err != nil {
+		return transport.AgentSnapshot{}, err
+	}
+	snapshot := transport.AgentSnapshot{
+		NodeID:             domain.NodeID(state.NodeID),
+		RunnerVersion:      runnerVersion,
+		NativeRunnerReady:  nativeRunnerReady,
+		MaxControllerEpoch: journal.MaxControllerEpoch,
+		Commands:           journal.Commands,
+	}
+	snapshot.OS, snapshot.Arch, err = agentPlatform(runtime.GOOS, runtime.GOARCH)
+	if err != nil {
+		return transport.AgentSnapshot{}, err
+	}
+	for _, observation := range journal.Observations {
+		snapshot.Observations = append(snapshot.Observations, transport.AgentExecutionObservation{
+			ExecutionID:        observation.ExecutionID,
+			State:              observation.State,
+			ObservedAtUnixNano: observation.ObservedAtUnixNano,
+		})
+	}
+	for _, tombstone := range journal.CleanupTombstones {
+		snapshot.CleanupTombstones = append(snapshot.CleanupTombstones, transport.AgentCleanupTombstone{
+			ExecutionID:        tombstone.ExecutionID,
+			FailureCode:        tombstone.FailureCode,
+			RecordedAtUnixNano: tombstone.RecordedAtUnixNano,
+		})
+	}
+	if err := snapshot.Validate(); err != nil {
+		return transport.AgentSnapshot{}, err
+	}
+	return snapshot, nil
+}
+
+func agentPlatform(goos, goarch string) (domain.OperatingSystem, domain.Architecture, error) {
+	var operatingSystem domain.OperatingSystem
+	switch goos {
+	case "linux":
+		operatingSystem = domain.OSLinux
+	case "darwin":
+		operatingSystem = domain.OSMacOS
+	case "windows":
+		operatingSystem = domain.OSWindows
+	default:
+		return "", "", runner.ErrUnsupportedPlatform
+	}
+	var architecture domain.Architecture
+	switch goarch {
+	case "amd64":
+		architecture = domain.ArchAMD64
+	case "arm64":
+		architecture = domain.ArchARM64
+	default:
+		return "", "", runner.ErrUnsupportedPlatform
+	}
+	return operatingSystem, architecture, nil
+}
+
+type agentSessionRead struct {
+	envelope transport.Envelope
+	err      error
+}
+
+func runAgentSessionActor(
+	ctx context.Context,
+	connection *websocket.Conn,
+	nodeID domain.NodeID,
+	commandRuntime *AgentCommandRuntime,
+	options agentSessionOptions,
+) error {
+	sessionCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	heartbeat := time.NewTimer(options.heartbeatInterval)
+	defer heartbeat.Stop()
+	reads := make(chan agentSessionRead, 1)
+	go func() {
+		for {
+			envelope, err := transport.ReadEnvelope(sessionCtx, connection)
+			select {
+			case reads <- agentSessionRead{envelope: envelope, err: err}:
+			case <-sessionCtx.Done():
+				return
+			}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
+	awaitingUpdateAck := ""
+	awaitingHeartbeatAck := ""
 	for {
-		if _, err := transport.ReadEnvelope(ctx, connection); err != nil {
-			return err
+		if commandRuntime != nil && awaitingUpdateAck == "" {
+			pending, err := commandRuntime.PendingUpdates(ctx)
+			if err != nil {
+				return ErrAgentRuntimeDegraded
+			}
+			if len(pending) > 0 {
+				update := transportExecutionUpdate(pending[0].Update)
+				payload, err := transport.EncodeExecutionUpdate(update)
+				if err != nil {
+					return errors.New("agent execution update is invalid")
+				}
+				writeErr := transport.WriteEnvelope(sessionCtx, connection, transport.Envelope{
+					ProtocolVersion: transport.ProtocolVersion,
+					MessageID:       pending[0].MessageID,
+					Type:            transport.MessageExecutionUpdate,
+					Payload:         payload,
+				})
+				clear(payload)
+				if writeErr != nil {
+					return writeErr
+				}
+				awaitingUpdateAck = pending[0].MessageID
+			}
+		}
+
+		var updateReady <-chan struct{}
+		if commandRuntime != nil {
+			updateReady = commandRuntime.UpdateReady()
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-heartbeat.C:
+			if awaitingHeartbeatAck != "" {
+				return errors.New("controller heartbeat acknowledgement missing")
+			}
+			payload, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
+				NodeID: nodeID,
+				NativeRunnerReady: probeAgentRuntimeReadiness(
+					ctx,
+					commandRuntime,
+					options.readinessTimeout,
+				),
+			})
+			if err != nil {
+				return errors.New("agent heartbeat is invalid")
+			}
+			messageID, err := randomMessageID()
+			if err != nil {
+				clear(payload)
+				return err
+			}
+			writeErr := transport.WriteEnvelope(sessionCtx, connection, transport.Envelope{
+				ProtocolVersion: transport.ProtocolVersion,
+				MessageID:       messageID,
+				Type:            transport.MessageHeartbeat,
+				Payload:         payload,
+			})
+			clear(payload)
+			if writeErr != nil {
+				return writeErr
+			}
+			awaitingHeartbeatAck = messageID
+			// The ACK gets a full heartbeat interval even when the live
+			// readiness probe itself was slow.
+			heartbeat.Reset(options.heartbeatInterval)
+		case <-updateReady:
+			continue
+		case read := <-reads:
+			if read.err != nil {
+				return read.err
+			}
+			envelope := read.envelope
+			// Command identities are exact-deduplicated by the durable command
+			// journal, while ACKs are matched to the single in-flight update.
+			// Keeping every envelope ID for the lifetime of a healthy Agent
+			// session would otherwise grow memory once per completed job.
+			switch envelope.Type {
+			case transport.MessagePrepare, transport.MessageStart, transport.MessageCancel:
+				if commandRuntime == nil {
+					clear(envelope.Payload)
+					return errors.New("native runner is unavailable")
+				}
+				if err := dispatchAgentCommand(ctx, options.readinessTimeout, commandRuntime, &envelope, func(messageID string) error {
+					return writeAgentAck(sessionCtx, connection, messageID)
+				}); err != nil {
+					return err
+				}
+			case transport.MessageAck:
+				var acknowledgement struct {
+					MessageID string `json:"messageId"`
+				}
+				if err := decodeStrictJSON(envelope.Payload, &acknowledgement); err != nil {
+					clear(envelope.Payload)
+					return errors.New("controller acknowledgement mismatch")
+				}
+				clear(envelope.Payload)
+				matchesHeartbeat := awaitingHeartbeatAck != "" &&
+					acknowledgement.MessageID == awaitingHeartbeatAck
+				matchesUpdate := awaitingUpdateAck != "" &&
+					acknowledgement.MessageID == awaitingUpdateAck
+				if matchesHeartbeat == matchesUpdate {
+					return errors.New("controller acknowledgement mismatch")
+				}
+				if matchesHeartbeat {
+					awaitingHeartbeatAck = ""
+					continue
+				}
+				if commandRuntime == nil {
+					return errors.New("controller acknowledgement mismatch")
+				}
+				if err := commandRuntime.AcknowledgeUpdate(ctx, awaitingUpdateAck); err != nil {
+					return ErrAgentRuntimeDegraded
+				}
+				awaitingUpdateAck = ""
+			default:
+				clear(envelope.Payload)
+				return errors.New("controller sent an unsupported agent command")
+			}
 		}
 	}
+}
+
+func dispatchAgentCommand(
+	ctx context.Context,
+	readinessTimeout time.Duration,
+	runtime *AgentCommandRuntime,
+	envelope *transport.Envelope,
+	acknowledge func(string) error,
+) error {
+	if runtime == nil || acknowledge == nil {
+		return transport.ErrInvalidCommand
+	}
+	messageID := envelope.MessageID
+	accepted, err := runtime.accept(ctx, readinessTimeout, envelope)
+	if err != nil {
+		return errors.New("controller command was rejected")
+	}
+	// A durable command identity alone is not proof that a one-shot JIT crossed
+	// the platform fence. Execute synchronously to a durable lifecycle outbox
+	// result before ACK; startup reconciliation resolves a process crash in the
+	// remaining commit-to-exec window without persisting the secret.
+	update, executeErr := accepted.Execute(ctx)
+	pending, pendingErr := runtime.PendingUpdates(ctx)
+	if pendingErr != nil || !containsExecutionUpdate(pending, storeExecutionUpdate(update)) {
+		return ErrAgentRuntimeDegraded
+	}
+	// Classified runner failures are delivered through the durable update. They
+	// still acknowledge command admission; only missing durable evidence rejects
+	// the transport command.
+	_ = executeErr
+	return acknowledge(messageID)
+}
+
+func containsExecutionUpdate(
+	pending []store.PendingExecutionUpdate,
+	want store.ExecutionUpdateRecord,
+) bool {
+	for _, update := range pending {
+		if update.Update == want {
+			return true
+		}
+	}
+	return false
+}
+
+func writeAgentAck(ctx context.Context, connection *websocket.Conn, acknowledgedMessageID string) error {
+	payload, err := json.Marshal(struct {
+		MessageID string `json:"messageId"`
+	}{MessageID: acknowledgedMessageID})
+	if err != nil {
+		return err
+	}
+	messageID, err := randomMessageID()
+	if err != nil {
+		return err
+	}
+	return transport.WriteEnvelope(ctx, connection, transport.Envelope{
+		ProtocolVersion: transport.ProtocolVersion,
+		MessageID:       messageID,
+		Type:            transport.MessageAck,
+		Payload:         payload,
+	})
 }
 
 func dialAgent(ctx context.Context, state *AgentState, endpoint string) (*websocket.Conn, error) {

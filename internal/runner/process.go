@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"log/slog"
+	"os"
 	"sync"
 )
 
@@ -185,6 +186,29 @@ type Supervisor interface {
 	// create a process and must return ErrStartFenced.
 	Stop(context.Context, Process) error
 	Alive(Process) (bool, error)
+}
+
+// CompletionWaiter is the optional platform contract used by a long-lived Agent
+// to observe that the complete descendant boundary became empty. A returned nil
+// is only an observation: Manager.Wait deliberately leaves the durable record in
+// Running until the caller invokes Destroy and cleanup is verified.
+//
+// Implementations must honor ctx without inventing a job-duration timeout. A
+// bare listener PID wait is insufficient because workflow descendants may outlive
+// that process.
+type CompletionWaiter interface {
+	Wait(context.Context, Process) error
+}
+
+// CleanupFinalizer is the optional platform transaction that joins verified
+// process absence, workspace removal, and durable fence finalization. It is
+// used only for records with a versioned fenced containment.
+type CleanupFinalizer interface {
+	FinalizeCleanup(context.Context, Process, *os.Root, string, WorkspaceRef) error
+	// GarbageCollectCleanup removes only the finalized tombstone left across the
+	// Released journal commit. Failure is safe residue and must never recreate an
+	// active authority.
+	GarbageCollectCleanup(context.Context, Process) error
 }
 
 func NewSupervisor() Supervisor { return newPlatformSupervisor() }

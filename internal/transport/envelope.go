@@ -36,6 +36,7 @@ const (
 	MessageHello           MessageType = "hello"
 	MessageSnapshot        MessageType = "snapshot"
 	MessageHeartbeat       MessageType = "heartbeat"
+	MessagePrepare         MessageType = "prepare"
 	MessageStart           MessageType = "start"
 	MessageCancel          MessageType = "cancel"
 	MessageExecutionUpdate MessageType = "execution_update"
@@ -62,7 +63,7 @@ func (envelope Envelope) Validate() error {
 		return ErrInvalidEnvelope
 	}
 	switch envelope.Type {
-	case MessageHello, MessageSnapshot, MessageHeartbeat, MessageStart, MessageCancel, MessageExecutionUpdate, MessageLog, MessageAck:
+	case MessageHello, MessageSnapshot, MessageHeartbeat, MessagePrepare, MessageStart, MessageCancel, MessageExecutionUpdate, MessageLog, MessageAck:
 		return nil
 	default:
 		return ErrUnsupportedType

@@ -38,23 +38,32 @@ type AgentSnapshot struct {
 	CleanupTombstones  []CleanupTombstoneSnapshot
 }
 
-// CleanupFailureCode is intentionally closed: raw cleanup errors can contain JIT
-// material, tokens, paths, or runner output and must never enter the journal.
-type CleanupFailureCode string
+// CleanupFailureCode remains a store-facing alias for the domain-owned closed
+// classification.
+type CleanupFailureCode = domain.CleanupFailureCode
 
 const (
-	CleanupVerificationFailed CleanupFailureCode = "cleanup_verification_failed"
-	CleanupProcessResidue     CleanupFailureCode = "process_residue"
-	CleanupWorkspaceRemoval   CleanupFailureCode = "workspace_removal_failed"
+	CleanupVerificationFailed = domain.CleanupVerificationFailed
+	CleanupProcessResidue     = domain.CleanupProcessResidue
+	CleanupWorkspaceRemoval   = domain.CleanupWorkspaceRemoval
 )
 
-func (c CleanupFailureCode) Validate() error {
-	switch c {
-	case CleanupVerificationFailed, CleanupProcessResidue, CleanupWorkspaceRemoval:
-		return nil
-	default:
-		return errors.New("cleanup tombstone failure code is not allowlisted")
+// LookupCommand distinguishes an exact, previously accepted command from a new
+// command without mutating the epoch fence. Agent command admission uses this
+// before expected-state validation so an exact replay can resume an
+// Accept-before-ACK crash, while a command rejected by state validation never
+// gains a durable replay bypass.
+func (s *AgentStore) LookupCommand(ctx context.Context, command domain.Command) (bool, error) {
+	if err := s.requireReady(); err != nil {
+		return false, err
 	}
+	if err := command.Validate(); err != nil {
+		return false, err
+	}
+	if uint64(command.ControllerEpoch) > maxSQLiteInteger {
+		return false, errors.New("controller epoch exceeds SQLite's signed INTEGER range")
+	}
+	return lookupCommand(ctx, s.db, command)
 }
 
 func (s *AgentStore) RecordCommand(ctx context.Context, command domain.Command) (bool, error) {
@@ -73,17 +82,12 @@ func (s *AgentStore) RecordCommand(ctx context.Context, command domain.Command) 
 	}
 	defer tx.Rollback()
 
-	var existing domain.Command
-	readErr := tx.QueryRowContext(ctx, `SELECT command_id, controller_epoch, execution_id, expected_state, payload_digest FROM command_replays WHERE command_id = ?`, command.ID).Scan(&existing.ID, &existing.ControllerEpoch, &existing.ExecutionID, &existing.ExpectedState, &existing.PayloadDigest)
-	switch {
-	case readErr == nil && existing == command:
+	replayed, err := lookupCommand(ctx, tx, command)
+	if err != nil {
+		return false, err
+	}
+	if replayed {
 		return true, nil
-	case readErr == nil && existing.PayloadDigest != command.PayloadDigest:
-		return false, fmt.Errorf("%w: command payload digest", ErrReplayMismatch)
-	case readErr == nil:
-		return false, fmt.Errorf("%w: command identity", ErrReplayMismatch)
-	case !errors.Is(readErr, sql.ErrNoRows):
-		return false, readErr
 	}
 
 	maxEpoch, err := readUintMetadata(ctx, tx, "max_controller_epoch")
@@ -104,40 +108,219 @@ func (s *AgentStore) RecordCommand(ctx context.Context, command domain.Command) 
 	return false, tx.Commit()
 }
 
+func lookupCommand(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, command domain.Command) (bool, error) {
+	var existing domain.Command
+	err := queryer.QueryRowContext(ctx, `SELECT command_id, controller_epoch, execution_id, expected_state, payload_digest FROM command_replays WHERE command_id = ?`, command.ID).Scan(
+		&existing.ID,
+		&existing.ControllerEpoch,
+		&existing.ExecutionID,
+		&existing.ExpectedState,
+		&existing.PayloadDigest,
+	)
+	switch {
+	case err == nil && existing == command:
+		return true, nil
+	case err == nil && existing.PayloadDigest != command.PayloadDigest:
+		return false, fmt.Errorf("%w: command payload digest", ErrReplayMismatch)
+	case err == nil:
+		return false, fmt.Errorf("%w: command identity", ErrReplayMismatch)
+	case errors.Is(err, sql.ErrNoRows):
+		return false, nil
+	default:
+		return false, err
+	}
+}
+
 func (s *AgentStore) RecordObservation(ctx context.Context, observation Observation) error {
 	if err := s.requireReady(); err != nil {
 		return err
 	}
-	if observation.ExecutionID == "" {
-		return errors.New("observation requires execution ID")
-	}
-	if err := observation.State.Validate("observation.state"); err != nil {
+	if err := validateObservation(observation); err != nil {
 		return err
 	}
 	observedAt, err := storeUnixNano(s.now())
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO execution_observations(execution_id, state, observed_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET state=excluded.state, observed_at_unix_nano=excluded.observed_at_unix_nano`, observation.ExecutionID, observation.State, observedAt)
-	return err
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := recordObservationTx(ctx, tx, observation, observedAt, true, false); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *AgentStore) RecordCleanupTombstone(ctx context.Context, tombstone CleanupTombstone) error {
 	if err := s.requireReady(); err != nil {
 		return err
 	}
-	if tombstone.ExecutionID == "" {
-		return errors.New("cleanup tombstone requires execution ID")
-	}
-	if err := tombstone.FailureCode.Validate(); err != nil {
+	if err := validateCleanupTombstone(tombstone); err != nil {
 		return err
 	}
 	recordedAt, err := storeUnixNano(s.now())
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO cleanup_tombstones(execution_id, failure_code, recorded_at_unix_nano) VALUES (?, ?, ?) ON CONFLICT(execution_id) DO UPDATE SET failure_code=excluded.failure_code, recorded_at_unix_nano=excluded.recorded_at_unix_nano`, tombstone.ExecutionID, tombstone.FailureCode, recordedAt)
-	return err
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := recordCleanupTombstoneTx(ctx, tx, tombstone, recordedAt, true); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func validateObservation(observation Observation) error {
+	if observation.ExecutionID == "" {
+		return errors.New("observation requires execution ID")
+	}
+	return observation.State.Validate("observation.state")
+}
+
+func recordObservationTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	observation Observation,
+	observedAt int64,
+	touchEqual bool,
+	allowAdvanced bool,
+) (ObservationSnapshot, error) {
+	previous, found, err := loadObservation(ctx, tx, observation.ExecutionID)
+	if err != nil {
+		return ObservationSnapshot{}, err
+	}
+	if found {
+		switch {
+		case previous.State == observation.State && !touchEqual:
+			return previous, nil
+		case !domain.CanReachExecutionState(previous.State, observation.State):
+			if allowAdvanced && domain.CanReachExecutionState(observation.State, previous.State) {
+				return previous, nil
+			}
+			return ObservationSnapshot{}, errors.New("observation state cannot regress")
+		}
+		observedAt, err = monotonicAgentTimestamp(observedAt, previous.ObservedAtUnixNano, "observation")
+		if err != nil {
+			return ObservationSnapshot{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO execution_observations(
+		execution_id, state, observed_at_unix_nano
+	) VALUES (?, ?, ?)
+	ON CONFLICT(execution_id) DO UPDATE SET
+		state=excluded.state,
+		observed_at_unix_nano=excluded.observed_at_unix_nano`,
+		observation.ExecutionID, observation.State, observedAt); err != nil {
+		return ObservationSnapshot{}, err
+	}
+	return ObservationSnapshot{
+		ExecutionID:        observation.ExecutionID,
+		State:              observation.State,
+		ObservedAtUnixNano: observedAt,
+	}, nil
+}
+
+func loadObservation(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, executionID domain.ExecutionID) (ObservationSnapshot, bool, error) {
+	var observation ObservationSnapshot
+	err := queryer.QueryRowContext(ctx, `SELECT execution_id, state, observed_at_unix_nano
+		FROM execution_observations WHERE execution_id = ?`, executionID).
+		Scan(&observation.ExecutionID, &observation.State, &observation.ObservedAtUnixNano)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ObservationSnapshot{}, false, nil
+	}
+	if err != nil {
+		return ObservationSnapshot{}, false, err
+	}
+	if observation.ExecutionID == "" || observation.ObservedAtUnixNano <= 0 ||
+		observation.State.Validate("observation.state") != nil {
+		return ObservationSnapshot{}, false, errors.New("stored observation failed validation")
+	}
+	return observation, true, nil
+}
+
+func validateCleanupTombstone(tombstone CleanupTombstone) error {
+	if tombstone.ExecutionID == "" {
+		return errors.New("cleanup tombstone requires execution ID")
+	}
+	return tombstone.FailureCode.Validate("cleanup_tombstone.failure_code")
+}
+
+func recordCleanupTombstoneTx(
+	ctx context.Context,
+	tx *sql.Tx,
+	tombstone CleanupTombstone,
+	recordedAt int64,
+	touchEqual bool,
+) (CleanupTombstoneSnapshot, error) {
+	previous, found, err := loadCleanupTombstone(ctx, tx, tombstone.ExecutionID)
+	if err != nil {
+		return CleanupTombstoneSnapshot{}, err
+	}
+	if found {
+		if previous.FailureCode != tombstone.FailureCode {
+			return CleanupTombstoneSnapshot{}, errors.New("cleanup tombstone classification is immutable")
+		}
+		if !touchEqual {
+			return previous, nil
+		}
+		recordedAt, err = monotonicAgentTimestamp(recordedAt, previous.RecordedAtUnixNano, "cleanup tombstone")
+		if err != nil {
+			return CleanupTombstoneSnapshot{}, err
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO cleanup_tombstones(
+		execution_id, failure_code, recorded_at_unix_nano
+	) VALUES (?, ?, ?)
+	ON CONFLICT(execution_id) DO UPDATE SET
+		failure_code=excluded.failure_code,
+		recorded_at_unix_nano=excluded.recorded_at_unix_nano`,
+		tombstone.ExecutionID, tombstone.FailureCode, recordedAt); err != nil {
+		return CleanupTombstoneSnapshot{}, err
+	}
+	return CleanupTombstoneSnapshot{
+		ExecutionID:        tombstone.ExecutionID,
+		FailureCode:        tombstone.FailureCode,
+		RecordedAtUnixNano: recordedAt,
+	}, nil
+}
+
+func loadCleanupTombstone(ctx context.Context, queryer interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, executionID domain.ExecutionID) (CleanupTombstoneSnapshot, bool, error) {
+	var tombstone CleanupTombstoneSnapshot
+	err := queryer.QueryRowContext(ctx, `SELECT execution_id, failure_code, recorded_at_unix_nano
+		FROM cleanup_tombstones WHERE execution_id = ?`, executionID).
+		Scan(&tombstone.ExecutionID, &tombstone.FailureCode, &tombstone.RecordedAtUnixNano)
+	if errors.Is(err, sql.ErrNoRows) {
+		return CleanupTombstoneSnapshot{}, false, nil
+	}
+	if err != nil {
+		return CleanupTombstoneSnapshot{}, false, err
+	}
+	if tombstone.ExecutionID == "" || tombstone.RecordedAtUnixNano <= 0 ||
+		tombstone.FailureCode.Validate("cleanup_tombstone.failure_code") != nil {
+		return CleanupTombstoneSnapshot{}, false, errors.New("stored cleanup tombstone failed validation")
+	}
+	return tombstone, true, nil
+}
+
+func monotonicAgentTimestamp(candidate, previous int64, subject string) (int64, error) {
+	if candidate > previous {
+		return candidate, nil
+	}
+	if previous == int64(^uint64(0)>>1) {
+		return 0, fmt.Errorf("%s timestamp is exhausted", subject)
+	}
+	return previous + 1, nil
 }
 
 // Snapshot returns only typed replay and cleanup observations. Command payloads,
@@ -174,6 +357,10 @@ func (s *AgentStore) Snapshot(ctx context.Context) (AgentSnapshot, error) {
 		}
 		result.Commands = append(result.Commands, command)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AgentSnapshot{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return AgentSnapshot{}, err
 	}
@@ -198,6 +385,10 @@ func (s *AgentStore) Snapshot(ctx context.Context) (AgentSnapshot, error) {
 		}
 		result.Observations = append(result.Observations, observation)
 	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AgentSnapshot{}, err
+	}
 	if err := rows.Close(); err != nil {
 		return AgentSnapshot{}, err
 	}
@@ -216,11 +407,15 @@ func (s *AgentStore) Snapshot(ctx context.Context) (AgentSnapshot, error) {
 			rows.Close()
 			return AgentSnapshot{}, errors.New("stored cleanup tombstone failed validation")
 		}
-		if err := tombstone.FailureCode.Validate(); err != nil {
+		if err := tombstone.FailureCode.Validate("cleanup_tombstone.failure_code"); err != nil {
 			rows.Close()
 			return AgentSnapshot{}, err
 		}
 		result.CleanupTombstones = append(result.CleanupTombstones, tombstone)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return AgentSnapshot{}, err
 	}
 	if err := rows.Close(); err != nil {
 		return AgentSnapshot{}, err

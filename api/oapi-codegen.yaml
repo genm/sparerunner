@@ -1,0 +1,9 @@
+package: gen
+output: internal/api/gen/openapi.gen.go
+generate:
+  models: true
+  client: true
+  std-http-server: true
+  embedded-spec: true
+output-options:
+  skip-prune: true

@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/genm/tewake/internal/enroll"
@@ -86,6 +87,16 @@ type ControllerStore struct {
 	*baseStore
 	revocationMu   sync.RWMutex
 	revocationHook func(enroll.Credential)
+	auditHealthy   atomic.Bool
+	auditChange    chan struct{}
+	auditGate      sync.RWMutex
+
+	// beforeGitHubQueueCommit is a test seam at the audit-gated commit point.
+	// Production stores leave it nil.
+	beforeGitHubQueueCommit func()
+	// beforeManagementMutationCommit is the equivalent deterministic race seam
+	// for audited management transactions. Production stores leave it nil.
+	beforeManagementMutationCommit func()
 }
 
 // AgentStore owns the local journal. It stores identities and allowlisted observed
@@ -100,7 +111,15 @@ func OpenController(ctx context.Context, path string, options Options) (*Control
 	if base == nil {
 		return nil, err
 	}
-	return &ControllerStore{baseStore: base}, err
+	store := &ControllerStore{
+		baseStore:   base,
+		auditChange: make(chan struct{}),
+	}
+	store.auditHealthy.Store(true)
+	if store.Ready() != nil {
+		store.degradeManagementAudit()
+	}
+	return store, err
 }
 
 func OpenAgent(ctx context.Context, path string, options Options) (*AgentStore, error) {
@@ -298,11 +317,14 @@ func validateMigrationOwnership(ctx context.Context, q queryer, role string, mig
 	if len(applied) == 0 {
 		return nil, fmt.Errorf("%w: migration history is empty", ErrUnownedDatabase)
 	}
-	if err := validateMigrationVersions(applied, migrations); err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrCorruptBackup, err)
-	}
+	// Role is an independent ownership marker. Check it before comparing
+	// role-specific migration counts so one role advancing beyond another still
+	// reports the owning boundary instead of masquerading as a future schema.
 	if err := verifyRole(ctx, q, role); err != nil {
 		return nil, err
+	}
+	if err := validateMigrationVersions(applied, migrations); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrCorruptBackup, err)
 	}
 	expectedSchema, expectedMetadata, err := expectedMigrationPrefix(ctx, role, migrations, len(applied))
 	if err != nil {
@@ -630,7 +652,10 @@ func validateOpenDatabase(ctx context.Context, db *sql.DB, role string) error {
 	if err := validateForeignKeys(ctx, db); err != nil {
 		return err
 	}
-	return validateColumnAllowlist(ctx, db, role)
+	if err := validateColumnAllowlist(ctx, db, role); err != nil {
+		return err
+	}
+	return validateDataInvariants(ctx, db, role)
 }
 
 func validateMetadata(ctx context.Context, db queryer, role string) error {
@@ -721,23 +746,92 @@ func migrationFS(role string) fs.FS {
 
 func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error {
 	expected := map[string][]string{
-		"store_metadata":         {"key", "value"},
-		"schema_migrations":      {"version", "applied_at_unix_nano"},
-		"command_replays":        {"command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
-		"execution_observations": {"execution_id", "state", "observed_at_unix_nano"},
-		"cleanup_tombstones":     {"execution_id", "failure_code", "recorded_at_unix_nano"},
-		"slot_reservations":      {"node_id", "slot_index", "target_id", "execution_id"},
-		"executions":             {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
-		"processed_messages":     {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
-		"enrollment_tokens":      {"token_id", "secret_digest", "controller_epoch"},
-		"enrolled_nodes":         {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
-		"enrollment_replays":     {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
+		"store_metadata":                    {"key", "value"},
+		"schema_migrations":                 {"version", "applied_at_unix_nano"},
+		"command_replays":                   {"command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
+		"execution_observations":            {"execution_id", "state", "observed_at_unix_nano"},
+		"cleanup_tombstones":                {"execution_id", "failure_code", "recorded_at_unix_nano"},
+		"runner_journal_records":            {"execution_id", "spec_digest", "jit_digest", "state", "root_name", "pid", "tombstone", "containment_backend", "containment_owner_id", "containment_scope", "containment_host_epoch", "containment_invocation_id", "containment_fence_token", "workspace_backend", "workspace_owner_id", "revision", "mutation_token"},
+		"execution_update_outbox":           {"sequence", "message_id", "node_id", "command_id", "execution_id", "state", "replayed", "error_code"},
+		"accepted_command_types":            {"command_id", "command_type"},
+		"slot_reservations":                 {"node_id", "slot_index", "target_id", "execution_id"},
+		"executions":                        {"id", "target_id", "node_id", "slot_index", "state", "created_at_unix_nano"},
+		"processed_messages":                {"scale_set_id", "message_id", "message_digest", "execution_id", "created_at_unix_nano"},
+		"enrollment_tokens":                 {"token_id", "secret_digest", "controller_epoch"},
+		"enrolled_nodes":                    {"node_id", "current_serial", "credential_epoch", "not_before_unix_nano", "not_after_unix_nano", "revoked"},
+		"node_administrative_states":        {"node_id", "administrative_state"},
+		"enrollment_replays":                {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
+		"agent_commands":                    {"command_id", "node_id", "command_type", "controller_epoch", "execution_id", "expected_state", "payload_digest", "issued_at_unix_nano"},
+		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano", "runner_version"},
+		"agent_snapshot_commands":           {"node_id", "command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
+		"agent_snapshot_observations":       {"node_id", "execution_id", "state", "agent_observed_at_unix_nano", "received_at_unix_nano"},
+		"agent_snapshot_cleanup_tombstones": {"node_id", "execution_id", "failure_code", "agent_recorded_at_unix_nano", "received_at_unix_nano"},
+		"agent_execution_updates":           {"node_id", "message_id", "command_id", "execution_id", "state", "replayed", "error_code", "payload_digest", "received_at_unix_nano"},
+		"agent_snapshot_authority":          {"node_id", "revision", "snapshot_digest", "accepted_by_controller_epoch", "committed_at_unix_nano"},
+		"agent_current_snapshot_commands":   {"node_id", "command_id", "snapshot_digest"},
+		"agent_current_snapshot_observations": {
+			"node_id", "execution_id", "state", "agent_observed_at_unix_nano",
+			"snapshot_digest",
+		},
+		"agent_current_snapshot_tombstones": {
+			"node_id", "execution_id", "failure_code",
+			"agent_recorded_at_unix_nano", "snapshot_digest",
+		},
+		"reconciliation_agent_commands":   {"command_id", "snapshot_digest"},
+		"github_session_demand":           {"scale_set_id", "session_id", "total_available_jobs", "total_acquired_jobs", "total_assigned_jobs", "total_running_jobs", "total_registered_runners", "total_busy_runners", "total_idle_runners", "observed_at_unix_nano"},
+		"github_queue_messages":           {"scale_set_id", "message_id", "message_digest", "committed_at_unix_nano"},
+		"github_message_jobs":             {"scale_set_id", "message_id", "event_index", "event_type", "runner_request_id", "runner_id", "runner_name", "result", "repository_name", "owner_name", "job_id", "workflow_run_id"},
+		"github_job_claims":               {"scale_set_id", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_attempts":             {"scale_set_id", "runner_request_id", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_acquire_attempts":         {"scale_set_id", "runner_request_id", "attempt", "evidence_message_id", "controller_epoch", "state", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_snapshot_authority":   {"scale_set_id", "runner_request_id", "attempt", "snapshot_digest", "controller_epoch", "decision", "updated_at_unix_nano", "github_session_generation"},
+		"github_unpicked_requeue_intents": {"scale_set_id", "runner_request_id", "jit_attempt", "old_execution_id", "replacement_execution_id", "source_message_id", "source_event_index", "controller_epoch", "created_at_unix_nano", "updated_at_unix_nano"},
+		"runner_profile_update_policies":  {"profile_id", "version_policy", "runner_version", "revision"},
+		"github_target_runtime_bindings":  {"target_id", "scale_set_id", "profile_id"},
+		"github_runner_release_state":     {"singleton", "latest_version", "latest_released_at_unix_nano", "observed_at_unix_nano", "freshness", "failure_class", "failure_at_unix_nano", "generation"},
+		"github_scale_set_session_health": {"scale_set_id", "freshness", "last_success_at_unix_nano", "failure_class", "failure_at_unix_nano", "transition_generation"},
+		"management_configuration_state":  {"singleton", "revision", "fleet_max_runners"},
+		"management_node_configurations":  {"node_id", "display_name", "max_runners"},
+		"management_runner_profiles": {
+			"profile_id", "label", "operating_system", "architecture",
+			"min_available_memory_bytes", "version_policy", "runner_version",
+			"runtime",
+		},
+		"management_github_targets": {
+			"target_id", "installation_id", "scope_kind", "scope",
+			"visibility", "runner_group_access_safe", "scale_set_name",
+			"profile_id", "scale_set_id",
+		},
+		"management_audit_events": {
+			"sequence", "occurred_at_unix_nano", "actor", "action",
+			"outcome", "resource_kind", "resource_id", "error_code",
+			"request_id", "revision",
+		},
 	}
 	tables := []string{"store_metadata", "schema_migrations"}
 	if role == "controller" {
-		tables = append(tables, "slot_reservations", "executions", "processed_messages", "enrollment_tokens", "enrolled_nodes", "enrollment_replays")
+		tables = append(tables,
+			"slot_reservations", "executions", "processed_messages",
+			"enrollment_tokens", "enrolled_nodes", "node_administrative_states", "enrollment_replays",
+			"agent_commands", "agent_session_snapshots", "agent_snapshot_commands",
+			"agent_snapshot_observations", "agent_snapshot_cleanup_tombstones",
+			"agent_execution_updates",
+			"agent_snapshot_authority", "agent_current_snapshot_commands",
+			"agent_current_snapshot_observations",
+			"agent_current_snapshot_tombstones",
+			"reconciliation_agent_commands",
+			"github_session_demand", "github_queue_messages", "github_message_jobs",
+			"github_job_claims", "github_jit_attempts",
+			"github_acquire_attempts", "github_jit_snapshot_authority",
+			"github_unpicked_requeue_intents",
+			"runner_profile_update_policies", "github_target_runtime_bindings",
+			"github_runner_release_state", "github_scale_set_session_health",
+			"management_configuration_state",
+			"management_node_configurations", "management_runner_profiles",
+			"management_github_targets", "management_audit_events",
+		)
 	} else {
-		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones")
+		tables = append(tables, "command_replays", "execution_observations", "cleanup_tombstones", "runner_journal_records", "execution_update_outbox", "accepted_command_types")
 	}
 	for _, table := range tables {
 		rows, err := db.QueryContext(ctx, "PRAGMA table_info("+table+")")
@@ -880,6 +974,249 @@ func validateForeignKeys(ctx context.Context, db queryer) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("%w: foreign key check: %v", ErrCorruptBackup, err)
+	}
+	return nil
+}
+
+func validateDataInvariants(ctx context.Context, db queryer, role string) error {
+	if role != "controller" {
+		return nil
+	}
+	var invalid int
+	err := db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT executions.id
+			FROM executions
+			LEFT JOIN slot_reservations
+				ON slot_reservations.execution_id = executions.id
+			GROUP BY executions.id, executions.state
+			HAVING (
+				executions.state IN (
+					'reserved', 'preparing', 'running', 'cleaning',
+					'cleanup_failed'
+				)
+				AND count(slot_reservations.execution_id) != 1
+			) OR (
+				executions.state IN ('released', 'failed', 'quarantined')
+				AND count(slot_reservations.execution_id) != 0
+			)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf("%w: validate execution reservation invariant: %v", ErrCorruptBackup, err)
+	}
+	if invalid != 0 {
+		return fmt.Errorf("%w: execution reservation invariant failed", ErrCorruptBackup)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_unpicked_requeue_intents intent
+			JOIN github_job_claims claim
+				ON claim.scale_set_id = intent.scale_set_id
+				AND claim.runner_request_id = intent.runner_request_id
+			JOIN github_jit_attempts attempt
+				ON attempt.scale_set_id = intent.scale_set_id
+				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.attempt = intent.jit_attempt
+			JOIN github_message_jobs source
+				ON source.scale_set_id = intent.scale_set_id
+				AND source.message_id = intent.source_message_id
+				AND source.event_index = intent.source_event_index
+			JOIN executions old_execution
+				ON old_execution.id = intent.old_execution_id
+			WHERE claim.execution_id != intent.old_execution_id
+				OR claim.state != 'reconciliation_required'
+				OR claim.current_jit_attempt != intent.jit_attempt
+				OR attempt.state NOT IN ('started', 'removal_pending')
+				OR source.event_type != 'JobAvailable'
+				OR source.runner_request_id != intent.runner_request_id
+				OR intent.source_message_id = claim.source_message_id
+				OR old_execution.state NOT IN ('released', 'failed')
+				OR EXISTS (
+					SELECT 1 FROM slot_reservations reservation
+					WHERE reservation.execution_id = intent.old_execution_id
+				)
+				OR EXISTS (
+					SELECT 1 FROM executions proposed
+					WHERE proposed.id = intent.replacement_execution_id
+				)
+				OR COALESCE((
+					SELECT acquire.state
+					FROM github_acquire_attempts acquire
+					WHERE acquire.scale_set_id = intent.scale_set_id
+						AND acquire.runner_request_id =
+							intent.runner_request_id
+					ORDER BY acquire.attempt DESC
+					LIMIT 1
+				), '') != 'acquired'
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate unpicked requeue intent invariant: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: unpicked requeue intent invariant failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_unpicked_requeue_intents intent
+			JOIN github_jit_attempts attempt
+				ON attempt.scale_set_id = intent.scale_set_id
+				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.attempt = intent.jit_attempt
+			WHERE (
+				attempt.state = 'started'
+				AND EXISTS (
+					SELECT 1
+					FROM github_jit_snapshot_authority authority
+					WHERE authority.scale_set_id = intent.scale_set_id
+						AND authority.runner_request_id =
+							intent.runner_request_id
+						AND authority.attempt = intent.jit_attempt
+				)
+			) OR (
+				attempt.state = 'removal_pending'
+				AND NOT EXISTS (
+					SELECT 1
+					FROM github_jit_snapshot_authority authority
+					WHERE authority.scale_set_id = intent.scale_set_id
+						AND authority.runner_request_id =
+							intent.runner_request_id
+						AND authority.attempt = intent.jit_attempt
+						AND authority.decision IN (
+							'unpicked_requeue_removal_issued',
+							'unpicked_requeue_absence_pending'
+						)
+						AND authority.github_session_generation > 0
+				)
+			)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate unpicked requeue observation authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: unpicked requeue observation authority failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM github_acquire_attempts acquire
+			JOIN github_job_claims claim
+				ON claim.scale_set_id = acquire.scale_set_id
+				AND claim.runner_request_id = acquire.runner_request_id
+			JOIN executions execution
+				ON execution.id = claim.execution_id
+			WHERE acquire.state = 'reconciled_pending'
+				AND (
+					acquire.attempt < 2
+					OR acquire.evidence_message_id != claim.source_message_id
+					OR claim.state != 'pending'
+					OR claim.current_jit_attempt < 1
+					OR execution.state != 'reserved'
+					OR acquire.attempt != (
+						SELECT max(latest.attempt)
+						FROM github_acquire_attempts latest
+						WHERE latest.scale_set_id = acquire.scale_set_id
+							AND latest.runner_request_id =
+								acquire.runner_request_id
+					)
+					OR NOT EXISTS (
+						SELECT 1
+						FROM github_jit_attempts jit
+						WHERE jit.scale_set_id = claim.scale_set_id
+							AND jit.runner_request_id =
+								claim.runner_request_id
+							AND jit.attempt = claim.current_jit_attempt
+							AND jit.state = 'reconciled_absent'
+							AND jit.runner_id IS NULL
+							AND jit.jit_digest IS NULL
+							AND jit.start_command_id = ''
+					)
+					OR NOT EXISTS (
+						SELECT 1
+						FROM github_message_jobs source
+						WHERE source.scale_set_id = claim.scale_set_id
+							AND source.message_id =
+								claim.source_message_id
+							AND source.event_type = 'JobAvailable'
+							AND source.runner_request_id =
+								claim.runner_request_id
+					)
+					OR EXISTS (
+						SELECT 1
+						FROM github_unpicked_requeue_intents intent
+						WHERE intent.scale_set_id = claim.scale_set_id
+							AND intent.runner_request_id =
+								claim.runner_request_id
+					)
+				)
+		)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate reconciled replacement dispatch authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: reconciled replacement dispatch authority failed",
+			ErrCorruptBackup,
+		)
+	}
+	err = db.QueryRowContext(ctx, `
+		SELECT
+			(SELECT count(*) FROM management_configuration_state) != 1
+			OR NOT EXISTS (
+				SELECT 1
+				FROM management_configuration_state
+				WHERE singleton = 1
+					AND revision >= 0
+					AND (
+						fleet_max_runners IS NULL
+						OR fleet_max_runners >= 1
+					)
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM enrolled_nodes node
+				LEFT JOIN management_node_configurations configuration
+					ON configuration.node_id = node.node_id
+				WHERE configuration.node_id IS NULL
+			)
+			OR EXISTS (
+				SELECT 1
+				FROM management_node_configurations configuration
+				LEFT JOIN enrolled_nodes node
+					ON node.node_id = configuration.node_id
+				WHERE node.node_id IS NULL
+			)`).Scan(&invalid)
+	if err != nil {
+		return fmt.Errorf(
+			"%w: validate management configuration authority: %v",
+			ErrCorruptBackup,
+			err,
+		)
+	}
+	if invalid != 0 {
+		return fmt.Errorf(
+			"%w: management configuration authority failed",
+			ErrCorruptBackup,
+		)
 	}
 	return nil
 }

@@ -44,6 +44,16 @@ func (p Package) key() string {
 	return p.Version + "-" + p.Platform.OS + "-" + p.Platform.Arch + "-" + p.Checksum
 }
 
+// CacheKey returns the fixed cache entry name only for an audited official
+// package. Privileged consumers use it to derive a path without accepting an
+// Agent-provided asset name or arbitrary relative path.
+func (p Package) CacheKey() (string, error) {
+	if !p.valid() {
+		return "", ErrInvalidRequest
+	}
+	return p.key(), nil
+}
+
 func (p Package) valid() bool {
 	if p.Version != OfficialRunnerVersion || len(p.Checksum) != sha256.Size*2 || p.Asset == "" || p.Size <= 0 {
 		return false

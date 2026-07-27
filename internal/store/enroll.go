@@ -19,14 +19,28 @@ func (store *ControllerStore) CreateToken(ctx context.Context, token enroll.Toke
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if token.Epoch == 0 || token.Epoch > maxSQLiteInteger || allZero(token.ID[:]) || allZero(token.SecretDigest[:]) {
-		return enroll.ErrTokenEpochMismatch
-	}
 	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback()
+	if err := createEnrollmentToken(ctx, tx, token); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func createEnrollmentToken(
+	ctx context.Context,
+	tx *sql.Tx,
+	token enroll.TokenRecord,
+) error {
+	if token.Epoch == 0 ||
+		token.Epoch > maxSQLiteInteger ||
+		allZero(token.ID[:]) ||
+		allZero(token.SecretDigest[:]) {
+		return enroll.ErrTokenEpochMismatch
+	}
 	current, err := readUintMetadata(ctx, tx, "controller_epoch")
 	if err != nil {
 		return err
@@ -40,17 +54,14 @@ func (store *ControllerStore) CreateToken(ctx context.Context, token enroll.Toke
 	if _, err := tx.ExecContext(ctx, `INSERT INTO enrollment_tokens(token_id, secret_digest, controller_epoch) VALUES (?, ?, ?)`, token.ID[:], token.SecretDigest[:], token.Epoch); err != nil {
 		return err
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied enroll.TokenRecord, node enroll.NodeRecord) error {
 	if err := store.requireReady(); err != nil {
 		return err
 	}
-	if supplied.Epoch == 0 || supplied.Epoch > maxSQLiteInteger || allZero(supplied.ID[:]) || allZero(supplied.SecretDigest[:]) || !canonicalNodeID(node.NodeID) || node.Credential.NodeID != node.NodeID || !canonicalSerial(node.Credential.Serial) || node.Credential.Epoch == 0 || allZero(node.PublicKeyDigest[:]) || len(node.CertificateDER) == 0 || len(node.CACertificateDER) == 0 {
-		return enroll.ErrCredentialRejected
-	}
-	before, after, err := enrollmentTimes(node.Credential)
+	before, after, err := validateEnrollmentInput(supplied, node)
 	if err != nil {
 		return err
 	}
@@ -59,33 +70,159 @@ func (store *ControllerStore) ConsumeEnrollment(ctx context.Context, supplied en
 		return err
 	}
 	defer tx.Rollback()
-	var digest []byte
-	var epoch uint64
-	err = tx.QueryRowContext(ctx, `SELECT secret_digest, controller_epoch FROM enrollment_tokens WHERE token_id = ?`, supplied.ID[:]).Scan(&digest, &epoch)
-	if errors.Is(err, sql.ErrNoRows) {
-		return enroll.ErrTokenNotFound
+	if _, err := consumeEnrollment(
+		ctx,
+		tx,
+		supplied,
+		node,
+		before,
+		after,
+	); err != nil {
+		return err
 	}
+	return tx.Commit()
+}
+
+// ConsumeEnrollmentWithAudit makes the node, management revision, replay
+// identity, one-time token consumption, and success evidence one durable unit.
+// The join-code actor records that this mutation used an admin-issued
+// capability without misattributing it to the interactive administrator.
+func (store *ControllerStore) ConsumeEnrollmentWithAudit(
+	ctx context.Context,
+	supplied enroll.TokenRecord,
+	node enroll.NodeRecord,
+	audit AuditRecord,
+) error {
+	if err := store.requireReady(); err != nil {
+		return err
+	}
+	before, after, err := validateEnrollmentInput(supplied, node)
 	if err != nil {
 		return err
 	}
+	if err := validateExactAudit(
+		audit,
+		AuditActorJoinCode,
+		AuditActionNodeEnrolled,
+		AuditResourceNode,
+		node.NodeID,
+	); err != nil {
+		return err
+	}
+	if !store.ManagementAuditHealthy() {
+		return ErrManagementAuditPersistence
+	}
+	occurredAt, err := storeUnixNano(store.now())
+	if err != nil {
+		return err
+	}
+	tx, err := store.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	revision, err := consumeEnrollment(
+		ctx,
+		tx,
+		supplied,
+		node,
+		before,
+		after,
+	)
+	if err != nil {
+		return err
+	}
+	if _, err := insertAuditEvent(
+		ctx,
+		tx,
+		occurredAt,
+		revision,
+		audit,
+	); err != nil {
+		store.degradeManagementAudit()
+		return fmt.Errorf("%w: %v", ErrManagementAuditPersistence, err)
+	}
+	return store.commitWithManagementAudit(
+		tx,
+		store.beforeManagementMutationCommit,
+	)
+}
+
+func validateEnrollmentInput(
+	supplied enroll.TokenRecord,
+	node enroll.NodeRecord,
+) (int64, int64, error) {
+	if supplied.Epoch == 0 ||
+		supplied.Epoch > maxSQLiteInteger ||
+		allZero(supplied.ID[:]) ||
+		allZero(supplied.SecretDigest[:]) ||
+		!canonicalNodeID(node.NodeID) ||
+		node.Credential.NodeID != node.NodeID ||
+		!canonicalSerial(node.Credential.Serial) ||
+		node.Credential.Epoch == 0 ||
+		allZero(node.PublicKeyDigest[:]) ||
+		len(node.CertificateDER) == 0 ||
+		len(node.CACertificateDER) == 0 {
+		return 0, 0, enroll.ErrCredentialRejected
+	}
+	return enrollmentTimes(node.Credential)
+}
+
+func consumeEnrollment(
+	ctx context.Context,
+	tx *sql.Tx,
+	supplied enroll.TokenRecord,
+	node enroll.NodeRecord,
+	before int64,
+	after int64,
+) (uint64, error) {
+	var digest []byte
+	var epoch uint64
+	err := tx.QueryRowContext(ctx, `SELECT secret_digest, controller_epoch FROM enrollment_tokens WHERE token_id = ?`, supplied.ID[:]).Scan(&digest, &epoch)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, enroll.ErrTokenNotFound
+	}
+	if err != nil {
+		return 0, err
+	}
 	if epoch != supplied.Epoch {
-		return enroll.ErrTokenEpochMismatch
+		return 0, enroll.ErrTokenEpochMismatch
 	}
 	if len(digest) != len(supplied.SecretDigest) || subtle.ConstantTimeCompare(digest, supplied.SecretDigest[:]) != 1 {
-		return enroll.ErrTokenSecretMismatch
+		return 0, enroll.ErrTokenSecretMismatch
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO enrolled_nodes(node_id, current_serial, credential_epoch, not_before_unix_nano, not_after_unix_nano, revoked) VALUES (?, ?, ?, ?, ?, 0)`, node.NodeID, node.Credential.Serial, node.Credential.Epoch, before, after); err != nil {
-		return fmt.Errorf("create enrolled node: %w", err)
+		return 0, fmt.Errorf("create enrolled node: %w", err)
+	}
+	// Migration 011 creates the node's default management configuration from
+	// the same enrolled_nodes insert. Advance the shared ETag in this
+	// transaction so a client that read configuration before enrollment cannot
+	// overwrite the newly added node with an apparently current revision.
+	managementRevision, err := readManagementRevision(ctx, tx)
+	if err != nil {
+		return 0, err
+	}
+	if managementRevision >= maxSQLiteInteger {
+		return 0, ErrManagementConfiguration
+	}
+	nextRevision := managementRevision + 1
+	if err := updateManagementRevision(
+		ctx,
+		tx,
+		managementRevision,
+		nextRevision,
+	); err != nil {
+		return 0, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO enrollment_replays(token_id, secret_digest, controller_epoch, public_key_digest, node_id, certificate_der, ca_der) VALUES (?, ?, ?, ?, ?, ?, ?)`, supplied.ID[:], supplied.SecretDigest[:], supplied.Epoch, node.PublicKeyDigest[:], node.NodeID, node.CertificateDER, node.CACertificateDER); err != nil {
-		return fmt.Errorf("create enrollment replay: %w", err)
+		return 0, fmt.Errorf("create enrollment replay: %w", err)
 	}
 	if result, err := tx.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, supplied.ID[:]); err != nil {
-		return err
+		return 0, err
 	} else if affected, _ := result.RowsAffected(); affected != 1 {
-		return enroll.ErrTokenNotFound
+		return 0, enroll.ErrTokenNotFound
 	}
-	return tx.Commit()
+	return nextRevision, nil
 }
 
 func (store *ControllerStore) ReplayEnrollment(ctx context.Context, supplied enroll.TokenRecord, csrDigest [32]byte) (enroll.NodeRecord, error) {
@@ -134,28 +271,60 @@ func (store *ControllerStore) CancelToken(ctx context.Context, tokenID [16]byte)
 		return err
 	}
 	defer tx.Rollback()
+	revoked, err := store.cancelEnrollmentToken(ctx, tx, tokenID)
+	if err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if revoked != nil {
+		store.notifyRevocation(*revoked)
+	}
+	return nil
+}
+
+func (store *ControllerStore) cancelEnrollmentToken(
+	ctx context.Context,
+	tx *sql.Tx,
+	tokenID [16]byte,
+) (*enroll.Credential, error) {
 	if result, deleteErr := tx.ExecContext(ctx, `DELETE FROM enrollment_tokens WHERE token_id = ?`, tokenID[:]); deleteErr != nil {
-		return deleteErr
+		return nil, deleteErr
 	} else if affected, _ := result.RowsAffected(); affected == 1 {
-		return tx.Commit()
+		return nil, nil
 	}
 	var nodeID string
-	var epoch uint64
-	if err := tx.QueryRowContext(ctx, `SELECT n.node_id, n.credential_epoch FROM enrollment_replays r JOIN enrolled_nodes n ON n.node_id=r.node_id WHERE r.token_id=?`, tokenID[:]).Scan(&nodeID, &epoch); errors.Is(err, sql.ErrNoRows) {
-		return enroll.ErrTokenNotFound
+	if err := tx.QueryRowContext(
+		ctx,
+		`SELECT n.node_id
+		 FROM enrollment_replays r
+		 JOIN enrolled_nodes n ON n.node_id = r.node_id
+		 WHERE r.token_id = ?`,
+		tokenID[:],
+	).Scan(&nodeID); errors.Is(err, sql.ErrNoRows) {
+		return nil, enroll.ErrTokenNotFound
 	} else if err != nil {
-		return err
+		return nil, err
 	}
-	if epoch >= maxSQLiteInteger {
-		return enroll.ErrCredentialRejected
+	credential, revoked, err := store.readCredential(ctx, tx, nodeID)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := tx.ExecContext(ctx, `UPDATE enrolled_nodes SET revoked=1, credential_epoch=? WHERE node_id=? AND revoked=0`, epoch+1, nodeID); err != nil {
-		return err
+	if revoked || credential.Epoch >= maxSQLiteInteger {
+		return nil, enroll.ErrCredentialRejected
+	}
+	result, err := tx.ExecContext(ctx, `UPDATE enrolled_nodes SET revoked=1, credential_epoch=? WHERE node_id=? AND revoked=0`, credential.Epoch+1, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	if affected, _ := result.RowsAffected(); affected != 1 {
+		return nil, enroll.ErrCredentialRejected
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM enrollment_replays WHERE token_id=?`, tokenID[:]); err != nil {
-		return err
+		return nil, err
 	}
-	return tx.Commit()
+	return &credential, nil
 }
 
 func (store *ControllerStore) LookupNode(ctx context.Context, nodeID string) (enroll.NodeRecord, error) {
