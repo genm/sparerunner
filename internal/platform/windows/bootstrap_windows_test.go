@@ -40,6 +40,11 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 		false,
 	)
 	if err != nil {
+		select {
+		case serverErr := <-server:
+			t.Fatalf("bootstrap submit error = %v; server error = %v", err, serverErr)
+		case <-time.After(time.Second):
+		}
 		t.Fatal(err)
 	}
 	if receivedNodeID != nodeID {
