@@ -55,6 +55,9 @@ parallelism, and re-registering broken runners.
 - As a Node owner, I want to stop and resume accepting new jobs from the tray in one
   action so that I can reclaim my computer without cancelling the job already
   running, uninstalling the agent, or logging in to the controller.
+- As a Node owner who lives in a keyboard launcher, I want the same stop and resume
+  control from Raycast so that I do not have to reach for the tray, and so that the
+  launcher gives me no privilege and no credential the tray does not have.
 - As an Administrator, I want a one-job runner identity and disposable workspace so
   that jobs do not leave ordinary runner state behind.
 
@@ -121,6 +124,10 @@ parallelism, and re-registering broken runners.
 6. The owner selects "Resume accepting jobs", and admission returns only after the
    controller confirms the node is otherwise active, reconciled, and not quarantined.
 
+The same status and the same two actions are available from the Raycast launcher on
+macOS and from `tewake node` on every supported OS. Every desktop surface performs the
+identical operation against the local agent, so none of them is a privileged path.
+
 ## Exception Journeys
 
 - If GitHub returns a transient error, the system retains the last-known state,
@@ -144,6 +151,9 @@ parallelism, and re-registering broken runners.
   confirms it.
 - If the desktop session provides no tray host, the tray client exits with an
   explicit error and the agent service, CLI, and Web UI remain unaffected.
+- If a launcher integration cannot find an installed, compatible Tewake CLI on the
+  computer, it presents an actionable installation error instead of a silent no-op or
+  an assumed state.
 
 ## Constraints
 
@@ -182,10 +192,15 @@ parallelism, and re-registering broken runners.
   equals the sum of node maxima.
 - Tewake shall not invent a node-count quota or other product limit without a
   measured resource boundary or platform contract.
-- The tray client is an optional, unprivileged, per-user presentation of existing
-  Node state. It is not a new user-facing concept, introduces no capability the
-  management API and CLI lack, and never receives GitHub App keys, join secrets, JIT
-  material, node private keys, session secrets, or authorization headers.
+- The tray client and any launcher integration are optional, unprivileged, per-user
+  presentations of existing Node state. They are not new user-facing concepts,
+  introduce no capability the management API and CLI lack, and never receive GitHub
+  App keys, join secrets, JIT material, node private keys, session secrets, or
+  authorization headers.
+- Launcher integrations shall control only the computer they run on, through the same
+  local agent contract as the tray, and shall store no controller credential or API
+  token. Fleet-wide control from a third-party launcher is out of scope for the first
+  release.
 - Node availability is one value expressed through two authorities: the controller
   owns the Node administrative state, and the node owner owns a durable node-local
   availability intent. Admission requires both. A node-local intent may only withhold
@@ -253,9 +268,12 @@ parallelism, and re-registering broken runners.
 
 ### Node availability control
 
-- When a node owner stops acceptance from the tray, the CLI, or the Web UI, the
-  controller shall advertise no further capacity for that node, and the same
-  effective state shall be visible in all three surfaces.
+- When a node owner stops acceptance from the tray, the Raycast launcher, the CLI, or
+  the Web UI, the controller shall advertise no further capacity for that node, and
+  the same effective state shall be visible in every surface.
+- A launcher integration shall produce the same effective result as the tray for
+  identical input, including the unreachable-agent, stale, pending-resume, and
+  quarantined presentations, and shall never render one of them as accepting or idle.
 - When acceptance is stopped while a job is running, the job shall complete and pass
   normal verified cleanup, and the node shall then hold zero active executions.
 - After an agent service restart or an OS reboot, a stopped node shall remain stopped

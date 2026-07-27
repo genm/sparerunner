@@ -47,6 +47,7 @@ api/                     OpenAPI source and generated boundary
 cmd/tewake/              Controller and operator CLI entrypoint
 cmd/tewake-agent/        Node service entrypoint
 cmd/tewake-tray/         Optional per-user desktop tray client
+extensions/raycast/      Optional macOS Raycast extension over the CLI contract
 internal/
   agent/                 Local reconciliation and command handling
   nodectl/               Local control endpoint and node availability intent
@@ -74,6 +75,7 @@ web/                     React management UI
 | Daily commands | `just`; Process Compose for local processes; lefthook for local gates |
 | Agent transport | `net/http`, `coder/websocket`, node certificates, mDNS discovery |
 | Node-local control | Unix domain socket or Windows named pipe with OS peer-identity checks; optional cgo tray binary built natively per platform |
+| Launcher integration | Optional macOS Raycast extension in TypeScript over the versioned `tewake node --json` contract, with no stored credentials |
 | Management API | Contract-first `/api/v1` OpenAPI; generated Go and TypeScript types; SSE |
 | Storage | SQLite WAL with `database/sql` and a pure-Go driver; separate controller and agent DBs |
 | UI | React, TypeScript, Vite, pnpm; generated static output embedded into the Go binary |
@@ -674,16 +676,19 @@ recorded beside the implementation.
 The API never returns credential material. Configuration apply uses an optimistic
 revision and fails on stale input rather than silently overwriting newer state.
 
-## Node Availability Control and Tray Client
+## Node Availability Control and Desktop Clients
 
-The tray is a presentation surface, not a new authority. It shows the node's own
-state and toggles one value: whether this computer accepts new jobs.
+The tray and the Raycast extension are presentation surfaces, not new authorities.
+They show the node's own state and toggle one value: whether this computer accepts
+new jobs.
 
 ```mermaid
 flowchart LR
     T["tewake-tray<br/>desktop user"] <-->|"local socket / named pipe"| A["Agent service"]
+    R["Raycast extension"] -->|"tewake node --json"| CLI["tewake CLI"]
+    CLI <-->|"local socket / named pipe"| A
     A <-->|"outbound WSS + mTLS"| C["Controller"]
-    UI["Web UI / CLI"] <-->|"/api/v1"| C
+    UI["Web UI"] <-->|"/api/v1"| C
 ```
 
 ### Two authorities, one effective value
@@ -745,12 +750,37 @@ optional artifact built natively per platform and excluded from the pure-Go
 cross-build matrix. Controller and agent releases never gate on it, and the support
 matrix states which platform packages include it.
 
+### Launcher integration
+
+Third-party desktop launchers integrate through the CLI rather than through the local
+socket. `tewake node status`, `tewake node pause`, and `tewake node resume` accept
+`--json` and emit a stable, versioned, non-secret document containing the same fields
+the tray renders, including intent, `pending`, connection state, observation age, and
+running executions. A non-zero exit code always carries a machine-readable error
+class. This keeps one implementation of the local protocol, peer authorization, and
+degraded-state semantics; a launcher cannot invent a second dialect of them.
+
+The Raycast extension is a macOS-only, unprivileged TypeScript client of that
+contract. It provides a status view and two commands, invokes the installed CLI as
+the logged-in user, and renders exactly the returned document. It stores no
+controller credential, API token, socket path, or fleet address, so it controls only
+the computer it runs on and adds no reachable surface beyond what the desktop user
+already has. Fleet-wide control from a launcher would require holding a management
+credential in a third-party application and is deliberately excluded.
+
+Because Raycast does not ship the agent, the extension resolves the CLI from an
+explicit preference and the standard install locations, and verifies protocol
+compatibility. A missing, incompatible, or non-executable CLI produces an actionable
+installation error; it never renders an assumed accepting or idle state. Extension
+source lives in `extensions/raycast/`; publishing to the Raycast store is a separate
+optional step that gates no Tewake artifact.
+
 ### Surface parity and audit
 
 The availability mutation exists once in `/api/v1` and is used by the Web UI, by
-`tewake node pause`/`tewake node resume`, and by the tray through the agent. Each
-change persists an audit event with node ID, requesting surface, actor identity,
-previous and next value, and result.
+`tewake node pause`/`tewake node resume`, by the tray through the agent, and by the
+Raycast extension through the CLI. Each change persists an audit event with node ID,
+requesting surface, actor identity, previous and next value, and result.
 
 ## Secret Storage
 
@@ -797,6 +827,7 @@ prevents new starts but does not turn known running jobs into an empty state.
 | Node stopped by its owner | withhold capacity immediately; running job completes and cleans up normally |
 | Availability intent unreported | controller keeps the last reported intent and marks it stale; resume stays pending |
 | Tray cannot reach the agent | present unknown state and an explicit error; confirm no change |
+| Launcher finds no compatible CLI | actionable installation error; never an assumed accepting or idle state |
 | Unauthorized local control peer | refuse without state change and record an audit event |
 | Protocol mismatch | explicit incompatibility error; no backward-compatibility shim pre-1.0 |
 | Disk/database failure | preserve error, enter recovery/degraded mode, never synthesize success |
@@ -832,6 +863,8 @@ secrets, or raw environment snapshots.
 - Security tests for public-scope rejection, token/certificate replay, JIT canaries,
   traversal/symlinks, unauthenticated/CSRF mutation, local control endpoint peer
   authorization, and diagnostics redaction
+- Golden-document contract tests for `tewake node --json`, plus launcher tests for
+  missing, incompatible, and non-executable CLI resolution
 - Availability tests for durable intent across restart, stop during a running job,
   disconnected stop and pending resume, and the precedence of controller `Draining`,
   `Quarantined`, and `Revoked` over a local `Accepting`

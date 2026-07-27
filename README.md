@@ -20,7 +20,8 @@ scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
 work for development, including pinned enrollment, mTLS WebSockets, and reconnect.
 Scheduling, OS service installation, GitHub job execution, cleanup, the
-management API, and the desktop tray client remain incomplete. Do not install it on a production runner fleet.
+management API, the desktop tray client, and the Raycast extension remain
+incomplete. Do not install it on a production runner fleet.
 
 The specification is the project source of truth:
 
@@ -52,7 +53,8 @@ OS-specific labels are `tewake-linux`, `tewake-macos`, and `tewake-windows`.
 On a computer you also use yourself, an optional tray client sits in the system tray
 or menu bar. It shows what that computer is running and stops or resumes accepting
 new jobs in one click. Stopping never cancels the job already running, and the same
-switch is available as `tewake node pause` / `tewake node resume` and in the Web UI.
+switch is available from Raycast on macOS, as `tewake node pause` / `tewake node
+resume`, and in the Web UI.
 
 ## Product boundary
 
