@@ -8,7 +8,10 @@ import (
 	"net"
 	"os"
 	"os/signal"
+	pathpkg "path"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"syscall"
 	"time"
 
@@ -191,6 +194,12 @@ func newServeCommand() *cobra.Command {
 }
 
 func newJoinCommand() *cobra.Command {
+	return newJoinCommandForPlatform(runtime.GOOS, platformJoinAgent)
+}
+
+type joinAgentFunc func(context.Context, app.JoinOptions) (string, error)
+
+func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Command {
 	var stateDirectory, controller string
 	var discoveryTimeout, connectionTimeout time.Duration
 	command := &cobra.Command{
@@ -198,11 +207,11 @@ func newJoinCommand() *cobra.Command {
 		Short: "Enroll this computer with a Tewake controller",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
-			directory, err := resolveStateDirectory(stateDirectory, "agent")
+			directory, err := resolveStateDirectoryForPlatform(stateDirectory, "agent", goos)
 			if err != nil {
 				return err
 			}
-			nodeID, err := app.JoinAgent(command.Context(), app.JoinOptions{
+			nodeID, err := joinAgent(command.Context(), app.JoinOptions{
 				StateDirectory:    directory,
 				JoinCode:          args[0],
 				Controller:        controller,
@@ -213,7 +222,7 @@ func newJoinCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			fmt.Fprintf(command.OutOrStdout(), "Start it with: tewake-agent serve --state-dir %s\n", directory)
+			printPlatformJoinNextStep(command.OutOrStdout(), goos, directory)
 			return nil
 		},
 	}
@@ -222,6 +231,24 @@ func newJoinCommand() *cobra.Command {
 	command.Flags().DurationVar(&discoveryTimeout, "discovery-timeout", app.DefaultDiscoveryTimeout, "mDNS discovery deadline")
 	command.Flags().DurationVar(&connectionTimeout, "connection-timeout", app.DefaultConnectTimeout, "per-controller enrollment and confirmation deadline")
 	return command
+}
+
+func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
+	const macOSServiceState = "/Library/Application Support/Tewake/agent"
+	switch {
+	case goos == "windows":
+		fmt.Fprintln(output, "TewakeAgent service is enrolled and running.")
+	case goos == "darwin" && stateDirectory == macOSServiceState:
+		// The path is a platform contract, not a host path to normalize. Comparing
+		// it verbatim keeps cross-compiled CLI tests from treating a macOS path as a
+		// Windows drive-relative path while preserving the Darwin service hint.
+		fmt.Fprintln(
+			output,
+			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+		)
+	default:
+		fmt.Fprintf(output, "Start it with: tewake-agent serve --state-dir %s\n", stateDirectory)
+	}
 }
 
 func newNodeCommand() *cobra.Command {
@@ -381,4 +408,16 @@ func resolveStateDirectory(explicit, role string) (string, error) {
 		return "", fmt.Errorf("resolve OS user configuration directory: %w", err)
 	}
 	return filepath.Join(config, "tewake", role), nil
+}
+
+func resolveStateDirectoryForPlatform(explicit, role, goos string) (string, error) {
+	if explicit != "" && goos == "darwin" {
+		// Tests and packaging adapters may exercise Darwin contracts from a
+		// non-Darwin host; use POSIX path semantics for that explicit contract.
+		if !strings.HasPrefix(explicit, "/") {
+			return "", fmt.Errorf("macOS state directory must be absolute: %s", explicit)
+		}
+		return pathpkg.Clean(explicit), nil
+	}
+	return resolveStateDirectory(explicit, role)
 }

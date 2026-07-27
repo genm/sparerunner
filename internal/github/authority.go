@@ -370,14 +370,12 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 		parts := strings.Split(request.Scope, "/")
 		path = "/repos/" + url.PathEscape(parts[0]) + "/" + url.PathEscape(parts[1]) + "/actions/runner-groups"
 	}
-	var response struct {
-		RunnerGroups []runnerGroup `json:"runner_groups"`
-	}
-	if err := authority.doJSON(ctx, http.MethodGet, path+"?per_page=100", token, nil, &response); err != nil {
+	runnerGroups, err := authority.listRunnerGroups(ctx, path, token)
+	if err != nil {
 		return 0, false, err
 	}
 	ownedName := "tewake-" + request.TargetID
-	for _, group := range response.RunnerGroups {
+	for _, group := range runnerGroups {
 		if group.ID <= 0 || group.Visibility != "private" || group.AllowsPublicRepositories {
 			continue
 		}
@@ -397,6 +395,31 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 		return 0, false, ErrGitHubRunnerGroupUnsafe
 	}
 	return created.ID, true, nil
+}
+
+func (authority *Authority) listRunnerGroups(ctx context.Context, path, token string) ([]runnerGroup, error) {
+	groups := make([]runnerGroup, 0)
+	complete := false
+	for page := 1; page <= 100; page++ {
+		var response struct {
+			RunnerGroups []runnerGroup `json:"runner_groups"`
+		}
+		pagePath := path + "?per_page=100&page=" + strconv.Itoa(page)
+		if err := authority.doJSON(ctx, http.MethodGet, pagePath, token, nil, &response); err != nil {
+			return nil, err
+		}
+		groups = append(groups, response.RunnerGroups...)
+		if len(response.RunnerGroups) < 100 {
+			complete = true
+			break
+		}
+	}
+	if !complete {
+		// A full final page is indistinguishable from a truncated provider
+		// response. Never provision from a partial runner-group view.
+		return nil, ErrGitHubProviderFailure
+	}
+	return groups, nil
 }
 
 func (authority *Authority) deleteRunnerGroup(ctx context.Context, request TargetRequest, token string, id int) error {

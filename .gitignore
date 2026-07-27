@@ -4,6 +4,8 @@
 
 # Go
 /bin/
+/dist/
+/licenses/
 /coverage/
 *.test
 

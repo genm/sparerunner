@@ -100,5 +100,7 @@ Record the following in an access-controlled release-evidence location:
    absent from controller SQLite, agent journal, JSON logs, metrics, API
    responses, diagnostics, runner workspace, and any test evidence.
 
-Until these checks are recorded against a live private sandbox, `twk-002`
-remains `in_progress`; the local tests are not a claim of GitHub runtime proof.
+The local `twk-002` adapter implementation and fake-contract gate are complete,
+but these checks must still be recorded against a live private sandbox before
+the release gate can close. Local tests are not a claim of GitHub runtime proof;
+the remaining live evidence is tracked by `twk-014` and `twk-015`.

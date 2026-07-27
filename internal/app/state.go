@@ -89,11 +89,23 @@ func InitializeController(ctx context.Context, directory string, hints []string)
 	if err := os.MkdirAll(parent, 0o700); err != nil {
 		return "", err
 	}
-	staging, err := os.MkdirTemp(parent, ".tewake-controller-init-")
+	staging, err := createPrivateStateTempDirectory(parent)
 	if err != nil {
 		return "", err
 	}
 	if err := os.Chmod(staging, 0o700); err != nil {
+		_ = os.RemoveAll(staging)
+		return "", err
+	}
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return "", err
+	}
+	if err := initializePrivateStateDirectoryPlatform(
+		staging,
+		stagingInfo,
+	); err != nil {
 		_ = os.RemoveAll(staging)
 		return "", err
 	}
@@ -191,6 +203,9 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePrivateStateDirectory(directory); err != nil {
+		return nil, fmt.Errorf("%w: controller state directory: %v", ErrNotInitialized, err)
+	}
 	identity, err := enroll.LoadControllerIdentity(filepath.Join(directory, controllerIdentityFile))
 	if err != nil {
 		return nil, fmt.Errorf("%w: controller identity: %v", ErrNotInitialized, err)
@@ -215,7 +230,7 @@ func OpenController(ctx context.Context, directory string, activate bool) (*Cont
 		return nil, err
 	}
 	githubAuthority, err := github.NewAuthority(github.AuthorityOptions{
-		CredentialStore: github.FileAppCredentialStore{Path: filepath.Join(directory, "github-app-credential.json")},
+		CredentialStore: github.NewPlatformAppCredentialStore(filepath.Join(directory, "github-app-credential.json")),
 	})
 	if err != nil {
 		_ = controllerStore.Close()
@@ -417,6 +432,9 @@ func OpenAgent(ctx context.Context, directory string) (*AgentState, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := validatePrivateStateDirectory(directory); err != nil {
+		return nil, fmt.Errorf("%w: agent state directory: %v", ErrNotInitialized, err)
+	}
 	key, err := enroll.LoadNodePrivateKey(filepath.Join(directory, agentKeyFile))
 	if err != nil {
 		return nil, fmt.Errorf("%w: node private key: %v", ErrNotInitialized, err)
@@ -580,15 +598,35 @@ func absoluteStateDirectory(directory string) (string, error) {
 
 func ensurePrivateStateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
+	created := false
 	if errors.Is(err, os.ErrNotExist) {
-		if err := os.MkdirAll(directory, 0o700); err != nil {
+		if err := createPrivateStateDirectoryPlatform(directory); err != nil {
 			return err
 		}
+		created = true
 		info, err = os.Lstat(directory)
 	}
 	if err != nil {
 		return err
 	}
+	if created {
+		if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+			return errors.New("state directory is unsafe")
+		}
+		return initializePrivateStateDirectoryPlatform(directory, info)
+	}
+	return validatePrivateStateDirectoryInfo(directory, info)
+}
+
+func validatePrivateStateDirectory(directory string) error {
+	info, err := os.Lstat(directory)
+	if err != nil {
+		return err
+	}
+	return validatePrivateStateDirectoryInfo(directory, info)
+}
+
+func validatePrivateStateDirectoryInfo(directory string, info os.FileInfo) error {
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
 		return errors.New("state directory is unsafe")
 	}
@@ -627,15 +665,6 @@ func requireJSONEOF(decoder *json.Decoder) error {
 		return err
 	}
 	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
 
 var timeNow = time.Now

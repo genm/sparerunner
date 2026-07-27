@@ -101,6 +101,23 @@ func TestSlotLedgerRejectsCapacityOverflowAndMismatchedRelease(t *testing.T) {
 	}
 }
 
+func TestSlotLedgerRejectsMacOSConfigurationAbovePhysicalCapacity(t *testing.T) {
+	mac := testNode("mac-node", MacOSNativeRunnerMaxRunners+1)
+	mac.OS = OSMacOS
+	if _, err := NewSlotLedger([]Node{mac}, nil); err == nil {
+		t.Fatal("slot ledger accepted a second macOS native runner slot")
+	} else {
+		assertValidationCode(t, err, "native_runner_capacity_exceeded")
+	}
+
+	// Multiple slots remain a valid configured input on platforms whose
+	// adapters provide independently owned slot authorities.
+	linux := testNode("linux-node", 2)
+	if _, err := NewSlotLedger([]Node{linux}, nil); err != nil {
+		t.Fatalf("slot ledger rejected valid multi-slot Linux node: %v", err)
+	}
+}
+
 func TestExecutionInvalidTransitionsDoNotMutateState(t *testing.T) {
 	tests := []struct {
 		name string

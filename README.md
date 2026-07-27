@@ -20,10 +20,14 @@ scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
 init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
 work for development, including pinned enrollment, mTLS WebSockets, reconnect,
 the signed GitHub App Manifest flow, installation discovery, private Target
-verification, and the generated management UI/API. Scheduling, OS service
-installation, GitHub job execution, cleanup, the desktop tray client, the
-Raycast extension, and live three-OS sandbox evidence remain incomplete. Do
-not install it on a production runner fleet.
+verification, generated management UI/API, node-affined scheduling, native runner
+lifecycle, and verified cleanup. Those core paths have local and fault-injection
+coverage, but OS service installation, a real private GitHub job, the desktop
+tray client, the Raycast extension, and live three-OS sandbox evidence remain
+release gates. A tag now produces a draft, checksummed six-platform bundle with
+CycloneDX SBOM and GitHub attestation steps; it is not a supported release until
+the real-machine gate and platform signing prerequisites pass. Do not install it
+on a production runner fleet.
 
 The specification is the project source of truth:
 
@@ -89,6 +93,7 @@ Common commands:
 ```bash
 just check       # formatting, lint, tests, and builds
 just build-all   # cross-compile controller and agent
+just check-release-artifacts dist # verify a GoReleaser bundle, checksums, and SBOMs
 just dev         # Vite Web UI only through Process Compose
 ```
 
@@ -103,9 +108,9 @@ by Git.
 ## Security
 
 Please read [SECURITY.md](SECURITY.md) before reporting a vulnerability. The native
-runner isolation contract and threat model will be completed before the first public
-tag; until then, this repository is development software and has no security-support
-promise.
+runner isolation contract and threat model are documented, while their three-OS live
+evidence and signing prerequisites remain release gates. Until those gates pass, this
+repository is development software and has no security-support promise.
 
 ## License
 
