@@ -114,6 +114,75 @@ func (s *ControllerStore) ReadNodeTargetExclusions(
 	return readNodeTargetExclusions(ctx, s.db, nodeID)
 }
 
+// NodeOwnerState is one node's adopted owner-editable observed state: the
+// availability intent (nil when never reported) and the adopted exclusion
+// set. Both fields mirror the columns RecordNodeOwnerState/RecordAgentSnapshot
+// adopt, so a bulk reader never fabricates a value the node did not report.
+type NodeOwnerState struct {
+	Intent     *domain.AvailabilityIntent
+	Exclusions []domain.TargetID
+}
+
+// ReadNodeOwnerStates returns the adopted intent and exclusion set for every
+// enrolled node in two queries, so a management-API listing does not pay one
+// round trip per node. A node absent from the result reported neither an
+// intent nor any exclusions; a present entry with a nil Intent reported
+// exclusions but never an intent.
+func (s *ControllerStore) ReadNodeOwnerStates(
+	ctx context.Context,
+) (map[domain.NodeID]NodeOwnerState, error) {
+	if err := s.requireReady(); err != nil {
+		return nil, err
+	}
+	states := make(map[domain.NodeID]NodeOwnerState)
+	intentRows, err := s.db.QueryContext(
+		ctx,
+		`SELECT node_id, availability_intent FROM agent_session_snapshots
+		 WHERE availability_intent IS NOT NULL`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer intentRows.Close()
+	for intentRows.Next() {
+		var nodeID domain.NodeID
+		var intent string
+		if err := intentRows.Scan(&nodeID, &intent); err != nil {
+			return nil, err
+		}
+		reported := domain.AvailabilityIntent(intent)
+		state := states[nodeID]
+		state.Intent = &reported
+		states[nodeID] = state
+	}
+	if err := intentRows.Err(); err != nil {
+		return nil, err
+	}
+	exclusionRows, err := s.db.QueryContext(
+		ctx,
+		`SELECT node_id, target_id FROM node_target_exclusions
+		 ORDER BY node_id, target_id`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer exclusionRows.Close()
+	for exclusionRows.Next() {
+		var nodeID domain.NodeID
+		var targetID domain.TargetID
+		if err := exclusionRows.Scan(&nodeID, &targetID); err != nil {
+			return nil, err
+		}
+		state := states[nodeID]
+		state.Exclusions = append(state.Exclusions, targetID)
+		states[nodeID] = state
+	}
+	if err := exclusionRows.Err(); err != nil {
+		return nil, err
+	}
+	return states, nil
+}
+
 func readNodeTargetExclusions(
 	ctx context.Context,
 	q queryer,

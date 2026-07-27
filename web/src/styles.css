@@ -376,8 +376,10 @@ p {
   gap: var(--space-1);
 }
 .node-status {
-  grid-template-columns: auto auto minmax(0, 1fr);
+  display: flex;
+  flex-wrap: wrap;
   align-items: center;
+  gap: var(--space-1);
   color: var(--muted);
   font-size: 0.8125rem;
 }
@@ -407,6 +409,26 @@ p {
 }
 .status-quarantined {
   background: var(--danger);
+}
+.badge {
+  padding: 0.0625rem 0.4375rem;
+  border-radius: 999px;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.badge-stopped {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+}
+.badge-excluded {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--muted) 14%, transparent);
+  cursor: help;
+}
+.badge-runner-broken {
+  color: var(--danger);
+  background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
 .node-identity strong,
 .target-row strong,

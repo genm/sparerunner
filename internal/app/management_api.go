@@ -187,6 +187,10 @@ func (backend *managementBackend) Nodes(
 			active[execution.Slot.NodeID]++
 		}
 	}
+	ownerStates, err := backend.state.Store.ReadNodeOwnerStates(ctx)
+	if err != nil {
+		return nil, "", err
+	}
 	result := make([]gen.Node, 0, len(configuration.Nodes))
 	for _, configured := range configuration.Nodes {
 		state := administrative[configured.NodeID]
@@ -214,6 +218,19 @@ func (backend *managementBackend) Nodes(
 			node.AvailableMemoryBytes = &memory
 			node.Reconciled = snapshot.Reconciled
 			node.NativeRunnerReady = snapshot.NativeReady
+		}
+		if ownerState, reported := ownerStates[configured.NodeID]; reported {
+			if ownerState.Intent != nil {
+				intent := gen.NodeAvailabilityIntent(*ownerState.Intent)
+				node.AvailabilityIntent = &intent
+			}
+			if len(ownerState.Exclusions) > 0 {
+				excluded := make([]string, len(ownerState.Exclusions))
+				for i, targetID := range ownerState.Exclusions {
+					excluded[i] = string(targetID)
+				}
+				node.ExcludedTargets = &excluded
+			}
 		}
 		result = append(result, node)
 	}

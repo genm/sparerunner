@@ -121,7 +121,7 @@ func newNodeTargetsCommand() *cobra.Command {
 func writeNodeTargetsText(writer io.Writer, status nodectl.Status) {
 	fmt.Fprintf(writer, "Node:       %s\n", status.NodeID)
 	fmt.Fprintf(writer, "Controller: %s\n", connectionText(status.ControllerConnected))
-	writeAvailabilityTargets(writer, status.EligibleTargets)
+	writeAvailabilityTargets(writer, status.Targets())
 	writeUnknownExclusions(writer, status.UnknownExclusions)
 }
 
@@ -222,7 +222,7 @@ func writeAvailabilityText(writer io.Writer, status nodectl.Status) {
 			)
 		}
 	}
-	writeAvailabilityTargets(writer, status.EligibleTargets)
+	writeAvailabilityTargets(writer, status.Targets())
 	writeUnknownExclusions(writer, status.UnknownExclusions)
 }
 
