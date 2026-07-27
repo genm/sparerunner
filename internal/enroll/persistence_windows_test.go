@@ -216,6 +216,7 @@ func TestWindowsPrivateMaterialRejectsReparseLocator(t *testing.T) {
 
 func windowsPrivateDirectory(t *testing.T) string {
 	t.Helper()
+	_ = os.Setenv("TEWAKE_WINDOWS_DEBUG", "1")
 	directory := filepath.Clean(t.TempDir())
 	if err := winacl.SecureEmptyPrivateDirectory(directory); err != nil {
 		currentSID, _ := winacl.CurrentProcessSID()

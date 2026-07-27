@@ -8,6 +8,7 @@ package winacl
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -19,6 +20,13 @@ import (
 const fileFullControl = 0x001f01ff
 
 var ErrUnsafePrivatePath = errors.New("Windows private material path is unsafe")
+
+func privatePathError(reason string) error {
+	if os.Getenv("TEWAKE_WINDOWS_DEBUG") == "1" {
+		return fmt.Errorf("%w: %s", ErrUnsafePrivatePath, reason)
+	}
+	return ErrUnsafePrivatePath
+}
 
 func ValidatePrivateDirectory(path string) error {
 	return validatePrivatePath(path, true)
@@ -124,11 +132,11 @@ func NoReparseComponents(path string) bool {
 
 func validatePrivatePath(path string, directory bool) error {
 	if !NoReparseComponents(path) {
-		return ErrUnsafePrivatePath
+		return privatePathError("reparse path")
 	}
 	handle, err := openSecurityHandle(path, directory, syswindows.READ_CONTROL)
 	if err != nil {
-		return ErrUnsafePrivatePath
+		return privatePathError("security handle")
 	}
 	defer syswindows.CloseHandle(handle)
 	descriptor, err := syswindows.GetSecurityInfo(
@@ -137,7 +145,7 @@ func validatePrivatePath(path string, directory bool) error {
 		syswindows.OWNER_SECURITY_INFORMATION|syswindows.DACL_SECURITY_INFORMATION,
 	)
 	if err != nil || descriptor == nil || !descriptor.IsValid() {
-		return ErrUnsafePrivatePath
+		return privatePathError("security descriptor")
 	}
 	current, err := CurrentProcessSID()
 	if err != nil {
@@ -146,19 +154,19 @@ func validatePrivatePath(path string, directory bool) error {
 	owner, defaulted, err := descriptor.Owner()
 	if err != nil || owner == nil || defaulted ||
 		!strings.EqualFold(owner.String(), current) {
-		return ErrUnsafePrivatePath
+		return privatePathError("owner")
 	}
 	control, _, err := descriptor.Control()
 	if err != nil || control&syswindows.SE_DACL_PROTECTED == 0 {
-		return ErrUnsafePrivatePath
+		return privatePathError("dacl protection")
 	}
 	dacl, defaulted, err := descriptor.DACL()
 	if err != nil || dacl == nil || defaulted {
-		return ErrUnsafePrivatePath
+		return privatePathError("dacl")
 	}
 	required := privateSIDs(current)
 	if int(dacl.AceCount) != len(required) {
-		return ErrUnsafePrivatePath
+		return privatePathError(fmt.Sprintf("ace count %d", dacl.AceCount))
 	}
 	seen := make(map[string]struct{}, len(required))
 	for index := uint32(0); index < uint32(dacl.AceCount); index++ {
@@ -168,7 +176,7 @@ func validatePrivatePath(path string, directory bool) error {
 			ace.Header.AceType != syswindows.ACCESS_ALLOWED_ACE_TYPE ||
 			ace.Header.AceFlags&syswindows.INHERITED_ACE != 0 ||
 			ace.Mask != fileFullControl {
-			return ErrUnsafePrivatePath
+			return privatePathError(fmt.Sprintf("ace %d contract", index))
 		}
 		expectedFlags := byte(0)
 		if directory {
@@ -179,19 +187,19 @@ func validatePrivatePath(path string, directory bool) error {
 		}
 		sid := (*syswindows.SID)(unsafe.Pointer(&ace.SidStart))
 		if sid == nil || !sid.IsValid() {
-			return ErrUnsafePrivatePath
+			return privatePathError(fmt.Sprintf("ace %d sid", index))
 		}
 		text := strings.ToUpper(sid.String())
 		if _, found := required[text]; !found {
-			return ErrUnsafePrivatePath
+			return privatePathError(fmt.Sprintf("ace %d sid set", index))
 		}
 		if _, duplicate := seen[text]; duplicate {
-			return ErrUnsafePrivatePath
+			return privatePathError(fmt.Sprintf("ace %d duplicate", index))
 		}
 		seen[text] = struct{}{}
 	}
 	if len(seen) != len(required) {
-		return ErrUnsafePrivatePath
+		return privatePathError("sid set incomplete")
 	}
 	return nil
 }
