@@ -233,6 +233,24 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 	return command
 }
 
+func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
+	const macOSServiceState = "/Library/Application Support/Tewake/agent"
+	switch {
+	case goos == "windows":
+		fmt.Fprintln(output, "TewakeAgent service is enrolled and running.")
+	case goos == "darwin" && stateDirectory == macOSServiceState:
+		// The path is a platform contract, not a host path to normalize. Comparing
+		// it verbatim keeps cross-compiled CLI tests from treating a macOS path as a
+		// Windows drive-relative path while preserving the Darwin service hint.
+		fmt.Fprintln(
+			output,
+			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+		)
+	default:
+		fmt.Fprintf(output, "Start it with: tewake-agent serve --state-dir %s\n", stateDirectory)
+	}
+}
+
 func newNodeCommand() *cobra.Command {
 	node := &cobra.Command{Use: "node", Short: "Manage enrolled nodes"}
 	var adminURL, stateDirectory string

@@ -4,8 +4,6 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"io"
 
 	"github.com/genm/tewake/internal/app"
 	"github.com/genm/tewake/internal/enroll"
@@ -27,8 +25,4 @@ func platformJoinAgent(
 		DiscoveryTimeout:  options.DiscoveryTimeout,
 		ConnectionTimeout: options.ConnectionTimeout,
 	})
-}
-
-func printPlatformJoinNextStep(output io.Writer, _, _ string) {
-	fmt.Fprintln(output, "TewakeAgent service is enrolled and running.")
 }
