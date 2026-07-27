@@ -191,7 +191,16 @@ func TestRuntimeFreshnessRetainsLastKnownReleaseAndTracksHealthTransitions(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
+	// Capture the variable, not the initial receiver: this test replaces store
+	// after reopen and Windows will retain the database handle otherwise.
+	defer func() {
+		if store == nil {
+			return
+		}
+		if closeErr := store.Close(); closeErr != nil {
+			t.Errorf("close runtime freshness store: %v", closeErr)
+		}
+	}()
 	unknown, err := store.ReadGitHubRunnerReleaseState(ctx)
 	if err != nil || unknown.Freshness != RuntimeFreshnessUnknown || unknown.Generation != 0 {
 		t.Fatalf("never-observed release = %#v, %v", unknown, err)

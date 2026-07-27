@@ -14,7 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/genm/tewake/internal/domain"
 	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/tewake/internal/reconcile"
 )
 
 func TestInitServeJoinAndAgentReconnect(t *testing.T) {
@@ -80,15 +82,32 @@ func TestInitServeJoinAndAgentReconnect(t *testing.T) {
 		})
 	}()
 	eventually(t, func() bool { return controller.Sessions.Count() == 1 })
-	eventually(t, func() bool {
-		if controller.Reconciler == nil {
-			return false
+	projectedDegraded := false
+	projectionDeadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(projectionDeadline) {
+		if controller.Reconciler != nil {
+			fleet := controller.Reconciler.FleetSnapshot()
+			// This enrollment-only Agent has no CommandRuntime. It must
+			// project the explicit degraded state and advertise zero capacity.
+			projectedDegraded = len(fleet.Nodes) == 1 &&
+				len(fleet.Statuses) == 1 &&
+				!fleet.Nodes[0].Reconciled &&
+				!fleet.Nodes[0].NativeReady &&
+				fleet.Nodes[0].Node.ObservedState == domain.NodeStale &&
+				fleet.Statuses[0].Phase == reconcile.NodeDegraded &&
+				fleet.Statuses[0].Reason == reconcile.ReasonNativeRunnerUnavailable
+			if projectedDegraded {
+				break
+			}
 		}
-		fleet := controller.Reconciler.FleetSnapshot()
-		return len(fleet.Nodes) == 1 &&
-			fleet.Nodes[0].Reconciled &&
-			fleet.Nodes[0].NativeReady
-	})
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !projectedDegraded {
+		t.Fatalf(
+			"enrollment-only Agent did not project degraded zero-capacity state: %#v",
+			controller.Reconciler.FleetSnapshot(),
+		)
+	}
 	stopAgent()
 	select {
 	case err := <-agentResult:
