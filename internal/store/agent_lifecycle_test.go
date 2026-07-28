@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func TestExecutionLifecycleCommitIsAtomicMonotonicAndExactlyReplayable(t *testing.T) {

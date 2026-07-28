@@ -11,12 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 const (

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type unitProvenance struct {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // nativeRunnerLifecycle is the complete restart-safe runtime authority expected

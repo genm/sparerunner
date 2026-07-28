@@ -20,7 +20,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func TestControllerWALAtomicReplayAndEpoch(t *testing.T) {

@@ -16,7 +16,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // OSWorkspace is the Linux stat identity authority. It records the inode,

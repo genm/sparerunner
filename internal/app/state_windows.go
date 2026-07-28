@@ -6,7 +6,7 @@ import (
 	"errors"
 	"os"
 
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/winacl"
 )
 
 func privateStateDirectoryPlatform(path string, _ os.FileInfo) error {

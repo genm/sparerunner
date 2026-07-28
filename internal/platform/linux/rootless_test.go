@@ -6,7 +6,7 @@ import (
 	"os"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // sharedTestWorkspace is the shape this mode requires: one credential used by

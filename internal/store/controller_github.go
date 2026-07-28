@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 type GitHubJobEventType string

@@ -11,7 +11,7 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type fakeProcessSource struct {

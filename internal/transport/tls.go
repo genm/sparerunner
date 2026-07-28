@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // CredentialAuthorizer is implemented by controller persistence. Its decision

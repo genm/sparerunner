@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 )
 

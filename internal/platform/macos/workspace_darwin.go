@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // OSWorkspace transfers one extracted runner tree from the launch daemon

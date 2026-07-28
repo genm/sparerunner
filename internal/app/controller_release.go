@@ -5,8 +5,8 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 var (

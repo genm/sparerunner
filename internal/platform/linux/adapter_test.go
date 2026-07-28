@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type testWorkspace struct{}

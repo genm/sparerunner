@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/genm/tewake/internal/nodectl"
+	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 // Windows has no verified peer-credential socket yet, so both halves of the

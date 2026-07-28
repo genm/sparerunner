@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (

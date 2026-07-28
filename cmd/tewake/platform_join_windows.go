@@ -5,9 +5,9 @@ package main
 import (
 	"context"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/enroll"
-	platformwindows "github.com/genm/tewake/internal/platform/windows"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/enroll"
+	platformwindows "github.com/genm/sparerunner/internal/platform/windows"
 )
 
 func platformJoinAgent(

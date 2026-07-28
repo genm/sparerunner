@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func sharedTestIdentity(t *testing.T) RunnerIdentity {

@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // RuntimeFreshness is deliberately tri-state. Unknown means no successful

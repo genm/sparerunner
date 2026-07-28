@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 type Observation struct {

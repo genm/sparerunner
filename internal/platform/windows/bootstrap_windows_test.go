@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 	syswindows "golang.org/x/sys/windows"
 )
 

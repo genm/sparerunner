@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 
-	"github.com/genm/tewake/internal/app"
+	"github.com/genm/sparerunner/internal/app"
 	"github.com/spf13/cobra"
 )
 

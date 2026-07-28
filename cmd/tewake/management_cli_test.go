@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 const (

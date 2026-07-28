@@ -6,12 +6,12 @@ import (
 	"encoding/hex"
 	"strconv"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/config"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/config"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 func (backend *managementBackend) StartGitHubAppManifest(_ context.Context, callbackURL, account string) (gen.GitHubManifestStart, error) {

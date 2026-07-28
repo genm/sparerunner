@@ -19,8 +19,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"

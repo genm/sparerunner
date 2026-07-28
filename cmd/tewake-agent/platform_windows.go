@@ -9,9 +9,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/genm/tewake/internal/app"
-	platformwindows "github.com/genm/tewake/internal/platform/windows"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/app"
+	platformwindows "github.com/genm/sparerunner/internal/platform/windows"
+	"github.com/genm/sparerunner/internal/runner"
 	"github.com/spf13/cobra"
 	"golang.org/x/sys/windows/svc"
 )

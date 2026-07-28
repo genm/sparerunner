@@ -14,7 +14,7 @@ import (
 	"net/url"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // EnrollmentClient ignores caller HTTP transports. Enrollment is a trust-anchor

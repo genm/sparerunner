@@ -16,7 +16,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // SharedIdentityLauncher spawns the runner directly into the per-execution

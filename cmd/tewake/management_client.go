@@ -20,11 +20,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/config"
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/config"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 const (

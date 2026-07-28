@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type darwinPrewarmCache struct {

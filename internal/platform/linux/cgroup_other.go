@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // PipeLauncher is declared on every platform so callers can compile their

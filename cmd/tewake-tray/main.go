@@ -16,9 +16,9 @@ import (
 	"time"
 
 	"fyne.io/systray"
-	"github.com/genm/tewake/internal/buildinfo"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/nodectl"
+	"github.com/genm/sparerunner/internal/buildinfo"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 const refreshInterval = 3 * time.Second

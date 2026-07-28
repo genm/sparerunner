@@ -14,7 +14,7 @@ import (
 	"strings"
 	"unsafe"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 	syswindows "golang.org/x/sys/windows"
 )
 

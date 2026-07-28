@@ -7,8 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/github"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/github"
 	"github.com/spf13/cobra"
 )
 

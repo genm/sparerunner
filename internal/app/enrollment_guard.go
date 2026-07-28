@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 const (

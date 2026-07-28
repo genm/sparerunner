@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // RunnerJournal returns the AgentStore-backed lifecycle journal. Keeping the

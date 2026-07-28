@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const apiTestOrigin = "http://127.0.0.1:7442"

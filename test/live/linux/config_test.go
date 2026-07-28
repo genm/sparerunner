@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestLoadLiveConfigAcceptsStrictNonSecretVersionOne(t *testing.T) {

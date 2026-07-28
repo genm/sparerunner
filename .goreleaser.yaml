@@ -22,9 +22,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/genm/tewake/internal/buildinfo.version={{ .Version }}
-      - -X github.com/genm/tewake/internal/buildinfo.commit={{ .Commit }}
-      - -X github.com/genm/tewake/internal/buildinfo.date={{ .Date }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.version={{ .Version }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.commit={{ .Commit }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .Date }}
 
   - id: agent
     main: ./cmd/tewake-agent
@@ -40,9 +40,9 @@ builds:
       - CGO_ENABLED=0
     ldflags:
       - -s -w
-      - -X github.com/genm/tewake/internal/buildinfo.version={{ .Version }}
-      - -X github.com/genm/tewake/internal/buildinfo.commit={{ .Commit }}
-      - -X github.com/genm/tewake/internal/buildinfo.date={{ .Date }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.version={{ .Version }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.commit={{ .Commit }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .Date }}
 
 archives:
   - id: binaries

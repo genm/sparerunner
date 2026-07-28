@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // SharedWorkspaceBackend is the versioned stat identity encoding used only by

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type fakeNativeRunnerLifecycle struct {

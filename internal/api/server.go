@@ -22,9 +22,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const (

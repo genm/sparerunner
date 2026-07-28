@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"time"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
-	"github.com/genm/tewake/internal/webui"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
+	"github.com/genm/sparerunner/internal/webui"
 )
 
 const DefaultHTTPReadHeaderTimeout = 10 * time.Second

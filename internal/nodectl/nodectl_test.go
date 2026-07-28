@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/nodectl"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 type fakeController struct {

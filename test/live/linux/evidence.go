@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const (

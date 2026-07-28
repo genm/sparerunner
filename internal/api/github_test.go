@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/auth"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/auth"
 )
 
 type githubAPIBackend struct {

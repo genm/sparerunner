@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // PipeLauncher performs an atomic spawn into the opened cgroup. Its JIT reader

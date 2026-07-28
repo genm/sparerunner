@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (

@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 	"golang.org/x/sys/unix"
 )
 

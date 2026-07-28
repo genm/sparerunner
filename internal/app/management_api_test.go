@@ -16,14 +16,14 @@ import (
 	"testing"
 	"time"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/config"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/store"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/config"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const managementTestRequestID = "req_00112233445566778899aabbccddeeff"

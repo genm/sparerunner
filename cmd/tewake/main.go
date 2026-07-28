@@ -15,10 +15,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/buildinfo"
-	"github.com/genm/tewake/internal/releaseevidence"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/buildinfo"
+	"github.com/genm/sparerunner/internal/releaseevidence"
 	"github.com/spf13/cobra"
 )
 

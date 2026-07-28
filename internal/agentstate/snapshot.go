@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 type Observation struct {

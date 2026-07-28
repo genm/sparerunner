@@ -7,10 +7,10 @@ import (
 	"errors"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const managementProjectionTimeout = 5 * time.Second

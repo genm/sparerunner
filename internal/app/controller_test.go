@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 func TestAdminListenerRejectsNonLoopbackExposure(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/app"
+	"github.com/genm/sparerunner/internal/app"
 )
 
 func TestRunVersionPrintsBuildInformation(t *testing.T) {

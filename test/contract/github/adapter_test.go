@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	githubadapter "github.com/genm/tewake/internal/github"
+	githubadapter "github.com/genm/sparerunner/internal/github"
 )
 
 func TestPollerCommitsBeforeAcknowledgement(t *testing.T) {

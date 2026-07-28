@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const gibibyte = uint64(1024 * 1024 * 1024)

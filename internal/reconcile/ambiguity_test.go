@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 func TestResolveGitHubStartAmbiguityUsesExactAgentCommandBeforeProviderRemoval(t *testing.T) {

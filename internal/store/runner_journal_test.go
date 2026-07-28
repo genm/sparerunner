@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestAgentRunnerJournalPersistsCASAcrossRestart(t *testing.T) {

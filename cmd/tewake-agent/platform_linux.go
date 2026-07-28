@@ -11,9 +11,9 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"github.com/genm/tewake/internal/app"
-	"github.com/genm/tewake/internal/platform/linux"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/app"
+	"github.com/genm/sparerunner/internal/platform/linux"
+	"github.com/genm/sparerunner/internal/runner"
 	"github.com/spf13/cobra"
 )
 

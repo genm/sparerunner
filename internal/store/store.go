@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 const sqliteDriver = "sqlite"

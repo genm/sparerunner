@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/winacl"
 )
 
 func TestWindowsStateInitializationSecuresOnlyEmptyOwnedDirectory(t *testing.T) {

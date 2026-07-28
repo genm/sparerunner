@@ -7,7 +7,7 @@ import (
 	"os"
 	"runtime"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // NewPlatformAppCredentialStore keeps the GitHub App key behind the same
