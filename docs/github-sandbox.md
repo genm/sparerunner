@@ -80,7 +80,7 @@ GitHub sandbox before release evidence can close this task.
 Mixed DNS answers intentionally skip blocked special-use addresses and dial a
 remaining vetted public IP; an all-blocked answer fails closed. The JIT adapter
 handoff itself never persists or formats its opaque body, but it does not claim
-memory zeroization or a disposable official runner root: spr-006 must remove and
+memory zeroization or a disposable official runner root: task-006 must remove and
 verify every credential, setting, and RSA material written by the official runner.
 
 Record the following in an access-controlled release-evidence location:
@@ -100,7 +100,7 @@ Record the following in an access-controlled release-evidence location:
    absent from controller SQLite, agent journal, JSON logs, metrics, API
    responses, diagnostics, runner workspace, and any test evidence.
 
-The local `spr-002` adapter implementation and fake-contract gate are complete,
+The local `task-002` adapter implementation and fake-contract gate are complete,
 but these checks must still be recorded against a live private sandbox before
 the release gate can close. Local tests are not a claim of GitHub runtime proof;
-the remaining live evidence is tracked by `spr-014` and `spr-015`.
+the remaining live evidence is tracked by `task-014` and `task-015`.

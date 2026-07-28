@@ -1,9 +1,9 @@
 # Linux private-sandbox acceptance
 
-This directory owns the SPR-007 live release gate. It is deliberately separate
+This directory owns the task-007 live release gate. It is deliberately separate
 from `sprun serve`: the harness composes the real Controller, Agent broker,
 GitHub App client, pinned scale-set adapter, message session, JIT lifecycle, and
-single-slot coordinator in one process without introducing the future SPR-012
+single-slot coordinator in one process without introducing the future task-012
 Target/config API early.
 
 The gate requires a protected trusted commit, a private repository, an installed

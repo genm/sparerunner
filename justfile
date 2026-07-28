@@ -142,7 +142,7 @@ test-node-availability-linux:
 test-platform-linux:
   ./scripts/test-platform-linux.sh
 
-validate-release-evidence file='output/release-evidence/spr-014.json':
+validate-release-evidence file='output/release-evidence/task-014.json':
   ./scripts/validate-release-evidence.sh "{{file}}"
 
 check-release-artifacts dist='dist':

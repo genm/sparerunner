@@ -464,7 +464,7 @@ func TestSafeTreePurgeRejectsNestedJunctionWithoutDeletingExternalCanary(t *test
 	}
 }
 
-// The operator CLI was renamed to sprun (spr-023), and .goreleaser.yaml ships
+// The operator CLI was renamed to sprun (task-023), and .goreleaser.yaml ships
 // packaging/** inside every release archive. When the installer and the README
 // disagree with the archive's actual binary name, the documented install command
 // fails against a freshly unpacked release and a successful install leaves the
