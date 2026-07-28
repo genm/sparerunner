@@ -44,12 +44,7 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 		false,
 	)
 	if err != nil {
-		select {
-		case serverErr := <-server:
-			t.Fatalf("bootstrap submit error = %v; server error = %v", err, serverErr)
-		case <-time.After(time.Second):
-		}
-		t.Fatal(err)
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if receivedNodeID != nodeID {
 		t.Fatalf("node ID = %q", receivedNodeID)
@@ -74,7 +69,7 @@ func TestBootstrapPipeReturnsFixedFailureWithoutLeakingCause(t *testing.T) {
 	_, err := submitBootstrapJoin(context.Background(), pipeName, options, false)
 	if !errors.Is(err, ErrBootstrapEnrollment) ||
 		strings.Contains(err.Error(), "secret upstream detail") {
-		t.Fatalf("client error = %v", err)
+		t.Fatalf("client error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if err := <-server; err != nil {
 		t.Fatal(err)
@@ -164,7 +159,11 @@ func TestSubmitBootstrapJoinTimesOutWhenServiceDoesNotAck(t *testing.T) {
 		options,
 		false,
 	); !errors.Is(err, ErrBootstrapUnavailable) {
-		t.Fatalf("missing bootstrap acknowledgement error = %v", err)
+		t.Fatalf(
+			"missing bootstrap acknowledgement error = %v; %s",
+			err,
+			bootstrapServerDetail(server),
+		)
 	}
 	select {
 	case err := <-server:
@@ -194,7 +193,7 @@ func TestBootstrapJoinCannotReplayAfterOnePipeInstance(t *testing.T) {
 		options,
 		false,
 	); err != nil {
-		t.Fatal(err)
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if err := <-server; err != nil {
 		t.Fatal(err)
@@ -334,6 +333,21 @@ func startBootstrapServer(t *testing.T, serve func(ctx context.Context)) {
 			t.Error("bootstrap pipe server goroutine did not finish")
 		}
 	})
+}
+
+// bootstrapServerDetail reports what the server goroutine saw. A client that
+// gives up returns the same ErrBootstrapUnavailable whether the server never
+// created its pipe, rejected the pipe ACL, or simply never answered, so a
+// failure that hides the server's own error is not diagnosable from CI logs.
+// TEWAKE_WINDOWS_DEBUG is already set for these tests, so an identity rejection
+// arrives here with its reason attached.
+func bootstrapServerDetail(server <-chan error) string {
+	select {
+	case err := <-server:
+		return fmt.Sprintf("server error = %v", err)
+	case <-time.After(5 * time.Second):
+		return "server reported no result"
+	}
 }
 
 // bootstrapTestPipeName gives each test its own pipe name. Isolation has to come
