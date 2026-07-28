@@ -10,6 +10,11 @@ updates:
       day: monday
     commit-message:
       prefix: chore(deps)
+    # A week gives a malicious or compromised release (the class of incident
+    # that hits a widely-used action or module days after publish) time to be
+    # caught and pulled before Dependabot ever proposes it here.
+    cooldown:
+      default-days: 7
     groups:
       github-actions:
         patterns:
@@ -22,6 +27,8 @@ updates:
       day: monday
     commit-message:
       prefix: chore(deps)
+    cooldown:
+      default-days: 7
     groups:
       # The scale-set client is the one GitHub protocol contract this project
       # cannot absorb blindly, so it stays outside the batch and gets its own
