@@ -23,9 +23,10 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 	const nodeID = "0123456789abcdef0123456789abcdef"
 	server := make(chan error, 1)
 	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
 		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
-			server <- err
+			server <- bootstrapStageError("receive", started, err)
 			return
 		}
 		if request.Options.JoinCode != options.JoinCode ||
@@ -35,7 +36,54 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 			server <- errors.New("bootstrap request changed enrollment options")
 			return
 		}
-		server <- request.Complete(nodeID, nil)
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
+	})
+	receivedNodeID, err := submitBootstrapJoin(
+		context.Background(),
+		pipeName,
+		options,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
+	}
+	if receivedNodeID != nodeID {
+		t.Fatalf("node ID = %q", receivedNodeID)
+	}
+	if err := <-server; err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestBootstrapCompletesAfterDelayedDurableEnrollment models the real Agent
+// sequence. Production writes node state to disk before it acknowledges, so the
+// pipe sits idle between the request and the response. Every other test
+// completes immediately, which leaves that gap - and whatever the disconnect
+// monitor is doing to the handle inside it - untested.
+func TestBootstrapCompletesAfterDelayedDurableEnrollment(t *testing.T) {
+	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
+	const nodeID = "0123456789abcdef0123456789abcdef"
+	server := make(chan error, 1)
+	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
+		if err != nil {
+			server <- bootstrapStageError("receive", started, err)
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
 	})
 	receivedNodeID, err := submitBootstrapJoin(
 		context.Background(),
@@ -59,12 +107,18 @@ func TestBootstrapPipeReturnsFixedFailureWithoutLeakingCause(t *testing.T) {
 	pipeName := bootstrapTestPipeName(t)
 	server := make(chan error, 1)
 	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
 		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
-			server <- err
+			server <- bootstrapStageError("receive", started, err)
 			return
 		}
-		server <- request.Complete("", errors.New("secret upstream detail"))
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete("", errors.New("secret upstream detail")),
+		)
 	})
 	_, err := submitBootstrapJoin(context.Background(), pipeName, options, false)
 	if !errors.Is(err, ErrBootstrapEnrollment) ||
@@ -181,11 +235,18 @@ func TestBootstrapJoinCannotReplayAfterOnePipeInstance(t *testing.T) {
 	const nodeID = "abcdef0123456789abcdef0123456789"
 	server := make(chan error, 1)
 	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
 		request, err := receiveBootstrapRequest(ctx, pipeName, false)
-		if err == nil {
-			err = request.Complete(nodeID, nil)
+		if err != nil {
+			server <- bootstrapStageError("receive", started, err)
+			return
 		}
-		server <- err
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
 	})
 	if _, err := submitBootstrapJoin(
 		context.Background(),
@@ -333,6 +394,19 @@ func startBootstrapServer(t *testing.T, serve func(ctx context.Context)) {
 			t.Error("bootstrap pipe server goroutine did not finish")
 		}
 	})
+}
+
+// bootstrapStageError names the server stage that failed and how long it took.
+// ErrBootstrapUnavailable is returned both when the server never creates its
+// pipe and when it creates one but cannot deliver its response, and those two
+// look identical from the client. The stage and the elapsed time separate them:
+// a receive failure reports milliseconds, while a response that only fails once
+// the client gave up reports the client's whole connection timeout.
+func bootstrapStageError(stage string, started time.Time, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s after %s: %w", stage, time.Since(started), err)
 }
 
 // bootstrapServerDetail reports what the server goroutine saw. A client that
