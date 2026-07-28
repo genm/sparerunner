@@ -1532,7 +1532,7 @@ func TestControllerRunnerGeneratedReconciliationNeverDeletesDifferentRunnerID(t 
 
 	// Model a crash after the generated identity was committed but before the
 	// durable start-dispatch transition. This is the only generated state where
-	// TWK-007 may remove an unaccepted registration.
+	// SPR-007 may remove an unaccepted registration.
 	stateStore.mu.Lock()
 	stateStore.attempt.State = store.GitHubJITGenerated
 	stateStore.claim.State = store.GitHubClaimJITGenerated

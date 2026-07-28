@@ -88,7 +88,7 @@ func (rootCleaner) WorkspaceRef(context.Context, *os.Root, string) (WorkspaceRef
 
 func (rootCleaner) RemoveAndVerify(_ context.Context, root *os.Root, name string) error {
 	// Absence before cleanup is not success: a renamed root can still contain
-	// credentials. Platform adapters add durable file identity in twk-007/008.
+	// credentials. Platform adapters add durable file identity in spr-007/008.
 	if _, err := root.Lstat(name); err != nil {
 		return ErrCleanupFailed
 	}

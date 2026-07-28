@@ -50,6 +50,6 @@ fi
 
 mkdir -p "${repo_root}/output/test-results"
 cd "${repo_root}/web"
-TEWAKE_E2E_BINARY="${binary}" \
-  TEWAKE_E2E_SENSITIVE_OUTPUT_DIR="${sensitive_output}" \
+SPARERUNNER_E2E_BINARY="${binary}" \
+  SPARERUNNER_E2E_SENSITIVE_OUTPUT_DIR="${sensitive_output}" \
   "${playwright}" test -c playwright-e2e.config.ts

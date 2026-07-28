@@ -351,4 +351,4 @@ catch {
 }
 
 Write-Output "SpareRunner services are installed and waiting for enrollment."
-Write-Output "Run this elevated command once: & `"$InstalledCli`" join twk_..."
+Write-Output "Run this elevated command once: & `"$InstalledCli`" join spr_..."

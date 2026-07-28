@@ -47,7 +47,7 @@ type IdentityResolver interface {
 	ResolveRunnerIdentity(runner.ContainmentRef) (RunnerIdentity, error)
 }
 
-// StaticIdentity is the safe twk-007 default for slot 0. It is deliberately a
+// StaticIdentity is the safe spr-007 default for slot 0. It is deliberately a
 // single identity, not a claim that maxRunners greater than one is isolated.
 type StaticIdentity RunnerIdentity
 
@@ -115,7 +115,7 @@ type Runtime interface {
 	Alive(context.Context, runner.ContainmentRef, int) (bool, error)
 }
 
-// SlotAdmission is required by the privileged helper to enforce the twk-007
+// SlotAdmission is required by the privileged helper to enforce the spr-007
 // single-slot account boundary across executions and helper restarts.
 type SlotAdmission interface {
 	SlotBusy(context.Context, runner.ContainmentRef) (bool, error)

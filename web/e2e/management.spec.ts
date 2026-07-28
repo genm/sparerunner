@@ -182,7 +182,7 @@ async function createJoinCode(
   const delivery = page.getByRole("textbox", { name: "One-time join code" });
   await expect(delivery).toBeVisible();
   const code = await delivery.inputValue();
-  if (!code.startsWith("twk_")) {
+  if (!code.startsWith("spr_")) {
     throw new Error("Controller returned a non-canonical join-code delivery.");
   }
   return code;

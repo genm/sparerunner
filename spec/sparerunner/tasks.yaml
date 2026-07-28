@@ -548,7 +548,9 @@ tasks:
       - web
     ci_targets: [lint, typecheck, test, build]
     pr_order: 17
-    status: todo
+    status: in_progress
+    notes:
+      - "2026-07-28: The status was stale at `todo` while the work had already landed. The domain and transport carry eligible and excluded Targets on the agent session, the controller adopts and enforces owner exclusions, the agent enforces them at the exec boundary, and the nodectl v2 surface is exposed through the API, the Web console, the tray, the CLI, and Raycast. Restart, reboot, and disconnected-change acceptance still needs live evidence."
     acceptance:
       - When a node owner excludes one GitHub Target, that node receives no new execution for it while every other eligible Target on that node continues unaffected.
       - An excluded Target remains excluded after an agent service restart or an OS reboot.

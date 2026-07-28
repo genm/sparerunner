@@ -1,9 +1,9 @@
 openapi: 3.0.3
 info:
-  title: Tewake Management API
+  title: SpareRunner Management API
   version: 0.1.0
   description: |
-    Loopback-first, single-administrator management contract for Tewake.
+    Loopback-first, single-administrator management contract for SpareRunner.
     Credential-bearing join codes are returned only by their explicit create
     operation and are never available from a later read.
 servers:

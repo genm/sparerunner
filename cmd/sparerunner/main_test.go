@@ -52,7 +52,7 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 	command.SetOut(&stdout)
 	command.SetErr(&stderr)
 	command.SetArgs([]string{
-		"twk_test-code",
+		"spr_test-code",
 		"--state-dir",
 		stateDirectory,
 	})

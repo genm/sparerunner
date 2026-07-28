@@ -94,7 +94,7 @@ func newEvidenceCommand() *cobra.Command {
 	var file string
 	validate := &cobra.Command{
 		Use:   "validate",
-		Short: "Validate a TWK-014 cross-platform evidence manifest",
+		Short: "Validate a SPR-014 cross-platform evidence manifest",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			manifest, err := releaseevidence.ValidateFile(file)

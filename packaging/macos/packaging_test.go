@@ -94,7 +94,7 @@ func TestInstallationPrecedesRootContextJoinIntoServiceState(t *testing.T) {
 	readme := readPackagingFile(t, "README.md")
 	install := `sudo ./packaging/macos/install-service.sh`
 	installCLI := `./sparerunner /usr/local/bin/sparerunner`
-	join := `sudo /usr/local/bin/sparerunner join twk_... \`
+	join := `sudo /usr/local/bin/sparerunner join spr_... \`
 	state := `--state-dir "/Library/Application Support/SpareRunner/agent"`
 	activation := `sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent`
 	installAt := strings.Index(readme, install)

@@ -737,7 +737,7 @@ func resolveGitHubAvailableClaim(
 		return resolved, resolvedRequeue, false, nil
 	}
 	if len(unclaimed) > 1 {
-		// The TWK-007 vertical owns one concrete slot and may not partially
+		// The SPR-007 vertical owns one concrete slot and may not partially
 		// acknowledge a message containing more independent availability than it
 		// can durably claim. The pinned poll requests capacity one, so this is a
 		// fail-closed preview-contract violation.

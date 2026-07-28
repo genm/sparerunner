@@ -1,6 +1,6 @@
 # Windows agent packaging
 
-Status: implementation and cross-compilation are available, but TWK-009 remains
+Status: implementation and cross-compilation are available, but SPR-009 remains
 `in_progress` until the real Windows acceptance matrix below has been captured.
 Cross-compilation is not evidence for SCM, DPAPI, Job Object, locked-file, sleep,
 or reboot behavior.
@@ -65,7 +65,7 @@ The service starts without enrollment state and exposes exactly one local named
 pipe instance. In the same elevated session, run:
 
 ```powershell
-& "$env:ProgramFiles\SpareRunner\sparerunner.exe" join twk_...
+& "$env:ProgramFiles\SpareRunner\sparerunner.exe" join spr_...
 ```
 
 On Windows, `sparerunner join` does not write Agent state as the interactive user. It

@@ -197,7 +197,7 @@ export function createScenarioClient(scenario: ScenarioName): ManagementClient {
       return configuration;
     },
     async createJoinCode() {
-      return { tokenId: "0123456789abcdef0123456789abcdef", code: "twk_secret_for_component_test" };
+      return { tokenId: "0123456789abcdef0123456789abcdef", code: "spr_secret_for_component_test" };
     },
     async cancelJoinCode() {},
     async setNodeState(nodeId, action) {

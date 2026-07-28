@@ -258,7 +258,7 @@ func TestWindowsEnrollmentAckFailureExitsAndRestartUsesDurableState(
 	disconnected := make(chan struct{})
 	request := &fakeWindowsBootstrapRequest{
 		options: platformwindows.BootstrapJoinOptions{
-			JoinCode:          "twk_test",
+			JoinCode:          "spr_test",
 			Controller:        "https://controller.example.test:7443",
 			DiscoveryTimeout:  time.Second,
 			ConnectionTimeout: 2 * time.Second,

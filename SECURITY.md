@@ -2,12 +2,12 @@
 
 ## Supported versions
 
-Tewake is pre-alpha and has no supported release yet. Security fixes target the
+SpareRunner is pre-alpha and has no supported release yet. Security fixes target the
 default branch until the first tagged support policy is published.
 
 ## Reporting a vulnerability
 
-Please use GitHub private vulnerability reporting for `genm/tewake` when it is
+Please use GitHub private vulnerability reporting for `genm/sparerunner` when it is
 available. Do not include secrets, exploit payloads, or sensitive runner logs in a
 public issue.
 
@@ -45,4 +45,4 @@ CycloneDX SBOMs, real three-OS evidence, and platform signatures are verified.
 See [docs/RELEASE.md](docs/RELEASE.md) for the operator checklist.
 
 The detailed threat model and platform conformance results are tracked by
-`twk-014` and must exist before the first public tag.
+`spr-014` and must exist before the first public tag.

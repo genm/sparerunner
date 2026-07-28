@@ -110,7 +110,7 @@ fail-closed behavior; they do not prove native Keychain access or ACL behavior.
 
 ## Installation
 
-The release installer in `twk-015` invokes the checked
+The release installer in `spr-015` invokes the checked
 `install-service.sh`. For a development package:
 
 ```bash
@@ -119,7 +119,7 @@ sudo install -o root -g wheel -m 0755 \
 sudo install -o root -g wheel -m 0755 \
   ./sparerunner-agent /usr/local/libexec/sparerunner-agent
 sudo ./packaging/macos/install-service.sh
-sudo /usr/local/bin/sparerunner join twk_... \
+sudo /usr/local/bin/sparerunner join spr_... \
   --state-dir "/Library/Application Support/SpareRunner/agent"
 sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent
 ```

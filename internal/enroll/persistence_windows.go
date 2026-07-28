@@ -15,7 +15,7 @@ import (
 	syswindows "golang.org/x/sys/windows"
 )
 
-const windowsDPAPIMagic = "TWKDPAPI\x01"
+const windowsDPAPIMagic = "SPRDPAPI\x01"
 
 var windowsDPAPIEntropy = []byte("sparerunner/private-material/windows/v1")
 

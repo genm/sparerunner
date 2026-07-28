@@ -1,6 +1,6 @@
 # Native runner isolation limitations
 
-Tewake's default runner is a native, one-job ephemeral process. This choice
+SpareRunner's default runner is a native, one-job ephemeral process. This choice
 keeps installation simple, preserves host caches, and avoids imposing a
 container runtime on personal machines.
 
@@ -14,7 +14,7 @@ These controls are containment for trusted workflows, not a hostile-code
 sandbox. They do not prevent a workflow from reading files visible to its
 service account, exhausting host resources, using the network, or exploiting a
 host vulnerability. Operators must use private repositories and review
-contributors, actions, and dependencies before routing jobs to Tewake.
+contributors, actions, and dependencies before routing jobs to SpareRunner.
 
 Docker or VM execution is intentionally not part of the first release and must
 not be advertised as a security guarantee if introduced later.

@@ -220,9 +220,9 @@ docker run --rm \
     # unknown Target is a deliberate safe no-op rendered as not-currently-
     # eligible, and it must be just as durable as the global intent.
     /opt/sparerunner node targets --state-dir /state/agent \
-      --exclude twk-e2e-unknown-target --source tray --json >/tmp/exclude.json
+      --exclude spr-e2e-unknown-target --source tray --json >/tmp/exclude.json
     grep -q "unknownExclusions" /tmp/exclude.json
-    grep -q "twk-e2e-unknown-target" /tmp/exclude.json
+    grep -q "spr-e2e-unknown-target" /tmp/exclude.json
 
     # Excluding is subtractive, so it is durable the instant it is recorded and
     # survives an agent service restart exactly like a stop.
@@ -235,7 +235,7 @@ docker run --rm \
     agent_pid=$!
     await_endpoint
     /opt/sparerunner node targets --state-dir /state/agent --json >/tmp/targets.json
-    grep -q "twk-e2e-unknown-target" /tmp/targets.json
+    grep -q "spr-e2e-unknown-target" /tmp/targets.json
 
     # The text surface renders it as not-currently-eligible rather than as an
     # error, because the owner may legitimately exclude a Target this node has
@@ -245,15 +245,15 @@ docker run --rm \
 
     # Including removes it again.
     /opt/sparerunner node targets --state-dir /state/agent \
-      --include twk-e2e-unknown-target --source cli --json >/tmp/include.json
-    if grep -q "twk-e2e-unknown-target" /tmp/include.json; then
+      --include spr-e2e-unknown-target --source cli --json >/tmp/include.json
+    if grep -q "spr-e2e-unknown-target" /tmp/include.json; then
       echo "include did not remove the exclusion" >&2
       exit 1
     fi
 
     # An ambiguous invocation is refused rather than silently resolved.
     if /opt/sparerunner node targets --state-dir /state/agent \
-      --exclude --include twk-e2e-unknown-target >/tmp/ambiguous.log 2>&1; then
+      --exclude --include spr-e2e-unknown-target >/tmp/ambiguous.log 2>&1; then
       echo "ambiguous exclude/include invocation was accepted" >&2
       exit 1
     fi
@@ -272,11 +272,11 @@ docker run --rm \
     i=0
     while [ "${i}" -lt 256 ]; do
       /opt/sparerunner node targets --state-dir /state/agent \
-        --exclude "twk-e2e-cap-${i}" >/dev/null
+        --exclude "spr-e2e-cap-${i}" >/dev/null
       i=$((i + 1))
     done
     if /opt/sparerunner node targets --state-dir /state/agent \
-      --exclude twk-e2e-cap-overflow --json >/tmp/cap.json 2>/dev/null; then
+      --exclude spr-e2e-cap-overflow --json >/tmp/cap.json 2>/dev/null; then
       echo "a full exclusion set accepted another entry" >&2
       exit 1
     fi

@@ -351,7 +351,7 @@ describe("App", () => {
     await act(async () => {
       resolveDelivery?.({
         tokenId: "0123456789abcdef0123456789abcdef",
-        code: "twk_late_secret_for_test",
+        code: "spr_late_secret_for_test",
       });
       await pendingDelivery;
     });
@@ -362,7 +362,7 @@ describe("App", () => {
         "csrf-for-test",
       ),
     );
-    expect(screen.queryByText("twk_late_secret_for_test")).toBeNull();
+    expect(screen.queryByText("spr_late_secret_for_test")).toBeNull();
   });
 });
 

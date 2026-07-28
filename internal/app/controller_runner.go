@@ -2289,7 +2289,7 @@ func deterministicExecutionID(
 	messageID int,
 	runnerRequestID int64,
 ) domain.ExecutionID {
-	return domain.ExecutionID("twk-exec-" + deterministicControllerToken(
+	return domain.ExecutionID("spr-exec-" + deterministicControllerToken(
 		fmt.Sprintf(
 			"execution\x00%d\x00%d\x00%d",
 			scaleSetID,
@@ -2305,7 +2305,7 @@ func deterministicRunnerName(scaleSetID store.ScaleSetID, runnerRequestID int64)
 }
 
 func deterministicCommandID(kind string, executionID domain.ExecutionID, discriminator string) domain.CommandID {
-	return domain.CommandID("twk-" + kind + "-" + deterministicControllerToken(
+	return domain.CommandID("spr-" + kind + "-" + deterministicControllerToken(
 		kind+"\x00"+string(executionID)+"\x00"+discriminator))
 }
 

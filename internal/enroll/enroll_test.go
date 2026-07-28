@@ -335,7 +335,7 @@ func TestRenewalPreservesNodeAndSupersedesOldCredential(t *testing.T) {
 
 func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	service, _, now := testService(t)
 	identityDirectory := t.TempDir()
@@ -379,7 +379,7 @@ func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 
 func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	service, _, _ := testService(t)
 	directory := t.TempDir()
@@ -426,7 +426,7 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 
 func TestPrivatePersistenceRemovalIsIdempotentAndRejectsSymlinks(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o700); err != nil {

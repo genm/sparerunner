@@ -136,7 +136,7 @@ func TestEnrollmentRejectionsAppendBoundedSecretFreeAuditAfterClientCancellation
 	}{
 		{body: `{"joinCode":`, wantStatus: http.StatusBadRequest},
 		{
-			body:       `{"joinCode":"twk_secret-canary","csr":"AA"}`,
+			body:       `{"joinCode":"spr_secret-canary","csr":"AA"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 	}
