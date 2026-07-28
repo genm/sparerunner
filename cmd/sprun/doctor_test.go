@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -304,8 +305,14 @@ func TestDoctorFailsWithNodectlClassWhenAgentEndpointDoesNotAnswer(t *testing.T)
 		t.Fatalf("report.OK = true: %#v", report.Findings)
 	}
 	agent := doctorFindingByCheck(t, report, doctorCheckAgentEndpoint)
-	if agent.Status != doctorStatusFail ||
-		agent.ErrorClass != nodectl.ErrorClassEndpointUnavailable {
-		t.Fatalf("agent finding = %#v", agent)
+	// Windows has no supported local control endpoint yet and fails closed with
+	// its own class; doctor must pass through whichever class the platform's
+	// nodectl contract actually emits.
+	wantClass := nodectl.ErrorClassEndpointUnavailable
+	if runtime.GOOS == "windows" {
+		wantClass = nodectl.ErrorClassEndpointUnsupported
+	}
+	if agent.Status != doctorStatusFail || agent.ErrorClass != wantClass {
+		t.Fatalf("agent finding = %#v, want class %q", agent, wantClass)
 	}
 }
