@@ -201,7 +201,6 @@ func TestValidateBootstrapRequiresExactHostOriginAndPost(t *testing.T) {
 	}
 
 	for index, test := range tests {
-		index := index
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -601,7 +600,6 @@ func TestManagerRejectsNonCanonicalOrNonLoopbackOriginAndZeroRoot(t *testing.T) 
 		"ftp://localhost:7442",
 	}
 	for _, origin := range origins {
-		origin := origin
 		t.Run(origin, func(t *testing.T) {
 			t.Parallel()
 			if _, err := NewManager(root, origin, false); !errors.Is(err, ErrInvalidCanonicalOrigin) {

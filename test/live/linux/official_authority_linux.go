@@ -10,6 +10,9 @@ func (liveAuthorityProbe) officialRunnerAuthority(
 	runtimeRoot string,
 ) (string, string, int64, error) {
 	path, pkg, err := expectedOfficialRunnerAuthority(runtimeRoot)
+	if err != nil {
+		return "", "", 0, errEvidenceInvalid
+	}
 	if err := validateTrustedPathChainForUID(path, false, 0); err != nil {
 		return "", "", 0, errEvidenceInvalid
 	}

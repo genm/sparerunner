@@ -21,7 +21,7 @@ func main() {
 	)
 	defer stop()
 	logger := slog.New(slog.NewJSONHandler(os.Stderr, nil))
-	if err := runMacOSLiveCLI(ctx, os.Args[1:], logger); err != nil {
+	if err := runMacOSLiveCLI(ctx, os.Args[1:]); err != nil {
 		logger.Error(
 			"macos_live_acceptance_failed",
 			slog.String("error_class", classifyMacOSLiveError(err)),
@@ -30,16 +30,13 @@ func main() {
 	}
 }
 
-func runMacOSLiveCLI(
-	ctx context.Context,
-	args []string,
-	logger *slog.Logger,
-) error {
+// The macOS subcommands report through their evidence documents rather than a
+// logger, so this CLI takes no logger. main still logs the failure class it gets
+// back. A subcommand that needs structured logging adds the parameter with a
+// real use.
+func runMacOSLiveCLI(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errMacOSConfigInvalid
-	}
-	if logger == nil {
-		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	switch args[0] {
 	case "validate-config":

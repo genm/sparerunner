@@ -213,7 +213,10 @@ func TestWindowsPrivateMaterialRejectsReparseLocator(t *testing.T) {
 
 func windowsPrivateDirectory(t *testing.T) string {
 	t.Helper()
-	_ = os.Setenv("SPARERUNNER_WINDOWS_DEBUG", "1")
+	// t.Setenv restores the previous value when the test ends, so the debug flag
+	// cannot leak into a later test in the same binary. No test in this package
+	// runs in parallel, which is what t.Setenv requires.
+	t.Setenv("SPARERUNNER_WINDOWS_DEBUG", "1")
 	directory := filepath.Join(filepath.Clean(t.TempDir()), "private")
 	if err := winacl.CreatePrivateDirectory(directory); err != nil {
 		currentSID, _ := winacl.CurrentProcessSID()

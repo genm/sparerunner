@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -284,8 +283,4 @@ func (b *boundedReadCloser) Read(data []byte) (int, error) {
 func (b *boundedReadCloser) Close() error {
 	b.closeOnce.Do(func() { b.closeErr = b.ReadCloser.Close() })
 	return b.closeErr
-}
-
-func endpointError(endpoint *url.URL) error {
-	return fmt.Errorf("%w: %s", ErrUnsafeGitHubEndpoint, endpoint.Hostname())
 }

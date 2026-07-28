@@ -684,6 +684,15 @@ func validateMetadataSet(ctx context.Context, db queryer, role string, expectedK
 		}
 		keys = append(keys, key)
 	}
+	// Close reports the driver's close error. A failure part-way through
+	// iteration — an I/O error or a corrupt page — surfaces only through Err, and
+	// without this check a truncated read would be reported below as an
+	// unexpected key set: the right verdict for the wrong reason, with the actual
+	// corruption discarded.
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return fmt.Errorf("%w: read metadata keys: %v", ErrCorruptBackup, err)
+	}
 	if err := rows.Close(); err != nil {
 		return err
 	}
@@ -851,6 +860,13 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 				return err
 			}
 			columns = append(columns, name)
+		}
+		// Err, not just Close: a read that failed part-way through would
+		// otherwise be reported as an unexpected column set, hiding the I/O error
+		// that actually caused it.
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("%w: read columns of %s: %v", ErrCorruptBackup, table, err)
 		}
 		if err := rows.Close(); err != nil || !sameStrings(columns, expected[table]) {
 			return fmt.Errorf("%w: unexpected columns in %s", ErrCorruptBackup, table)

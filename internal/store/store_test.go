@@ -2323,6 +2323,9 @@ func tableColumns(t *testing.T, db *sql.DB, table string) []string {
 		}
 		columns = append(columns, name)
 	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
 	return columns
 }
 
