@@ -1,0 +1,151 @@
+name: Deep verification
+
+# Verification that is real but too slow to keep a pull request waiting.
+# Standard runners are free and unmetered for this public repository, so the
+# only cost of running it is wall-clock, and the only reason it is not in
+# required CI is feedback latency.
+#
+# Nothing here gates a merge. It reports on the default branch, where a finding
+# is a defect in shipped behavior rather than in one proposed change.
+on:
+  schedule:
+    # 17:41 UTC daily, off the hour and away from the CodeQL, Scorecard, and
+    # security-drift schedules so they do not contend.
+    - cron: "41 17 * * *"
+  workflow_dispatch:
+    inputs:
+      fuzz-minutes:
+        description: Fuzzing time budget per target, in minutes.
+        type: choice
+        default: "20"
+        options:
+          - "5"
+          - "20"
+          - "60"
+          - "240"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deep-verification-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  fuzz:
+    name: Fuzz ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    # A GitHub-hosted job is capped at six hours, so even the longest selectable
+    # budget leaves room for the build and the corpus restore.
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: ./internal/enroll
+            target: FuzzDecodeJoinCode
+          - package: ./internal/transport
+            target: FuzzDecodeEnvelope
+          - package: ./internal/config
+            target: FuzzDecodeJSON
+          - package: ./internal/config
+            target: FuzzDecodeYAML
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          # The corpus below is cached instead of the build cache, so the two
+          # never share an entry and restoring a corpus cannot carry a compiled
+          # artifact with it.
+          cache: false
+
+      - name: Locate the generated fuzz corpus
+        run: echo "GO_FUZZ_CORPUS=$(go env GOCACHE)/fuzz" >> "${GITHUB_ENV}"
+
+      # Each run starts from the inputs earlier runs found interesting, so
+      # nightly fuzzing accumulates coverage instead of rediscovering the same
+      # shallow inputs every time.
+      - name: Restore the generated fuzz corpus
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.GO_FUZZ_CORPUS }}
+          key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
+          restore-keys: fuzz-corpus-${{ matrix.target }}-
+
+      - name: Fuzz ${{ matrix.target }}
+        env:
+          FUZZ_MINUTES: ${{ inputs.fuzz-minutes || '20' }}
+        run: >-
+          go test -run '^$' -fuzz '^${{ matrix.target }}$'
+          -fuzztime "${FUZZ_MINUTES}m" -timeout 290m ${{ matrix.package }}
+
+      # A failing input is written into the package's own testdata directory,
+      # which is the file a maintainer commits to turn the finding into a
+      # permanent seed case.
+      - name: Upload the failing input
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: fuzz-failure-${{ matrix.target }}-${{ github.run_attempt }}
+          path: "**/testdata/fuzz/"
+          if-no-files-found: ignore
+          retention-days: 7
+
+  race:
+    name: Race and repetition (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # Required CI's go-race job is scoped to the five concurrency-owning
+    # packages because internal/app and internal/store are far too slow under
+    # the detector to keep a pull request waiting, and its own comment records
+    # that covering them is worth its own task. This is that coverage: the whole
+    # module, on every supported operating system, where the budget is only
+    # wall-clock. Shuffling and a second pass are what expose order dependence
+    # between tests, which a single ordered run cannot.
+    #
+    # Measured: one whole-module pass under the detector took 24m32s on a hosted
+    # ubuntu-24.04 runner, so two passes land near fifty minutes. The budget is
+    # that measurement with room for a slower runner, not a round number.
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-24.04
+          - macos-15
+          - windows-2025
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Test under the race detector with shuffled repetition
+        shell: bash
+        run: |
+          mkdir -p output/test-results
+          go tool gotestsum \
+            --format github-actions \
+            --format-hide-empty-pkg \
+            --junitfile output/test-results/go-deep-race-junit.xml \
+            --jsonfile output/test-results/go-deep-race.json \
+            -- -race -shuffle=on -count=2 -timeout=170m ./...
+
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: deep-race-failure-${{ matrix.os }}-${{ github.run_attempt }}
+          path: output/test-results/
+          if-no-files-found: ignore
+          retention-days: 7

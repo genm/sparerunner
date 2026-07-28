@@ -60,4 +60,4 @@ release archive:
 - [Support matrix](docs/security/SUPPORT_MATRIX.md)
 
 What those documents do not yet have is live three-OS conformance evidence. That
-evidence is tracked by `spr-014` and must exist before the first public tag.
+evidence is tracked by `task-014` and must exist before the first public tag.

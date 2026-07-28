@@ -6,14 +6,14 @@ against an administrator-owned private GitHub sandbox and real Linux, macOS,
 and Windows Agents. Fork pull requests must never send untrusted code to a
 personal machine.
 
-## SPR-014 manifest
+## task-014 manifest
 
 The harness writes one JSON file to a private evidence directory (normally
-`output/release-evidence/spr-014.json`). The checked-in schema is implemented by
+`output/release-evidence/task-014.json`). The checked-in schema is implemented by
 `internal/releaseevidence`; validate it with:
 
 ```bash
-sprun evidence validate --file output/release-evidence/spr-014.json
+sprun evidence validate --file output/release-evidence/task-014.json
 ```
 
 The validator is fail-closed and requires:
@@ -37,5 +37,5 @@ invalid manifest. The validator does not generate a passing file.
 
 The Linux harness is under [`test/live/linux`](../live/linux) and requires the
 private sandbox, an installed App, and a real systemd/cgroup-v2 host. macOS and
-Windows harnesses remain release work for SPR-008 and SPR-009; no local
+Windows harnesses remain release work for task-008 and task-009; no local
 cross-build or synthetic fixture may be reported as their live evidence.
