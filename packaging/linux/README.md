@@ -102,17 +102,70 @@ Distribution packages install:
 /usr/lib/tmpfiles.d/sparerunner.conf
 ```
 
-Then they run:
+`install-service.sh` publishes the three definition sets, declares the accounts
+and directories, and starts the services. Place the binaries first:
 
 ```bash
-systemd-sysusers /usr/lib/sysusers.d/sparerunner.conf
-systemd-tmpfiles --create /usr/lib/tmpfiles.d/sparerunner.conf
-systemctl daemon-reload
-systemctl enable --now sparerunner-supervisor.service sparerunner-agent.service
+sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/local/bin/sparerunner-agent
+sudo install -o root -g root -m 0755 ./sprun /usr/local/bin/sprun
+sudo ./packaging/linux/install-service.sh
 ```
 
-Enrollment material must already exist in `/var/lib/sparerunner-agent`; installation
-does not synthesize credentials or copy a private key from another user.
+It refuses before its first mutation when the host cannot run the native
+adapter: a kernel older than 5.14, a hierarchy other than unified cgroup v2, a
+missing or group-writable agent binary, a symlinked or world-writable
+installation ancestor, an installed file that differs from this package, a
+running service, or a declared directory that already exists under another
+identity. `systemd-sysusers` and `systemd-tmpfiles` adopt an existing tree
+silently, so every directory the package declares is verified against
+`tmpfiles.d/sparerunner.conf` before either tool runs. A failure rolls back the
+files it published after re-verifying that each still matches the package; the
+declared accounts and empty directories are left in place and reused by a later
+install.
+
+Installation intentionally precedes enrollment. Until the node is enrolled the
+Agent exits with an explicit not-initialized error and systemd restarts it, so
+the installer reports it as pending rather than as a failed install and gates
+only on the Supervisor and its socket. Once `/var/lib/sparerunner-agent` holds
+node state, an Agent that is not running fails the install:
+
+```bash
+sudo -u sparerunner-agent /usr/local/bin/sprun join spr_... \
+  --state-dir /var/lib/sparerunner-agent
+sudo systemctl restart sparerunner-agent.service
+```
+
+Installation never synthesizes credentials or copies a private key from another
+user. Do not pass a node private key through an environment variable.
+
+This is an initial-install contract, not an upgrade mechanism. If preflight
+reports foreign, partial, or changed state, inspect it; do not add a force-adopt
+option or hand-write the ownership marker at
+`/var/lib/sparerunner-supervisor/.sparerunner-install-ownership-v1`.
+
+`uninstall-service.sh` stops and disables both services and removes only the
+package files it can prove this package published, re-verifying each one
+immediately before removal. It refuses to discard a locally modified unit. Node
+state is deliberately retained, because the node credential is durable material
+this script cannot decide to destroy:
+
+```bash
+sudo ./packaging/linux/uninstall-service.sh
+```
+
+Discarding the node identity is a separate, explicit operator decision covering
+`/var/lib/sparerunner-supervisor`, `/var/lib/sparerunner-agent`,
+`/var/cache/sparerunner-agent`, `/var/lib/sparerunner-runtime`, and
+`/var/lib/sparerunner-runner`. Remove the node from the fleet first, and do not
+remove `/var/lib/sparerunner-runtime/executions` while an execution is still
+contained.
+
+Both scripts run every privileged operation through a fixed absolute command
+surface and accept a redirected root only under an explicit non-root test
+marker; `install_service_integration_test.go` drives them against that surface.
+The scripts are the local development and single-machine path. Building signed
+`.deb`/`.rpm` packages that call the same contract from their scriptlets remains
+part of spr-015.
 
 ## Native isolation limitation
 
