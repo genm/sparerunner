@@ -38,9 +38,17 @@ fmt-check:
 
 lint: lint-go lint-web lint-raycast lint-workflows lint-shell lint-secrets check-npm-policy
 
+# golangci-lint's package list excludes cmd/sparerunner-tray for the same
+# reason `just build-tray` and cross-build.sh keep it out of their default
+# scope: its systray dependency needs cgo and each OS's own native toolchain,
+# which cross-compiling GOOS cannot provide. Matches the CI go-lint job's list,
+# so setting GOOS locally reproduces that job exactly. `go vet` is left
+# unscoped: it is only ever run natively (both here and in CI's go-quality
+# job), where tray's cgo dependency resolves fine.
 lint-go:
   go vet ./...
-  golangci-lint run ./...
+  golangci-lint run ./cmd/sprun/... ./cmd/sparerunner-agent/... ./internal/... \
+    ./packaging/... ./test/... ./spec/...
 
 lint-web:
   pnpm --dir web lint

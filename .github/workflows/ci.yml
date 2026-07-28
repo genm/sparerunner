@@ -216,6 +216,16 @@ jobs:
           # Keep this in step with the golangci-lint pin in .mise.toml, which is
           # what `just lint` uses locally.
           version: v2.12.2
+          # cmd/sparerunner-tray needs cgo and each OS's own native toolchain
+          # (systray's darwin backend is Objective-C behind cgo), so it is
+          # excluded from every cross-compiled cross-build.sh target for the
+          # same reason and built only natively via `just build-tray`. Confirmed
+          # in a container that both CGO_ENABLED=0 and =1 still fail to
+          # typecheck it under GOOS=darwin on a Linux host — this is not a
+          # CGO_ENABLED toggle, cross-compiling it is simply not possible here.
+          args: >-
+            ./cmd/sprun/... ./cmd/sparerunner-agent/... ./internal/...
+            ./packaging/... ./test/... ./spec/...
 
   go-race:
     # Scoped on purpose. Measured on this tree with `go test -race -count=1`:
