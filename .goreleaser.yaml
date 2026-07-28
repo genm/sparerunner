@@ -4,8 +4,15 @@ project_name: sparerunner
 
 before:
   hooks:
+    # Verify, never rewrite, and do it before anything else runs. `go mod tidy`
+    # here would let a tag whose module graph is not already tidy be silently
+    # repaired mid-build, so the shipped binaries, the licence bundle, and the
+    # SBOMs could all describe a different dependency set from the tagged source
+    # a consumer checks out. CI already runs tidy-and-diff as a blocking pull
+    # request gate, which is where a human can act on the failure.
+    - go mod verify
+    - git diff --exit-code -- go.mod go.sum
     - ./scripts/generate-license-bundle.sh licenses
-    - go mod tidy
 
 builds:
   - id: controller
@@ -20,11 +27,20 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    # GoReleaser adds neither of these by default, so without them the released
+    # binaries are the only ones in the project not built reproducibly: every
+    # other build path (`just build`, scripts/cross-build.sh, and CI) already
+    # passes -trimpath. Pinning the modification time and the recorded build date
+    # to the commit is what lets a third party rebuild a tag and get the same
+    # bytes, which is the claim the release footer makes.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X github.com/genm/sparerunner/internal/buildinfo.version={{ .Version }}
       - -X github.com/genm/sparerunner/internal/buildinfo.commit={{ .Commit }}
-      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .Date }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .CommitDate }}
 
   - id: agent
     main: ./cmd/sparerunner-agent
@@ -38,11 +54,20 @@ builds:
       - arm64
     env:
       - CGO_ENABLED=0
+    # GoReleaser adds neither of these by default, so without them the released
+    # binaries are the only ones in the project not built reproducibly: every
+    # other build path (`just build`, scripts/cross-build.sh, and CI) already
+    # passes -trimpath. Pinning the modification time and the recorded build date
+    # to the commit is what lets a third party rebuild a tag and get the same
+    # bytes, which is the claim the release footer makes.
+    flags:
+      - -trimpath
+    mod_timestamp: "{{ .CommitTimestamp }}"
     ldflags:
       - -s -w
       - -X github.com/genm/sparerunner/internal/buildinfo.version={{ .Version }}
       - -X github.com/genm/sparerunner/internal/buildinfo.commit={{ .Commit }}
-      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .Date }}
+      - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .CommitDate }}
 
 archives:
   - id: binaries
@@ -91,15 +116,20 @@ changelog:
       - "^docs?\\(spec\\)"
       - "^test"
 
+# The release workflow runs `goreleaser release --skip=publish`, so GoReleaser
+# builds dist/ but never creates the GitHub release object. That ordering is
+# deliberate: checksums, SBOMs, and the artifact attestation are all verified
+# first, and only then does the workflow create the draft. Creating the release
+# first would leave unverified assets attached to a real release object whenever a
+# later step failed.
+#
+# Because publishing happens in the workflow, the release title and body live
+# there too — .github/workflows/release.yml is their single owner. GoReleaser
+# still writes dist/CHANGELOG.md from the settings above, and the workflow uses it
+# verbatim.
 release:
   github:
     owner: genm
     name: sparerunner
   draft: true
   prerelease: auto
-  name_template: "SpareRunner {{ .Tag }}"
-  header: |
-    This is a draft release. Publish only after the real three-OS and two-installation
-    live evidence gate, platform signing, and clean-machine install checks pass.
-  footer: |
-    Verify `checksums.txt` and the GitHub artifact attestation before installing.

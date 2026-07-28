@@ -224,7 +224,7 @@ if ((Get-Service -Name $AgentService -ErrorAction SilentlyContinue) -or
 }
 
 $InstalledAgent = Join-Path $InstallRoot "sparerunner-agent.exe"
-$InstalledCli = Join-Path $InstallRoot "sparerunner.exe"
+$InstalledCli = Join-Path $InstallRoot "sprun.exe"
 $StateRoot = Join-Path $DataRoot "agent-state"
 $CacheRoot = Join-Path $DataRoot "cache"
 $RuntimeRoot = Join-Path $DataRoot "runtime"

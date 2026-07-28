@@ -17,6 +17,9 @@ const server = setupServer(
     }),
   ),
   http.post("http://sparerunner.test/api/v1/browser-handoffs", async ({ request }) => {
+    // Asserting the request shape here is the point of this handler: it proves
+    // the client sends the claim digest, which no response assertion can show.
+    // oxlint-disable-next-line vitest/no-standalone-expect
     expect(await request.json()).toEqual({ claimDigest: "digest" });
     return HttpResponse.json({
       code: "TWA-DEVICE-CODE",

@@ -1,0 +1,32 @@
+# SpareRunner has one maintainer today. This file exists so that review
+# assignment is automatic and so that the ownership boundaries recorded in
+# AGENTS.md are visible from the pull request itself.
+#
+# Paths are matched last-match-wins, so the specific entries below override the
+# catch-all.
+
+* @genm
+
+# The specification is the project source of truth. A change here changes what
+# every downstream task is allowed to do.
+/spec/ @genm
+
+# Security boundary, threat model, and release evidence.
+/SECURITY.md @genm
+/docs/security/ @genm
+/docs/RELEASE.md @genm
+
+# Supply chain: workflow definitions, pinned action SHAs, release build, and the
+# artifact checkers that decide whether a build may be published.
+/.github/ @genm
+/.goreleaser.yaml @genm
+/scripts/ @genm
+
+# Trust boundaries that fail closed: enrollment, credentials, GitHub protocol
+# adapter, runner lifecycle, and OS-level isolation.
+/internal/auth/ @genm
+/internal/enroll/ @genm
+/internal/github/ @genm
+/internal/platform/ @genm
+/internal/runner/ @genm
+/packaging/ @genm

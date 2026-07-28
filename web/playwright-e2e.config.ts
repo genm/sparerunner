@@ -1,6 +1,6 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const sensitiveOutputDir = process.env.SPARERUNNER_E2E_SENSITIVE_OUTPUT_DIR;
+const sensitiveOutputDir = process.env["SPARERUNNER_E2E_SENSITIVE_OUTPUT_DIR"];
 if (!sensitiveOutputDir) {
   throw new Error(
     "SPARERUNNER_E2E_SENSITIVE_OUTPUT_DIR must point to wrapper-owned temporary storage.",

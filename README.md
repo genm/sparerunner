@@ -1,5 +1,12 @@
 # SpareRunner
 
+[![CI](https://github.com/genm/sparerunner/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/genm/sparerunner/actions/workflows/ci.yml)
+[![CodeQL](https://github.com/genm/sparerunner/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/genm/sparerunner/actions/workflows/codeql.yml)
+[![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/genm/sparerunner/badge)](https://scorecard.dev/viewer/?uri=github.com/genm/sparerunner)
+[![Go Reference](https://pkg.go.dev/badge/github.com/genm/sparerunner.svg)](https://pkg.go.dev/github.com/genm/sparerunner)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+[![Status: pre-alpha](https://img.shields.io/badge/status-pre--alpha-orange)](#status)
+
 **Flexible GitHub Actions runners from the machines you already own — on demand
 or full-time.**
 
@@ -92,10 +99,15 @@ no browser session with the controller — see
 [Connecting a GitHub App](docs/github-app.md):
 
 ```bash
-sprun github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
+sprun github connect --app-id 1234567 --client-id Iv1.… \
+  --private-key-file ~/Downloads/your-app.private-key.pem
 sprun github installations
 sprun config apply fleet.yaml
 ```
+
+Keep the App private key outside any repository working directory, and delete it
+once `sprun github connect` has stored it. It mints installation tokens for every
+installation of that App.
 
 Workflows then select the fleet with:
 
@@ -142,24 +154,46 @@ take later are recorded under Future Direction in the
 
 ## Development
 
-Prerequisites are pinned by `mise`:
+Prerequisites are pinned by `mise`, and `just bootstrap` installs all of them:
 
 ```bash
 mise trust
-mise install
-pnpm --dir web install --frozen-lockfile
-lefthook install
+just bootstrap
 just check
 ```
 
-Common commands:
+`just check` also needs a Docker-compatible runtime for the privileged Linux
+runner boundary test. [CONTRIBUTING.md](CONTRIBUTING.md) covers setup in full,
+including what to do without one.
+
+`just --list` shows every recipe. The ones you need most:
 
 ```bash
 just check       # formatting, lint, tests, and builds
+just check-ci    # everything the required CI gate proves, including the race detector
+just lint        # Go, Web, workflows, shell, and committed secrets
 just build-all   # cross-compile controller and agent
 just check-release-artifacts dist # verify a GoReleaser bundle, checksums, and SBOMs
 just dev         # Vite Web UI only through Process Compose
 ```
+
+Every required CI check has a `just` recipe that runs the same thing locally, so
+a red pull request can always be reproduced without pushing again:
+
+| CI job | Local command |
+| --- | --- |
+| Static analysis | `just lint-workflows`, `just lint-shell`, `just lint-secrets` |
+| Generated contracts | `just generate-api-check`, `just generate-web-check` |
+| Go quality | `just fmt-check`, `just test-go` |
+| Lint Go (per GOOS) | `just lint-go` (host only; set `GOOS` for another target) |
+| Go race detector | `just test-race` |
+| Go vulnerability scan | `just vulncheck` |
+| Privileged Linux runner boundary | `just test-platform-linux` |
+| Web quality | `just lint-web`, `pnpm --dir web typecheck`, `pnpm --dir web test:ci`, `just check-npm-policy` |
+| Web component tests | `pnpm --dir web test:ct` |
+| Raycast extension | `just lint-raycast` |
+| Management journey | `just test-management-ui-linux`, `just smoke-embedded-ui-linux` |
+| Cross-build | `just build-all` |
 
 `just test-enrollment-cli-linux` runs the actual controller and agent CLI binaries
 inside a restricted Linux container and verifies join, reconnect, and join-code
@@ -169,12 +203,38 @@ the management API or controller-backed UI flows are available.
 Tests write machine-readable results below `output/test-results/`, which is ignored
 by Git.
 
+Pull requests also run CodeQL, OpenSSF Scorecard, and dependency review. See
+[.github/workflows](.github/workflows) for what each one gates on.
+
 ## Security
 
 Please read [SECURITY.md](SECURITY.md) before reporting a vulnerability. The native
 runner isolation contract and threat model are documented, while their three-OS live
 evidence and signing prerequisites remain release gates. Until those gates pass, this
 repository is development software and has no security-support promise.
+
+The boundary itself is written down, not implied:
+
+- [Security contract](docs/security/SECURITY_CONTRACT.md) — what SpareRunner
+  promises and what it explicitly does not.
+- [Threat model](docs/security/THREAT_MODEL.md) — the adversaries in scope and
+  the ones deliberately out of scope.
+- [Native isolation](docs/security/NATIVE_ISOLATION.md) — what a runner process
+  can and cannot reach on the host.
+- [Support matrix](docs/security/SUPPORT_MATRIX.md) — the OS and configuration
+  surface each claim has been proven on.
+
+## Contributing and support
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how a change flows from specification to
+  task to pull request.
+- [SUPPORT.md](SUPPORT.md) — where to take a question, a bug, or a proposal.
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) — the behavior expected in this
+  project's spaces.
+- [Connecting a GitHub App](docs/github-app.md) and
+  [the GitHub sandbox contract](docs/github-sandbox.md) — the two integration
+  documents an operator or contributor needs first.
+- [docs/RELEASE.md](docs/RELEASE.md) — the operator checklist a release must pass.
 
 ## License
 

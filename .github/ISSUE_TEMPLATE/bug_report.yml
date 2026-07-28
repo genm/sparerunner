@@ -1,0 +1,112 @@
+name: Bug report
+description: Report incorrect behavior in the controller, agent, CLI, tray, or Web UI.
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        SpareRunner is pre-alpha and has no supported release. Report against the
+        default branch or a tagged draft build.
+
+        Do not use this form for a suspected vulnerability. Use
+        [private vulnerability reporting](https://github.com/genm/sparerunner/security/advisories/new)
+        instead, and read [SECURITY.md](https://github.com/genm/sparerunner/blob/main/SECURITY.md).
+
+        Never paste join codes, JIT configuration, GitHub App private keys, node
+        private keys, session secrets, or `Authorization` headers into this issue.
+
+  - type: checkboxes
+    id: preconditions
+    attributes:
+      label: Before reporting
+      options:
+        - label: This is not a suspected security vulnerability.
+          required: true
+        - label: I removed every secret and credential from the output I am pasting.
+          required: true
+        - label: I checked the README Status section for whether this path is proven yet.
+          required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `sprun version`, or the commit SHA you built from.
+      placeholder: "v0.0.0-dev (commit 2b4251b, built 2026-07-29)"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Controller (sprun serve)
+        - Operator CLI (sprun)
+        - Agent (sparerunner-agent)
+        - Desktop tray
+        - Raycast extension
+        - Management Web UI
+        - Management API
+        - Packaging or OS service install
+        - Release artifacts
+        - Not sure
+    validations:
+      required: true
+
+  - type: textarea
+    id: topology
+    attributes:
+      label: Topology
+      description: >-
+        Operating system and architecture of the controller host and of each node
+        involved, and how they reach each other.
+      placeholder: |
+        Controller: Ubuntu 24.04 / amd64, sprun serve on 127.0.0.1
+        Node A: macOS 15 / arm64, joined over LAN
+        Node B: Windows 11 / amd64, joined over LAN
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: The smallest sequence of commands or actions that reproduces the problem.
+      placeholder: |
+        1. sprun init
+        2. sprun serve
+        3. sprun join spr_...
+        4. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: >-
+        What you expected, and which requirement, design section, or documented
+        trust boundary says so.
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: >-
+        What happened instead. Include redacted logs, exit codes, and any
+        `output/test-results/` evidence you have.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Anything else that helps, such as when it started or how often it reproduces.
+    validations:
+      required: false

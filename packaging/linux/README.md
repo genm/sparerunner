@@ -2,7 +2,7 @@
 
 Status: the local implementation and root-container fault tests pass. The
 private GitHub and real systemd acceptance described in
-[`test/live/linux`](../../../test/live/linux) remains a separate release gate.
+[`test/live/linux`](../../test/live/linux) remains a separate release gate.
 
 ## Supported host boundary
 
@@ -92,7 +92,14 @@ or a persistent runner home is never launch authority.
 
 ## Installation layout
 
-Distribution packages install:
+No distribution package is built yet: `.goreleaser.yaml` produces archives,
+checksums, and SBOMs only, and this directory ships the unit files rather than an
+installer. macOS has `packaging/macos/install-service.sh` and Windows has
+`packaging/windows/install.ps1`; Linux does not have an equivalent.
+
+Until one exists, place these files by hand from the release archive. The layout
+and the ownership it implies are what the isolation contract above requires, so
+they are not suggestions:
 
 ```text
 /usr/local/bin/sparerunner-agent
@@ -102,7 +109,7 @@ Distribution packages install:
 /usr/lib/tmpfiles.d/sparerunner.conf
 ```
 
-Then they run:
+Then, as root:
 
 ```bash
 systemd-sysusers /usr/lib/sysusers.d/sparerunner.conf

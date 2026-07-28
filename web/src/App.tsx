@@ -170,6 +170,9 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
           setSession(next);
           setLoadState("booting");
           setProblem(undefined);
+          // Fire and forget by design — the caller has already committed the
+          // session and must not block on the refresh.
+          // oxlint-disable-next-line promise/always-return
           void refresh().then((refreshed) => {
             if (refreshed) setLoadState("ready");
           });
@@ -777,7 +780,18 @@ function SettingsPage({
   const [problem, setProblem] = useState<Problem>();
   const [yaml, setYAML] = useState<string>();
   const schedulerMaxError = fieldProblem(problem, "scheduler.maxRunners");
+  // `draft`'s initializer above already reads `snapshot.configuration`, so this
+  // effect has nothing to reconcile on its first run — skip it. Running it
+  // anyway is not just redundant: if a passive effect from mount is still
+  // unflushed when the operator's first keystroke lands (they can race in the
+  // same commit under load), this effect's unconditional setDraft(snapshot.
+  // configuration) would win the batch and silently discard that edit.
+  const settingsHydratedRef = useRef(false);
   useEffect(() => {
+    if (!settingsHydratedRef.current) {
+      settingsHydratedRef.current = true;
+      return;
+    }
     if (!dirty && !reloadRequired) {
       setDraft(snapshot.configuration);
       setRemoteChanged(false);
@@ -1090,6 +1104,10 @@ function JoinCodeDialog({
       deliveryRef.current = undefined;
       if (candidate) cancelRemote(candidate);
       if (dialog?.open) dialog.close();
+      // Reading .current at cleanup time is the intent: focus returns to
+      // whatever the caller last recorded, not to whatever was recorded when
+      // this effect was set up.
+      // oxlint-disable-next-line react-hooks/exhaustive-deps
       returnFocusRef.current?.focus();
     };
   }, [cancelRemote, onClose, returnFocusRef, scrubAndCancel]);

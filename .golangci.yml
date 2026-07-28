@@ -1,0 +1,167 @@
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+  # Platform adapters carry the trust boundary on each OS, and 46 files — the
+  # Windows job-object and ACL code, the macOS Keychain and workspace code — never
+  # compile on Linux, so a host-only run never parses them. The `go-lint` job in
+  # .github/workflows/ci.yml fans this config out over GOOS=linux/darwin/windows
+  # on one runner. Locally, `just lint-go` covers the host only; set GOOS to check
+  # another target.
+
+linters:
+  default: none
+  # Every linter enabled here reports zero findings on the current tree, so a new
+  # finding is a regression rather than pre-existing debt, and the gate can stay
+  # blocking without anyone learning to ignore it.
+  #
+  # Linters deliberately NOT enabled yet, with the finding count measured on this
+  # tree at the time of writing. Each is a remediation project, not a switch:
+  #
+  #   errorlint     79  (67 production) — mostly `%v`→`%w` and `==`→errors.Is.
+  #                     Widening error matching in fail-closed paths needs
+  #                     per-site review, not a bulk rewrite.
+  #   errcheck      48+ (production)    — dominated by unchecked Close on
+  #                     concrete types (*os.Root, *sql.Tx) and by fmt.Fprint* to
+  #                     stdout.
+  #   gosec         50  — 21 are G115 integer-conversion findings on GitHub
+  #                     statistics; the 3 G202 SQL findings are verified-safe
+  #                     placeholder joins that need justified #nosec annotations.
+  #   staticcheck   19  — 8 production, mostly ST1005/QF1001 style plus one real
+  #                     SA1019 deprecation in internal/runner/extract.go.
+  #   noctx         19  — 17 are in tests.
+  #   nilerr        12  — several are the deliberate "retain last-known external
+  #                     state and mark it stale" behavior the design mandates, so
+  #                     this one needs design review before it can be a gate.
+  #   sqlclosecheck 18 — every finding is "Close should use defer" against the
+  #                     deliberate pattern in internal/store, where an error path
+  #                     closes before returning a more important error and the
+  #                     happy path checks Close's own return value. That pattern
+  #                     is correct and sqlclosecheck cannot express it.
+  #   misspell      22  — comment and message typos.
+  #
+  # Two linters were evaluated and rejected outright, because their findings here
+  # are correct code rather than debt:
+  #
+  #   bodyclose — 17 of its 18 findings are `websocket.Dial`, where not closing
+  #     the returned response body is the documented-correct usage for a hijacked
+  #     connection.
+  #   unused    — it cannot see a deliberate fail-closed platform stub
+  #     (test/live/linux/security_path_windows.go), a function used only on
+  #     another GOOS (test/live/macos/evidence.go), or a helper used only under a
+  #     build tag it does not enable (internal/platform/linux/cgroup.go, used by
+  #     the cgroupintegration tests). The dead code it did find on this tree has
+  #     been deleted; keeping it on would train reviewers to ignore it.
+  enable:
+    - copyloopvar
+    - depguard
+    - durationcheck
+    - govet
+    - ineffassign
+    - makezero
+    - rowserrcheck
+    - usetesting
+
+  settings:
+    govet:
+      enable-all: true
+      disable:
+        # fieldalignment optimizes struct padding. It is a memory
+        # micro-optimization that fights readable field grouping, and this
+        # process is not memory-bound.
+        - fieldalignment
+        # shadow reports 771 findings here, almost all of them the idiomatic
+        # `if err := f(); err != nil` inside a scope that already has `err`.
+        # A gate nobody can satisfy is a gate nobody reads.
+        - shadow
+
+    usetesting:
+      # Several tests deliberately create their temporary tree under a specific
+      # parent — /run, /var/lib, /var/cache, $HOME, or a short /tmp path that
+      # stays inside the platform's unix socket path limit — which is exactly
+      # what t.TempDir() cannot express.
+      os-mkdir-temp: false
+
+    depguard:
+      # Mechanical enforcement of the ownership boundaries stated in AGENTS.md.
+      # These held when the rules were written; the point of encoding them is
+      # that the next change cannot quietly cross one.
+      rules:
+        domain-is-pure:
+          files:
+            - "**/internal/domain/*.go"
+          deny:
+            - pkg: database/sql
+              desc: >-
+                internal/domain has no database. Persistence belongs to
+                internal/store.
+            - pkg: net/http
+              desc: >-
+                internal/domain has no network. Transport belongs to
+                internal/transport.
+            - pkg: os/exec
+              desc: >-
+                internal/domain does not run processes. OS execution belongs to
+                internal/platform and internal/runner.
+            - pkg: modernc.org/sqlite
+              desc: internal/domain has no database driver.
+            - pkg: github.com/actions/scaleset
+              desc: >-
+                internal/domain has no GitHub SDK. The scale-set contract is
+                isolated behind internal/github.
+            - pkg: golang.org/x/sys
+              desc: >-
+                internal/domain has no OS syscall surface. Platform code belongs
+                to internal/platform.
+
+        scaleset-is-isolated:
+          files:
+            - "$all"
+            - "!**/internal/github/*.go"
+          deny:
+            - pkg: github.com/actions/scaleset
+              desc: >-
+                Only internal/github may import the official scale-set client, so
+                that the upstream protocol contract has exactly one adapter.
+
+        sqlite-is-owned-by-store:
+          files:
+            - "$all"
+            # Both forms are needed: `**/dir/*.go` does not match a file directly
+            # in `dir`, and `**/dir/**/*.go` does not match one outside a
+            # subdirectory.
+            - "!**/internal/store/*.go"
+            - "!**/internal/store/**/*.go"
+            # The macOS live-evidence harness opens a deployed controller
+            # database read-only to capture what the running system persisted. It
+            # is a probe, not a second owner of the schema.
+            - "!**/test/live/macos/*.go"
+          deny:
+            - pkg: database/sql
+              desc: >-
+                Only internal/store opens the SQLite databases, so schema,
+                migration, and epoch invariants have exactly one owner.
+            - pkg: modernc.org/sqlite
+              desc: Only internal/store may bind the SQLite driver.
+
+  exclusions:
+    generated: lax
+    rules:
+      # Several tests prove immutability by writing to a returned copy and then
+      # asserting the original is unchanged. That write is unused on purpose —
+      # it is the assertion.
+      - path: _test\.go
+        text: unusedwrite
+        linters:
+          - govet
+
+issues:
+  # Report every occurrence. Defaults cap output per linter and per file, which
+  # silently hides findings and makes a clean run unprovable.
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt

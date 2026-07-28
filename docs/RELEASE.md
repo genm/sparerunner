@@ -34,10 +34,17 @@ SBOM is missing; it never creates a synthetic pass.
 
 Pushing `v*` runs [.github/workflows/release.yml](../.github/workflows/release.yml):
 
-1. GoReleaser builds a draft release and deterministic `checksums.txt`.
-2. Syft generates CycloneDX SBOMs for each archive and attaches them to the draft.
-3. The GitHub artifact attestation is created for `checksums.txt`.
-4. A failed check uploads `dist/` for three days only.
+1. The workflow refuses to proceed unless the tagged commit is already an
+   ancestor of `main`. A draft release page stays unpublished, but the Sigstore
+   attestation in step 4 is minted immediately and is permanently, publicly bound
+   to this repository — so a tag pushed from any other branch would produce
+   artifacts that pass the verification documented below.
+2. GoReleaser builds a draft release and deterministic `checksums.txt`.
+3. Syft generates CycloneDX SBOMs for each archive and attaches them to the draft.
+4. A GitHub artifact attestation is created *from* `checksums.txt` *for* each
+   archive listed in it, and the workflow then verifies that attestation before
+   the job can succeed.
+5. A failed check uploads `dist/` for three days only.
 
 Before pushing the tag, the release owner must validate the separately captured
 SPR-014 manifest from the trusted Linux/macOS/Windows sandbox:
@@ -54,8 +61,41 @@ Verify an installed artifact from a trusted checkout with:
 
 ```bash
 sha256sum --check checksums.txt
-gh attestation verify --owner genm checksums.txt
+gh attestation verify \
+  --repo genm/sparerunner \
+  --signer-workflow genm/sparerunner/.github/workflows/release.yml \
+  sparerunner_<version>_linux_amd64.tar.gz
 ```
+
+The subject is the **archive**, not `checksums.txt`. `actions/attest` is given
+`checksums.txt` through its `subject-checksums` input, which means the attested
+subjects are the files listed inside it; `checksums.txt` itself is not a subject
+and verifying it finds nothing.
+
+`--repo` and `--signer-workflow` are both load-bearing. `--owner genm` would
+accept an attestation minted by any workflow in any repository that account owns,
+which is a much weaker claim than "this artifact came out of this release
+pipeline".
+
+## Reproduce a released binary
+
+The release footer tells consumers to verify the checksums, which is only worth
+anything if a third party can independently produce the same bytes. Both builds
+in [.goreleaser.yaml](../.goreleaser.yaml) pass `-trimpath`, pin `mod_timestamp`
+to the commit timestamp, and inject `.CommitDate` rather than wall-clock build
+time, so the same tag produces the same archive on any host with the same Go
+toolchain:
+
+```bash
+git checkout vX.Y.Z
+goreleaser build --clean --single-target
+sha256sum dist/*/sprun
+```
+
+Compare that digest against the corresponding entry in the published
+`checksums.txt`. A mismatch means either the toolchain differs from the one the
+release job used — check `go.mod` and the pinned GoReleaser version in the
+workflow — or the artifact is not what this tag builds.
 
 On macOS, Apple Developer ID signing/notarization is an external release
 prerequisite. On Windows, Authenticode signing is likewise external. Until

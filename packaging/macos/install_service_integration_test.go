@@ -167,7 +167,6 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 			},
 		},
 	} {
-		failure := failure
 		t.Run("verified rollback converges after "+failure.name+" failure", func(t *testing.T) {
 			t.Parallel()
 			harness := newInstallerHarness(t)

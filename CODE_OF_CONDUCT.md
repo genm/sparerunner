@@ -43,10 +43,22 @@ officially representing the community in public spaces.
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported
-through the private contact method described in `SECURITY.md`. All complaints will be
-reviewed and investigated promptly and fairly. Maintainers are obligated to respect
-the privacy and security of the reporter.
+Report abusive, harassing, or otherwise unacceptable behavior privately to the
+maintainer, [@genm](https://github.com/genm), using either the contact details on
+that profile or GitHub's own "Report abuse" flow, which is reachable from any
+profile, issue, pull request, or comment.
+
+Do not file a conduct report as a security advisory. The private vulnerability
+reporting form named in [SECURITY.md](SECURITY.md) is scoped to vulnerabilities in
+the software and is not a channel for conduct reports. Do not open a public issue
+either; that exposes the reporter.
+
+All complaints will be reviewed and investigated promptly and fairly. Maintainers
+are obligated to respect the privacy and security of the reporter.
+
+SpareRunner currently has a single maintainer, so a report about that maintainer
+has no internal escalation path. Use GitHub's "Report abuse" flow, which goes to
+GitHub Support rather than to this project.
 
 ## Attribution
 

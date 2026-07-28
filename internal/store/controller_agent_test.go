@@ -1417,6 +1417,13 @@ func assertDatabaseExcludesText(t *testing.T, controller *ControllerStore, value
 				}
 			}
 		}
+		// Without this, a read that stopped part-way through would leave the
+		// remaining rows unscanned and this canary would report "no secret
+		// persisted" about rows it never looked at.
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatal(err)
+		}
 		if err := rows.Close(); err != nil {
 			t.Fatal(err)
 		}

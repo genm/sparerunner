@@ -1,0 +1,67 @@
+name: CodeQL
+
+# Code scanning is free for public repositories. This runs the analysis on every
+# pull request so a finding lands as review feedback, and on a weekly schedule so
+# a newly published query catches code that has not changed since it was written.
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # Monday 04:17 UTC. Off the hour so the run does not queue behind the burst
+    # of workflows every other repository schedules at :00.
+    - cron: "17 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # internal/webui/assets is committed and verified by
+          # scripts/check-generated-web.sh, so the Go build needs no pnpm step.
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        if: matrix.language == 'go'
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+          # Fork PRs run untrusted code and must not populate shared dependency caches.
+          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          queries: security-and-quality
+
+      - name: Analyze
+        uses: github/codeql-action/analyze@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          category: /language:${{ matrix.language }}

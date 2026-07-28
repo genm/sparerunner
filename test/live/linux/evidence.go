@@ -6,7 +6,6 @@ import (
 	"encoding/base32"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -727,14 +726,4 @@ func (events *observedJobEvents) completedSingleJob() (completedJobObservation, 
 		completedObservedAt:       completedAt,
 		availableToStartedLatency: startedAt.Sub(availableAt),
 	}, true, nil
-}
-
-func decodeReplayEvidence(reader io.Reader) (replayEvidence, error) {
-	var value replayEvidence
-	decoder := json.NewDecoder(reader)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(&value); err != nil {
-		return replayEvidence{}, err
-	}
-	return value, nil
 }

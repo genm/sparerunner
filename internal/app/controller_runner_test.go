@@ -249,7 +249,6 @@ func TestControllerRunnerStableReplayIdentityIgnoresVolatileStatisticsUnderRace(
 	start := make(chan struct{})
 	results := make(chan error, 2)
 	for _, message := range []github.Message{first, second} {
-		message := message
 		go func() {
 			<-start
 			results <- coordinator.CommitMessage(context.Background(), message)
@@ -4618,16 +4617,6 @@ func (state *runnerCoordinatorFakeStore) MarkGitHubJITReconciledAbsent(
 	}
 	state.claim.State = store.GitHubClaimPreparing
 	return store.GitHubJITAbsenceResult{Claim: *state.claim}, nil
-}
-
-func (state *runnerCoordinatorFakeStore) setClaimState(expected, next store.GitHubClaimState) error {
-	state.mu.Lock()
-	defer state.mu.Unlock()
-	if state.claim == nil || state.claim.State != expected {
-		return store.ErrGitHubClaimState
-	}
-	state.claim.State = next
-	return nil
 }
 
 func cloneRunnerCoordinatorClaim(claim *store.GitHubJobClaim) *store.GitHubJobClaim {

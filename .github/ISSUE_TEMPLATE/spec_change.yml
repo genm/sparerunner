@@ -1,0 +1,85 @@
+name: Specification change proposal
+description: >-
+  Propose new behavior, a changed contract, or a scope decision. Feature requests
+  start here, not in a pull request.
+labels:
+  - spec
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The specification is the project source of truth. Behavior changes update
+        [requirements](https://github.com/genm/sparerunner/blob/main/spec/sparerunner/requirements.md)
+        first, then
+        [design](https://github.com/genm/sparerunner/blob/main/spec/sparerunner/design.md),
+        then the
+        [task graph](https://github.com/genm/sparerunner/blob/main/spec/sparerunner/tasks.yaml).
+
+        This form records the proposal so that ordering can be settled before
+        anyone writes code.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: >-
+        The operator-facing problem, described without naming a solution. Say who
+        hits it and what it costs them today.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: >-
+        What SpareRunner should do instead, stated as observable behavior rather
+        than as an implementation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: boundary
+    attributes:
+      label: Product boundary fit
+      description: >-
+        The README and requirements deliberately exclude public repositories and
+        external forks, cloud providers, Kubernetes, controller HA, enterprise
+        RBAC, VMs, external plugins, WAN/NAT traversal, GPU scheduling, and Docker
+        mode from the first release. Explain how this proposal sits inside the
+        boundary, or why the boundary should move.
+    validations:
+      required: true
+
+  - type: textarea
+    id: spec_impact
+    attributes:
+      label: Specification impact
+      description: >-
+        Which requirement clauses, design sections, and task IDs would change. Use
+        `spr-NNN` task IDs where you know them.
+      placeholder: |
+        requirements.md: capacity control section
+        design.md: agent local control ownership
+        tasks.yaml: spr-019
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Security and failure impact
+      description: >-
+        Whether this touches enrollment, authentication, certificates, GitHub App
+        credentials, JIT delivery, process cleanup, updater or release code, or
+        persistence invariants — and what the fail-closed behavior should be.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other ways to solve the same problem, and why they are worse.
+    validations:
+      required: false

@@ -1,0 +1,43 @@
+# Gitleaks configuration for SpareRunner.
+#
+# GitHub secret scanning and push protection are enabled for this repository and
+# already cover provider-issued credentials going forward. Gitleaks covers what
+# those do not: this project's own secret shapes — join codes, JIT payloads, node
+# private keys, session secrets — across history that predates scanning.
+#
+# Every allowlist below is scoped to a specific string or path and says why that
+# string cannot be a credential. Adding a broad path exclusion here would turn a
+# fail-closed scan into a decorative one.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = """
+Fixture tokens built from a literal repeating hexadecimal run. A value of this
+shape carries no entropy and cannot be a real credential; it exists so that
+tests can assert on an exact token string.
+"""
+regexTarget = "match"
+regexes = [
+  '''(0123456789abcdef|abcdef0123456789){2}''',
+]
+
+[[allowlists]]
+description = """
+The macOS Keychain service identifier for the private-material store. It is a
+public, stable name that identifies where a secret lives, never the secret. It
+is documented in CONTRIBUTING.md because operators type it into
+`security set-generic-password-partition-list`.
+
+The pattern covers the pre-rename identifiers too, because the scan reads the
+whole history and the product has been renamed twice.
+"""
+condition = "AND"
+paths = [
+  '''internal/enroll/persistence_darwin\.go''',
+]
+regexTarget = "match"
+regexes = [
+  '''com\.genm\.[a-z]+\.private-material\.v1''',
+]

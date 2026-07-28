@@ -1,0 +1,44 @@
+name: Documentation problem
+description: >-
+  Report documentation that is wrong, missing, stale, or that promises something
+  the code does not do.
+labels:
+  - documentation
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A document that claims a working path which is still a release gate is a
+        correctness bug, not a style nit. Those reports are especially welcome
+        while the project is pre-alpha.
+
+  - type: input
+    id: location
+    attributes:
+      label: Location
+      description: File and line, or the URL of the rendered page.
+      placeholder: "README.md:64, or docs/RELEASE.md"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Kind of problem
+      options:
+        - Documents behavior the code does not have
+        - Instructions do not work as written
+        - Broken or wrong link
+        - Missing information a reader needs
+        - Stale after a code or specification change
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: detail
+    attributes:
+      label: What is wrong
+      description: Quote the current text and say what it should say instead.
+    validations:
+      required: true

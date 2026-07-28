@@ -1,4 +1,4 @@
-import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
@@ -258,8 +258,17 @@ describe("App", () => {
     render(<App api={createScenarioClient("conflict")} initialRoute="settings" />);
 
     const maximum = await screen.findByRole("spinbutton", { name: "Maximum runners" });
-    await user.clear(maximum);
-    await user.type(maximum, "2");
+    // fireEvent.change, not user.clear()+user.type(): jsdom does not support
+    // setSelectionRange on a number input, so userEvent's select-all-then-
+    // delete silently no-ops under CPU contention, and the keystrokes that
+    // follow append onto the untouched original value instead of replacing
+    // it. Setting the value directly is deterministic and still exercises
+    // the same onChange this test is about.
+    fireEvent.change(maximum, { target: { value: "2" } });
+    // Confirm the edit actually landed before clicking Apply, rather than
+    // trusting that fireEvent.change's synchronous return means React has
+    // committed it.
+    await waitFor(() => expect((maximum as HTMLInputElement).value).toBe("2"));
     await user.click(screen.getByRole("button", { name: "Apply configuration" }));
 
     expect(

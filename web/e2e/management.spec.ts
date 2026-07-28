@@ -17,7 +17,7 @@ type ControllerRuntime = {
 let runtime: ControllerRuntime;
 
 test.beforeAll(async () => {
-  const configuredBinary = process.env.SPARERUNNER_E2E_BINARY;
+  const configuredBinary = process.env["SPARERUNNER_E2E_BINARY"];
   if (!configuredBinary) {
     throw new Error(
       "SPARERUNNER_E2E_BINARY is required for the release-binary management journey.",
