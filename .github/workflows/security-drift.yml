@@ -1,0 +1,65 @@
+name: Security drift
+
+# A pull request only proves the code that changed. This catches the other
+# direction: an advisory published against a dependency that nobody touched. It
+# needs no pull request to happen, so it runs on a schedule against the default
+# branch.
+#
+# Findings are published as code scanning alerts rather than left in a workflow
+# log, so an unreviewed one stays visible instead of scrolling away.
+on:
+  schedule:
+    # Monday 06:31 UTC, after CodeQL and Scorecard so the three do not contend.
+    - cron: "31 6 * * 1"
+  workflow_dispatch:
+  # Re-runs when the checks themselves change, so a broken workflow is caught on
+  # the pull request that broke it rather than a week later.
+  pull_request:
+    paths:
+      - .github/workflows/security-drift.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: security-drift-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  govulncheck:
+    name: Reachable Go vulnerabilities
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version-file: go.mod
+
+      - name: Install govulncheck
+        env:
+          GOBIN: ${{ runner.temp }}/bin
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          echo "${GOBIN}" >> "${GITHUB_PATH}"
+
+      # Writes SARIF whether or not it finds anything, and keeps its own exit
+      # code out of the way so the upload always runs. The alerts are the signal;
+      # a red scheduled run that nobody opens is not.
+      - name: Scan for reachable vulnerabilities
+        run: govulncheck -format sarif ./... > govulncheck.sarif
+
+      - name: Upload results to code scanning
+        # Only skipped when the scan itself failed to produce a report, which the
+        # step above would already have failed on.
+        if: ${{ !cancelled() }}
+        uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
+        with:
+          sarif_file: govulncheck.sarif
+          category: govulncheck

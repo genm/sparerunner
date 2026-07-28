@@ -1,0 +1,61 @@
+version: 2
+
+updates:
+  # Actions are pinned to full commit SHAs. Dependabot rewrites both the SHA and
+  # the trailing version comment, so the pinning convention survives its updates.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+    groups:
+      # The scale-set client is the one GitHub protocol contract this project
+      # cannot absorb blindly, so it stays outside the batch and gets its own
+      # reviewable pull request.
+      go-modules:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - github.com/actions/scaleset
+
+  # web/ and api/codegen/ use pnpm, extensions/raycast/ uses npm. Dependabot's
+  # npm ecosystem covers all three lockfile formats.
+  - package-ecosystem: npm
+    directories:
+      - /web
+      - /api/codegen
+      - /extensions/raycast
+    schedule:
+      interval: weekly
+      day: monday
+    commit-message:
+      prefix: chore(deps)
+      prefix-development: chore(deps-dev)
+    # Mirrors the `minimum-release-age=1440` policy already set in .npmrc, so a
+    # freshly published — possibly compromised — version is not proposed on the
+    # day it lands.
+    cooldown:
+      default-days: 1
+    groups:
+      npm-production:
+        dependency-type: production
+        patterns:
+          - "*"
+      npm-development:
+        dependency-type: development
+        patterns:
+          - "*"
