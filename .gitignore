@@ -21,6 +21,16 @@
 /extensions/raycast/raycast-env.d.ts
 *.tsbuildinfo
 
+# Credentials. Nothing of these shapes is committed today, and a GitHub App
+# private key leaked into a public repository mints installation tokens for every
+# installation of that App. If a fixture ever needs a committed key, add a scoped
+# negation rather than removing the rule.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+
 # Local runtime state
 /.sparerunner/
 /data/

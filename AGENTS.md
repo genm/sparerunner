@@ -53,10 +53,18 @@ These instructions supplement the user-scope rules. The closest specification un
 
 ## Commands and verification
 
-- Install pinned tools with `mise install`.
+- Set up with `just bootstrap`, which installs the pinned tools, every JavaScript
+  project's dependencies, the Playwright browser, and the Git hooks.
 - Use `just fmt`, `just lint`, `just test`, `just build`, and `just check`.
+  `just check-push` is the pre-push subset; `just check-ci` is the full required
+  gate including the race detector and the vulnerability scan. `just --list`
+  shows every recipe and the README maps each CI job to its local command.
 - `just check` must emit machine-readable test evidence under
   `output/test-results/`.
+- Enabling a new linter is its own change with its own remediation.
+  `.golangci.yml` and `web/.oxlintrc.json` record, with measured counts, which
+  rules are off and why; a drive-by suppression is not an acceptable fix for a
+  new finding.
 - Every meaningful behavior change needs a normal-path test and at least one
   failure, invalid-input, timeout, permission, or degraded-path test.
 - UI components use Playwright Component Testing as the primary visual behavior

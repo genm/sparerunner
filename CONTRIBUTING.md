@@ -14,11 +14,39 @@ or implementation patch.
 
 ```bash
 mise trust
-mise install
-pnpm --dir web install --frozen-lockfile
-lefthook install
+just bootstrap
 just check
 ```
+
+`just bootstrap` installs every pinned tool, all three JavaScript projects'
+dependencies, the Playwright browser that component tests need, and the Git
+hooks. It is the only setup command; running the individual `pnpm install` lines
+by hand leaves the browser missing and `just check` failing on a step you did not
+change.
+
+One prerequisite is not installable by `mise`: `just check` runs the privileged
+Linux runner boundary test inside a disposable, networkless container, so it needs
+a Docker-compatible runtime (Docker Desktop, OrbStack, or Colima) with a running
+daemon. Without one that step fails with an explicit message rather than being
+skipped. It is not part of the pre-push hook, so you can still push; required CI
+runs it on every pull request.
+
+`mise` pins every other tool the checks need, including `golangci-lint`,
+`shellcheck`, `actionlint`, and `gitleaks`. CI installs them from the same
+`.mise.toml`, so a version never drifts between your machine and the required
+gate.
+
+`just --list` shows every recipe:
+
+- `just check-push` is what the pre-push hook enforces. It is everything that
+  works after a clean `just bootstrap` with no daemon running.
+- `just check` adds the privileged Linux boundary test and Playwright component
+  tests.
+- `just check-ci` adds the race detector and the vulnerability scan, which is
+  what required CI blocks on.
+
+The README lists the local command for each CI job, so a red pull request can be
+reproduced without pushing again.
 
 Do not use `.env` files. Development-only non-secret settings belong in documented
 CLI flags or versioned configuration; credentials use the OS secret-store boundary
@@ -54,6 +82,23 @@ process of the same user, still not the separate runner UID.
 - Do not add generated-by or AI co-author trailers.
 - Do not send public fork PR workloads to SpareRunner self-hosted nodes.
 - Do not reduce types, skip tests, or change expected output merely to make CI green.
+
+The pull request template asks for the acceptance clauses you proved, the clauses
+you did not, and the names of the normal-path and failure-path tests. "Not yet
+proven" is a valid and useful answer; a missing answer is not.
+
+Required CI runs on GitHub-hosted runners only, and it does not skip draft pull
+requests — the draft state is where evidence is produced. Alongside it, CodeQL,
+OpenSSF Scorecard, and dependency review report on every pull request. A
+dependency review failure on a licence is a product decision, not a lint nit:
+release archives redistribute dependencies under Apache-2.0, so an exception is
+added to `.github/workflows/dependency-review.yml` deliberately or the dependency
+is not added.
+
+New static-analysis findings belong to the change that introduced them.
+`.golangci.yml` records, with measured counts, which linters are not yet enabled
+and what each would take; enabling one is its own change with its own remediation,
+not a drive-by suppression.
 
 ## Release changes
 
