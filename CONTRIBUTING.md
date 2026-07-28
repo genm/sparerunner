@@ -113,3 +113,14 @@ Enrollment, authentication, certificates, GitHub App credentials, JIT delivery,
 process cleanup, updater/release code, and persistence invariants require both a
 normal-path test and a fail-closed test. Follow `SECURITY.md` for private disclosure;
 do not open a public issue for a suspected vulnerability.
+
+A change that parses input from an operator, a peer, or GitHub belongs behind a
+fuzz target. `just test` runs the committed seed corpus of every target, and
+`just fuzz` generates new inputs locally.
+
+The nightly `Deep verification` workflow spends the free hosted capacity that a
+pull request cannot afford to wait for: each fuzz target for far longer, the
+whole module under the race detector with shuffled repetition on all three
+operating systems, and every dependency lock file against OSV. It gates nothing,
+so a finding there is a defect in shipped behavior, not in one proposed change.
+`just fuzz` and `just vulncheck-lockfiles` reproduce it locally.

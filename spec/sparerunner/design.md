@@ -1348,6 +1348,41 @@ secrets, or raw environment snapshots.
 Test evidence is emitted as JSON or JUnit and aggregated by `just check`. Debug
 artifacts have explicit short retention and are uploaded only on failure.
 
+### Continuous verification surfaces
+
+Verification is split by what a pull request can afford to wait for, not by
+importance. Standard GitHub-hosted runners are free and unmetered for a public
+repository, so the constraint on required CI is feedback latency, and work that
+only needs wall-clock time is moved off the merge path instead of being dropped.
+
+Required pull-request CI keeps the fast, deterministic gates, plus the scanners
+that report per change: static analysis of workflows and shell, generated-artifact
+drift, Go quality and lint across the three target platforms, one pass of the Go
+and Web suites, the race detector over the packages that own the controller's
+concurrency, `govulncheck`, the cross-build matrix, CodeQL, and dependency review
+of newly introduced packages.
+
+The nightly deep-verification workflow gates nothing and covers what required CI
+deliberately leaves out:
+
+- Coverage-guided fuzzing of the untrusted decoding boundaries — the join code an
+  operator pastes, the agent WebSocket envelope, and the operator configuration
+  document in both codecs — one job per target with a corpus that accumulates
+  across runs. Each target asserts a differential property rather than the
+  absence of a panic, because the security value of these decoders is that they
+  accept exactly one representation of exactly one meaning
+- The whole module under the race detector with shuffled repetition on all three
+  operating systems. Required CI's race job is scoped to five packages because
+  the controller application and store suites are far too slow under the
+  detector to hold a pull request; this is where they are covered, and where
+  order dependence between tests is exposed
+- Every dependency lock file against OSV, which covers the Web console, the API
+  codegen toolchain, and the Raycast extension. `govulncheck` sees only Go, and
+  dependency review sees a lock file only when a pull request changes it
+
+A finding on the nightly surface is a defect in shipped behavior and is triaged
+as one, not as a failure of whichever change happened to be merged last.
+
 ## Rollout and Release
 
 Development follows `spec/sparerunner/tasks.yaml`, one mergeable task per Draft PR and
