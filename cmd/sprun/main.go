@@ -82,6 +82,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root.AddCommand(newGitHubCommand())
 	root.AddCommand(newUICommand())
 	root.AddCommand(newConfigCommand())
+	root.AddCommand(newDoctorCommand())
 	root.AddCommand(newEvidenceCommand())
 	return root
 }
