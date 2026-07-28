@@ -8,6 +8,7 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,11 +30,24 @@ func writeTestAppKey(t *testing.T) string {
 	return path
 }
 
+// privateControllerDir prepares the state directory the documented way, by
+// running tewake init. A hand-made directory is not equivalent: on Windows the
+// credential store requires the restrictive ACL initialization applies, and the
+// connect command requires a controller that actually exists.
+//
+// macOS has no state-publication credential adapter yet (twk-008), so init
+// cannot run there. The skip is conditioned on that platform rather than on any
+// init failure, so a real failure on a supported platform still fails the test,
+// and these tests start running on macOS as soon as the adapter lands.
 func privateControllerDir(t *testing.T) string {
 	t.Helper()
+	if runtime.GOOS == "darwin" {
+		t.Skip("tewake init needs the macOS credential adapter (twk-008)")
+	}
 	directory := filepath.Join(t.TempDir(), "controller")
-	if err := os.MkdirAll(directory, 0o700); err != nil {
-		t.Fatal(err)
+	var stdout, stderr bytes.Buffer
+	if err := run([]string{"init", "--state-dir", directory}, &stdout, &stderr); err != nil {
+		t.Fatalf("init = %v (stderr %q)", err, stderr.String())
 	}
 	return directory
 }
@@ -137,6 +151,36 @@ func TestGitHubConnectRejectsIncompleteOrUnusableInput(t *testing.T) {
 			}
 			if _, err := os.Stat(filepath.Join(directory, githubAppCredentialFile)); !os.IsNotExist(err) {
 				t.Fatalf("rejected input still stored a credential: %v", err)
+			}
+		})
+	}
+}
+
+// TestGitHubCommandsRefuseAnUninitializedStateDirectory keeps the missing setup
+// step visible: the platform credential store's own failure names neither the
+// directory nor tewake init.
+func TestGitHubCommandsRefuseAnUninitializedStateDirectory(t *testing.T) {
+	directory := filepath.Join(t.TempDir(), "not-a-controller")
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := writeTestAppKey(t)
+	commands := map[string][]string{
+		"connect": {
+			"github", "connect", "--state-dir", directory,
+			"--app-id", "1", "--client-id", "Iv1.x", "--private-key-file", keyPath,
+		},
+		"installations": {"github", "installations", "--state-dir", directory},
+	}
+	for name, arguments := range commands {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr bytes.Buffer
+			err := run(arguments, &stdout, &stderr)
+			if err == nil {
+				t.Fatal("uninitialized state directory was accepted")
+			}
+			if !strings.Contains(err.Error(), "tewake init") {
+				t.Fatalf("error does not name the missing step: %v", err)
 			}
 		})
 	}

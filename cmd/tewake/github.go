@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/genm/tewake/internal/app"
 	"github.com/genm/tewake/internal/github"
 	"github.com/spf13/cobra"
 )
@@ -48,7 +49,7 @@ func newGitHubConnectCommand() *cobra.Command {
 			"host's credential store; it is never accepted as a flag value.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			directory, err := resolveStateDirectory(stateDirectory, "controller")
+			directory, err := resolveControllerStateDirectory(stateDirectory)
 			if err != nil {
 				return err
 			}
@@ -108,7 +109,7 @@ func newGitHubInstallationsCommand() *cobra.Command {
 			"the configuration document refers to.",
 		Args: cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
-			directory, err := resolveStateDirectory(stateDirectory, "controller")
+			directory, err := resolveControllerStateDirectory(stateDirectory)
 			if err != nil {
 				return err
 			}
@@ -150,6 +151,24 @@ func newGitHubInstallationsCommand() *cobra.Command {
 	}
 	command.Flags().StringVar(&stateDirectory, "state-dir", "", "controller state directory (default: OS user config directory)")
 	return command
+}
+
+// resolveControllerStateDirectory refuses a directory that tewake init has not
+// prepared. Writing App credentials into an arbitrary directory would otherwise
+// fail deep inside the platform credential store, whose error names neither the
+// directory nor the missing step.
+func resolveControllerStateDirectory(explicit string) (string, error) {
+	directory, err := resolveStateDirectory(explicit, "controller")
+	if err != nil {
+		return "", err
+	}
+	if err := app.RequireInitializedControllerState(directory); err != nil {
+		return "", fmt.Errorf(
+			"%s is not an initialized controller state directory; run tewake init first: %w",
+			directory, err,
+		)
+	}
+	return directory, nil
 }
 
 // readAppCredential validates the operator-supplied identity and loads the PEM
