@@ -12,7 +12,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -61,7 +61,7 @@ func TestWindowsDPAPIRoundTripNoClobberAndIdempotentRemoval(t *testing.T) {
 		t.Fatal("no-clobber failure changed existing private material")
 	}
 	clear(reloaded)
-	matches, err := filepath.Glob(filepath.Join(directory, ".tewake-private-*"))
+	matches, err := filepath.Glob(filepath.Join(directory, ".sparerunner-private-*"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestWindowsPrivateMaterialRejectsReparseLocator(t *testing.T) {
 
 func windowsPrivateDirectory(t *testing.T) string {
 	t.Helper()
-	_ = os.Setenv("TEWAKE_WINDOWS_DEBUG", "1")
+	_ = os.Setenv("SPARERUNNER_WINDOWS_DEBUG", "1")
 	directory := filepath.Join(filepath.Clean(t.TempDir()), "private")
 	if err := winacl.CreatePrivateDirectory(directory); err != nil {
 		currentSID, _ := winacl.CurrentProcessSID()

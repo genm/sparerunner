@@ -6,7 +6,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestNonLinuxHelperProbeLeavesNormalCLIArgumentsUntouched(t *testing.T) {

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func TestEvaluateRunnerUpdatePolicy(t *testing.T) {

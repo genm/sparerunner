@@ -1,0 +1,744 @@
+# Task IDs were `twk-NNN` before the SpareRunner rename (spr-022). The mapping is
+# exact and positional: `twk-NNN` is the same task as `spr-NNN`. Commits and pull
+# requests merged before that change use the old prefix, and Git history is not
+# rewritten to match.
+version: 1
+feature: sparerunner
+
+tasks:
+  - id: spr-001
+    title: Bootstrap the OSS repository and specification
+    type: foundation
+    description: >
+      Create the repository, Apache-2.0 license, project instructions, spec pack,
+      Go and Web scaffolds, reproducible toolchain, and cross-platform CI.
+    depends_on: []
+    paths:
+      - .github
+      - .editorconfig
+      - .gitignore
+      - .mise.toml
+      - .npmrc
+      - AGENTS.md
+      - CODE_OF_CONDUCT.md
+      - CONTRIBUTING.md
+      - LICENSE
+      - README.md
+      - SECURITY.md
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - go.mod
+      - go.sum
+      - internal/buildinfo
+      - internal/webui
+      - justfile
+      - lefthook.yml
+      - process-compose.yaml
+      - spec/sparerunner
+      - web
+      - scripts/cross-build.sh
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 1
+    status: done
+    acceptance:
+      - The requirements, design, and task vocabulary are consistent and executable.
+      - "`just check` succeeds and emits machine-readable Go and Vitest results."
+      - "`sparerunner` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
+      - Required CI always reports and uses only GitHub-hosted runners.
+
+  - id: spr-002
+    title: Prove and isolate the GitHub scale-set contract
+    type: integration
+    description: >
+      Pin the official scale-set client behind an internal adapter and prove App
+      Manifest, multiple installations, scale-set lifecycle, JIT generation,
+      message replay, and job pickup behavior in a private sandbox.
+    depends_on: [spr-001]
+    paths:
+      - internal/github
+      - test/contract/github
+      - docs/github-sandbox.md
+    ci_targets: [lint, test, build]
+    pr_order: 2
+    status: done
+    notes:
+      - "2026-07-26: Local fake-contract coverage proves commit-before-ack, replay, acknowledgement-failure redelivery, and JIT redaction. Private GitHub sandbox acceptance remains pending."
+      - "2026-07-26: Adapter hardening now fail-closes GitHub.com target URLs and malformed scale-set statistics; official v0.4.0 label defaults are preserved. Live sandbox acceptance remains pending."
+      - "2026-07-26: Session demand is durably handled before polling, capacity is supplied per poll, and non-idempotent upstream retries are disabled. Live sandbox acceptance remains pending."
+      - "2026-07-26: Preview HTTP transport now binds credentials to vetted GitHub endpoints and IPs, disables proxies/retries, and bounds response bodies. Actions allowlist and payload bound require live sandbox measurement."
+      - "2026-07-26: Review hardening gives every message session an independent retryable transport, validates initial/refreshed owner and scale-set bindings, fails closed on mismatched lifecycle responses, and redacts JIT delivery callback errors. Race, retry, response-close, and DNS-fallback coverage pass locally; live sandbox acceptance remains pending."
+    acceptance:
+      - Domain code imports no actions/scaleset package directly.
+      - A recorded or live contract test proves commit-before-ack and redelivery semantics.
+      - JIT configuration is passed as a secret value and is absent from persistence and logs.
+      - Startup latency and GitHub's current pickup/requeue behavior are measured in the sandbox.
+
+  - id: spr-003
+    title: Implement domain states and invariants
+    type: backend
+    description: >
+      Define Node, Target, Runner Profile, Slot, Execution, command, epoch, and
+      transition contracts without infrastructure dependencies.
+    depends_on: [spr-001]
+    paths:
+      - internal/domain
+    ci_targets: [lint, test, build]
+    pr_order: 3
+    status: done
+    notes: >
+      Accepted locally: randomized and concurrent slot-ledger properties, execution
+      transition immutability and terminal-state tests, and command replay mismatch
+      tests pass under `go test -race ./internal/domain`; `just check` passes.
+    acceptance:
+      - Property tests reject slot double ownership and capacity overflow.
+      - Invalid execution transitions are rejected without mutating state.
+      - A repeated command ID with a different payload is rejected.
+      - Terminal executions cannot return to an active state.
+
+  - id: spr-004
+    title: Implement crash-safe controller and agent stores
+    type: backend
+    description: >
+      Add versioned migrations, WAL SQLite stores, atomic message/reservation
+      persistence, controller epochs, agent journal, backup, and recovery mode.
+    depends_on: [spr-003]
+    paths:
+      - internal/store
+      - internal/store/migrations
+    ci_targets: [lint, test, build]
+    pr_order: 4
+    status: done
+    notes: >
+      Hosted Linux, macOS, Windows, quality, and six-target cross-build CI run
+      30191626970 accepted the rebased implementation. Local race and repeated tests
+      kill a subprocess without Close after a committed WAL assignment; reopen proves
+      the exact snapshot and replay without duplicates. A second kill proves migration
+      rollback, and an unrelated SQLite fixture remains byte-for-byte unchanged when
+      rejected. Physical power-loss and end-to-end GitHub/runner crash windows remain
+      gates for spr-007/spr-011.
+    acceptance:
+      - Message, reservation, and desired execution commit atomically.
+      - Crash-boundary integration tests recover without duplicate active executions.
+      - Migration failure leaves the original database intact and readiness degraded.
+      - Backup and restore exclude OS-keystore secrets.
+
+  - id: spr-005
+    title: Implement enrollment and authenticated agent transport
+    type: backend
+    description: >
+      Implement controller identity, fingerprinted one-time join codes, node key
+      generation, mDNS discovery, node certificates, outbound mTLS WebSockets, and
+      the versioned envelope.
+    depends_on: [spr-003, spr-004]
+    paths:
+      - internal/enroll
+      - internal/transport
+      - internal/app
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - scripts/test-enrollment-cli-linux.sh
+    ci_targets: [lint, test, build]
+    pr_order: 5
+    status: done
+    notes:
+      - "2026-07-26: Linux controller init/serve, pinned one-time enrollment, durable same-key response replay, authenticated WSS confirmation, agent reconnect, revocation interruption, strict protocol envelopes, and loopback-only management listener pass race tests."
+      - "2026-07-26: The actual Linux CLI binaries pass a restricted-container init/serve/join/agent vertical test; join-code canaries are absent from agent state and ordinary logs. Native runner commands and OS service installation remain later tasks."
+    acceptance:
+      - A valid join enrolls one node and consumes the token atomically.
+      - Token races, replay, fake controller, revoked node, and protocol mismatch fail closed.
+      - The node private key never leaves the node or enters its journal.
+      - mDNS results are ignored until the pinned fingerprint is verified.
+      - Leaf renewal preserves Node ID and rejects expired or superseded certificate serials.
+
+  - id: spr-006
+    title: Implement the native runner lifecycle
+    type: backend
+    description: >
+      Implement package caching, runtime preparation, process supervision,
+      one-job execution, cleanup verification, and quarantine using a fake runner
+      before live GitHub integration.
+    depends_on: [spr-003, spr-005]
+    paths:
+      - internal/runner
+      - test/integration/runner
+      - scripts/test-runner-linux.sh
+    ci_targets: [lint, test, build]
+    pr_order: 6
+    status: done
+    acceptance:
+      - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
+      - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
+      - SpareRunner never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
+      - Cleanup verification failure prevents slot release.
+    notes: >
+      The core pins all six official runner archives, verifies exact size and
+      SHA-256, rejects unsafe archive members, publishes a single verified cache
+      winner under 32-way contention, and materializes each execution from the
+      exact still-open archive object that passed validation. Production cache
+      roots must already be absolute, private, service-owned directories with no
+      symlink component; unsafe or missing roots fail before download. The core
+      redacts JIT handoff values, persists workspace and platform-neutral containment
+      references before process start, and makes prepare/start/destroy replays
+      idempotent. A revisioned journal claims Preparing before root creation and
+      compare-and-swaps every transition; a two-Manager race proves exactly one
+      Starting winner, one JIT delivery, and one runner start. Per-revision mutation
+      tokens distinguish an acknowledged or write-then-error own commit from an
+      identical foreign mutation. Workspace identity is typed and re-observed on
+      replay, before JIT delivery, and through a runtime-only verifier called by the
+      platform start contract at exec; backend mismatch fails before preparation.
+      A unique Starting fence linearizes Start and Stop, with regression coverage for
+      both stop-first and start-first races. Once JIT reaches Start, every failure
+      stops containment and fully removes the credential-bearing root instead of
+      returning it to Prepared. External platform packages receive JIT only through
+      a synchronous one-shot delivery method and never a raw accessor. The core
+      enforces workspace verification before delivery, requires completed delivery
+      when Start returns, and revokes retained request copies; missing, reordered,
+      repeated, or asynchronous delivery fails closed. Only the Cleaning CAS winner
+      performs destructive teardown; it stops the exact fenced
+      containment before trusting workspace identity, then resolves terminal
+      write-before/write-after failures after absence verification. Teardown persists
+      a Cleaning intent before any destructive side effect, so even a failed
+      quarantine write cannot return the execution to admission.
+      Restricted Linux-container evidence demonstrates a real setsid child escaping
+      a bare process group, so the default Unix/Windows supervisors fail closed;
+      cleanup failure writes a durable quarantine tombstone and successful prepared
+      cleanup removes runner credential/workspace canaries.
+      SQLite-backed runner journal, dedicated OS identity, actual systemd/launchd/
+      Job Object ownership, live official-runner execution, and service/process
+      restart recovery remain spr-007/spr-008/spr-009/spr-011 platform gates.
+
+  - id: spr-007
+    title: Complete the Linux vertical slice
+    type: platform
+    description: >
+      Add systemd service-account packaging and run the first real private GitHub
+      job through the controller, Linux agent, scale set, and native runner.
+    depends_on: [spr-002, spr-004, spr-005, spr-006]
+    paths:
+      - .github/workflows/ci.yml
+      - cmd/sparerunner-agent
+      - internal/app
+      - internal/github
+      - packaging/linux
+      - internal/platform/linux
+      - internal/store
+      - internal/transport
+      - justfile
+      - scripts/test-platform-linux.sh
+      - test/live/linux
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 7
+    status: in_progress
+    notes:
+      - "2026-07-26: The durable single-slot Linux vertical now composes authenticated Agent snapshots, Controller slot claims, prepare/start commands, Agent outbox acknowledgement, official scale-set polling, and a root-owned cgroup-v2 Supervisor behind a fixed local protocol. Local race tests cover command replay, commit-before-ack recovery, fast terminal jobs, disconnect cleanup, unavailable native runtime, and cleanup quarantine."
+      - "2026-07-26: Independent review found and closed capacity advertisement by online-but-unexecutable nodes, terminal-state regression after fast jobs, unbounded command/session history, and local journal failure hidden by reconnect loops. Root-side package provenance and exec-boundary containment hardening plus the reproducible live acceptance harness remain under integration."
+      - "2026-07-26: A real private GitHub job, systemd restart process counts, GitHub redelivery at the commit/ack crash seam, and cleanup-failure evidence still require the dedicated sandbox and Linux host. Until those gates pass, this task and its Draft PR remain in progress."
+      - "2026-07-27: The live driver now rejects dirty or mismatched build provenance and builds linked worktrees through a detached non-hardlinked local clone. This prevents Go from stamping an in-repository worktree binary with the containing checkout's unrelated HEAD while reporting vcs.modified=false."
+      - "2026-07-27: Ubuntu systemd execution exposed two real packaging mismatches: Delegate=yes had changed the Supervisor cgroup to root:sparerunner-agent, and RuntimeDirectory= reapplied the new root primary group after ExecStartPre=. The unit now keeps its primary group and delegated cgroup root-owned while a separate tmpfiles rule owns only the local socket directory as root:sparerunner-agent; packaging tests reject either ownership regression."
+      - "2026-07-27: Ubuntu 24.04 arm64 preflight now starts the Supervisor with a root:root delegated cgroup, root:sparerunner-agent 0750 socket directory, and root:sparerunner-agent 0660 socket. Deliberately changing the socket directory to root:root produced no socket and an explicit failed service result; rerunning the package tmpfiles rule restored the active service."
+    acceptance:
+      - One private job completes and its workspace and JIT material are absent afterward.
+      - Service restart leaves exactly one runner listener and one agent process.
+      - Killing after DB commit and before GitHub ack causes safe replay without duplicate execution.
+      - Cleanup failure places the Linux node in quarantine.
+      - Losing or changing the durable node credential drops native capacity while exact replay and cancel remain available.
+
+  - id: spr-008
+    title: Add macOS service and runner support
+    type: platform
+    description: >
+      Implement launchd, Keychain secret storage, process supervision, sleep/reconnect,
+      and native runner behavior for macOS arm64 and x64.
+    depends_on: [spr-005, spr-006, spr-007]
+    paths:
+      - cmd/sparerunner-agent
+      - internal/app
+      - internal/enroll
+      - internal/runner
+      - packaging/macos
+      - internal/platform/macos
+      - test/live/macos
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 8
+    status: in_progress
+    notes:
+      - "2026-07-27: The local macOS vertical now uses one exclusive non-login UID, a durable root-owned start fence, descriptor-pinned workspace cleanup, and a hard platform capability of maxRunners 1. More concurrency requires one independently owned UID per added slot; the current readiness contract must never advertise beyond slot 0."
+      - "2026-07-27: Private material is stored through native Security.framework calls with random movable locators, no-clobber publication, and a pre-published recovery locator that remains retryable when both main publication and Keychain deletion fail. Locked, unavailable, denied, recovery-pending, or mismatched Keychain state removes native readiness; no security CLI or plaintext fallback is used."
+      - "2026-07-27: TrustAll intentionally permits any process in the root service-user Keychain context; runner-UID denial is the boundary and root compromise is outside native mode. Root LaunchDaemon Keychain availability without an interactive login, same-user access and runner-UID denial across upgrade, sleep/reboot recovery, Intel hardware, process cleanup, and a private GitHub job still require live macOS evidence, so this task remains in progress."
+    acceptance:
+      - The agent reconnects after reboot and sleep without duplicate local runtimes.
+      - Keychain material is unavailable to the runner account and absent from diagnostics.
+      - A random locator ID survives staging-directory rename; locator publication failure leaves no Keychain orphan.
+      - Keychain deletion failure retains its locator, and successful removal is idempotent and no-clobber.
+      - arm64 and x64 package selection is correct.
+      - Process tree and workspace cleanup pass on a real macOS node.
+
+  - id: spr-009
+    title: Add Windows service and runner support
+    type: platform
+    description: >
+      Implement Windows Service recovery, DPAPI secret storage, Job Object process
+      ownership, package selection, and locked-file cleanup handling.
+    depends_on: [spr-005, spr-006, spr-007]
+    paths:
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - internal/app
+      - internal/enroll
+      - internal/runner
+      - internal/winacl
+      - packaging/windows
+      - internal/platform/windows
+      - test/live/windows
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 9
+    status: in_progress
+    notes:
+      - "2026-07-27: Windows implementation now includes LocalSystem SCM ownership, a distinct virtual-service runner token, suspended-process Job Object assignment, durable private execution fences, DPAPI user-scope node material, exact protected ACLs, one-shot elevated named-pipe enrollment, and no-clobber persistence."
+      - "2026-07-27: Package ownership markers bind one installation ID to canonical install/data roots before any content is published. Existing or foreign roots are never claimed; uninstall validates marker ACL/schema/role/path/cross-root identity and rejects nested junctions before SCM mutation, preserving external canaries and using explicit non-recursive deletion."
+      - "2026-07-27: A lost bootstrap acknowledgement now exits non-zero only after durable enrollment, so SCM recovery reopens the saved state without replaying join. Live evidence roots are atomically owned and config-bound, and SCM command lines are parsed into exact Windows argv contracts."
+      - "2026-07-27: Cross-compilation and hosted contract tests do not satisfy the remaining real Windows amd64/arm64, reboot, recovery, DPAPI identity, locked-workspace quarantine, and private GitHub job gates."
+      - "2026-07-28: The intermittent descendant-termination failure in hosted run 30363340913 was the helper process, not Job Object containment. A re-executed test binary receives no -test.timeout, so the helper's bare select{} left every goroutine asleep and the runtime deadlock detector killed the tree milliseconds after start; OpenProcess then returned ERROR_INVALID_PARAMETER for a pid whose last handle had already closed. The helper now parks on a pending timer instead."
+      - "2026-07-28: The same race silently made the assertion vacuous whenever it did pass, because an already-dead descendant satisfies the post-termination wait. The test now requires the descendant to be a Job Object member and still running immediately before TerminateAndWait, so lost containment fails loudly instead of appearing green."
+      - "2026-07-28: Job membership is asserted through IsProcessInJob on the exact descendant pid rather than an active-process count. A CREATE_NO_WINDOW parent still allocates a console, so conhost.exe joins the job and hosted Windows reports three members for a two-process tree; any count-based containment assertion is therefore environment-dependent."
+      - "2026-07-28: The bootstrap disconnect monitor no longer parks a blocking read on the pipe. The pipe is a synchronous handle and Windows serializes I/O on a synchronous file object, so that read held off Complete's response write until the client disconnected, turning a durable enrollment into a client-side timeout and leaving the single-instance pipe owned long enough to break the next test. Stage-labelled CI evidence showed the write releasing at `complete after 1.97s` against a two-second client timeout. The monitor now peeks on the existing poll interval, treats any peek failure as a disconnect, and Complete waits for it before closing the handle. Pipe tests also take per-test pipe names and join their server goroutines, and the Windows CI leg repeats them with `-count=20`; hosted run 30365306016 passed both the single pass and the repetition. FILE_FLAG_FIRST_PIPE_INSTANCE, the protected DACL, and the identity checks are unchanged, and this remains hosted-runner evidence rather than a real-machine enrollment gate."
+    acceptance:
+      - The service reconnects after reboot and recovery without duplicate runtimes.
+      - DPAPI-protected material is inaccessible outside the service identity.
+      - DPAPI locators survive staging-directory rename and enforce no-clobber, idempotent removal, and ACL/reparse validation.
+      - A failed locked-file removal retains recoverable locator evidence.
+      - Job Object cleanup terminates descendant processes.
+      - A locked workspace file causes quarantine instead of false success.
+      - Purge rejects a nested junction before changing SCM state and leaves its external target untouched.
+      - Existing roots are never ACL-modified, and foreign, cross-role, cross-installation, or tampered ownership markers leave services and files unchanged.
+      - A successful durable join with a failed CLI acknowledgement exits non-zero and the SCM restart serves the saved identity without a second join.
+      - Live evidence rejects path overlap and foreign existing directories without changing contents or security descriptors, while exact config-bound scenario reuse succeeds.
+      - SCM evidence rejects duplicate, missing, unknown, wrong-role, wrong-service, or wrong-path command-line arguments after native Windows parsing.
+
+  - id: spr-010
+    title: Implement node-affined scheduling
+    type: backend
+    description: >
+      Implement the concrete slot ledger, per-target grants, deterministic
+      round-robin, eligibility filters, stable node ranking, and capacity advertisement.
+    depends_on: [spr-002, spr-003, spr-004, spr-007]
+    paths:
+      - internal/scheduler
+    ci_targets: [lint, test, build]
+    pr_order: 10
+    status: in_progress
+    notes:
+      - "2026-07-26: The in-memory scheduler now wraps the domain SlotLedger with concrete per-target grants, deterministic round-robin, eligibility and ranking, exact bind/release ownership, and stable capacity reporting. Restored reservations are claimed before admission; an Agent-reported active execution without matching durable ownership blocks that node and conservatively consumes fleet capacity rather than being reused."
+      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain spr-011/spr-014 responsibilities."
+      - "2026-07-26: Draft PR #9 passed Quality, Go on Ubuntu/macOS/Windows, all supported cross-builds, and the required aggregate gate in hosted CI run 30214294870."
+    acceptance:
+      - Randomized multi-target histories never exceed node or fleet capacity.
+      - One free slot is never advertised to two targets concurrently.
+      - Deterministic input produces deterministic placement.
+      - Draining, quarantined, offline, and unreconciled nodes are ineligible.
+      - Round-robin serves every continuously eligible target.
+
+  - id: spr-011
+    title: Implement restart and disconnect reconciliation
+    type: backend
+    description: >
+      Reconcile controller epochs, per-node snapshots, agent disconnects, drain,
+      quarantine, cleanup tombstones, stale GitHub state, and runner update state.
+    depends_on: [spr-007, spr-010]
+    paths:
+      - internal/reconcile
+      - test/fault
+    ci_targets: [lint, test, build]
+    pr_order: 11
+    status: in_progress
+    notes:
+      - "2026-07-26: spr-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. spr-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
+      - "2026-07-26: Controller restart now advances the epoch, restores capacity at zero, and reconciles each fresh Agent snapshot independently. Commands, observations, cleanup tombstones, JIT-generation fences, provider observations, runner-release freshness, and desired execution state use exact SQLite authority and fail-closed compare-and-swap transitions."
+      - "2026-07-26: Agent disconnect now revokes native readiness and advances the exact snapshot authority revision before the in-memory offline projection. A deterministic real-SQLite test disconnects after readiness is read but before the claim transaction and proves that no claim, reservation, AcquireJobs call, or GitHub message acknowledgement occurs; another fresh Node continues to advertise capacity."
+      - "2026-07-26: Real subprocess fault tests SIGKILL the Controller after queue/claim commit and before GitHub acknowledgement, and SIGKILL the Agent after a Start command is durably accepted but before execution. Restart produces one runtime or a single terminal cleanup outbox respectively, never duplicates JIT delivery or Start, and raw SQLite/WAL/SHM scans confirm that JIT material is absent."
+      - "2026-07-26: Lost-JIT recovery distinguishes exact Running/Cleaning history from terminal-only cleanup and waits for the exact terminal outbox before terminal execution or slot mutation. A local Running update is not GitHub pickup proof: only exact matching JobStarted or known non-canceled JobCompleted is authoritative; JobCompleted(result=canceled) remains a requeue signal. Lifecycle events with runnerRequestId=0 fall back only to a scale-set-unique exact provider runner ID/name; availability and assignment still require a non-zero request ID."
+      - "2026-07-26: Fresh non-replayed JobAvailable first commits a zero-capacity unpicked-requeue intent without creating an execution, reservation, or Acquire attempt. Zero-capacity polls separate ACK, exact provider removal, and two delayed absence reads; late pickup discards the proposal, while final absence atomically creates and immediately dispatches exactly one replacement. A durable reconciled_pending acquire marker preserves drive-before-poll across the final-commit crash seam while ordinary pre-ACK Pending remains poll-first. CleanupFailed retains the reservation, node quarantine, and zero capacity."
+      - "2026-07-27: Fresh-only recovery availability now rolls back the entire message transaction when recovery admission is disabled, the concrete slot is occupied, or poll authority is stale. Real SQLite tests prove that no dedupe row or intent survives and that eligible redelivery creates the exact intent/rearm instead of being consumed as replay."
+      - "2026-07-27: Runner-release admission now rejects a validated current/due status whose observation timestamp is still in the future relative to the Controller clock. This closes the restart/clock-rollback boundary where internally consistent but future evidence could otherwise re-enable new capacity; a regression test covers the fail-closed result."
+      - "2026-07-28: Production wiring now exists. `internal/app/controller_fleet.go` adds a `ControllerFleet` supervisor started from and shut down with `ServeController`; it derives the desired coordinator set from `store.ReadManagementConfiguration` plus committed `github_target_runtime_bindings` rows, opens one message session and runs one `app.NewControllerRunnerCoordinator` per Target with a verified runtime binding, confirms the stored scale set ID against GitHub before use, reacts to configuration changes through the same revision/invalidation signal as `publishManagementInvalidations`, restarts failures with bounded exponential backoff and a classified log, and is skipped entirely (non-fatal) when the controller has no GitHub App authority. Before this, `app.NewControllerRunnerCoordinator` was constructed only by the live acceptance rig, so an enrolled runner-ready node never got a GitHub message session and dispatched workflows stayed `queued` with all `github_*` tables empty."
+      - "2026-07-28: The coordinator is now resolved per Target rather than pinned to a node, because one scale set exposes exactly one message queue and only one coordinator/session/poller may exist per Target. Advertised demand is the honest sum of `GitHubSingleSlotCapacity` over every candidate node of the Target, with no invented cap. The node that receives a durable claim is chosen deterministically: candidates ordered by NodeID, first with durable capacity greater than zero wins; a replayed queue message takes the binding from the existing claim's own execution slot instead of re-selecting, so a crash/restart cannot land a replay on a different node. Per-node exclusion, drain, and stop still fall out of the existing `githubSlotAvailable` predicate in `internal/store/controller_github.go` and are not re-implemented in the app layer. Admission checks and node reconciliation now act on the node read from the claim's execution slot rather than a coordinator-wide node; `ControllerRunnerConfig.NodeID` survives only as the live acceptance rig's explicit single-node pin. The poll-claim authority attached to a binding still carries that one node's own capacity (the store requires exactly 1); only the upstream-advertised capacity is the fleet-wide sum."
+      - "2026-07-28: Runner executions are now created from GitHub's assigned-job demand rather than from JobAvailable alone. SpareRunner previously created a durable execution only from a JobAvailable message, which is not the scale-set protocol: the pinned actions/scaleset listener acquires JobAvailable jobs and creates nothing, driving runner creation entirely from HandleDesiredRunnerCount(Statistics.TotalAssignedJobs), and re-evaluating that count even on an empty long poll. Live evidence with a healthy session showed TotalAssignedJobs=1/TotalAvailableJobs=0, JobAssigned delivered with no runner request ID, and the workflow queued forever while every message was received, committed and acknowledged correctly. Desired active executions now equal TotalAssignedJobs, and the shortfall is created and driven through the existing prepare/JIT/start path. Migration 019 separates identity from provider correlation: `claim_key` is the SpareRunner-owned key every child table references (the request ID for an offered job, negative for assigned demand, disjoint by sign), `runner_request_id` becomes a nullable per-scale-set-unique correlation attribute that is never synthesized because AcquireJobs reads it, and `source_message_id` becomes nullable because an empty poll carries no message. A nullable identity column was rejected because SQLite does not enforce composite foreign keys containing NULL. Reconciliation runs inside the transaction that commits the carrying message (commit-before-ack), converges to a count read from durable state in the same transaction so redelivery and restart cannot duplicate, reuses the same capacity/exclusion/admission/runner-update/audit predicates as the JobAvailable boundary, logs unservable demand instead of dropping it, and never invents a statistic that was never observed."
+      - "2026-07-26: Agent Hello acknowledgement records a per-Node command-sequence baseline before snapshot capture. Ordinary and recovery command dispatch shares the Node lifecycle boundary with snapshot commit, so an overlapping replacement snapshot is rejected before SQLite projection and an old actor cannot receive a command after replacement. Prepare, Start, Cancel, replay Prepare, reconciliation Cancel, the reverse commit order, and exact SQLite snapshot/epoch replay CAS have deterministic race tests."
+      - "2026-07-26: Snapshot ACK and disconnect persistence no longer hold the Node lifecycle lock. A stalled ACK can be superseded; unresolved disconnect persistence rejects reconnect immediately and is canceled by Controller shutdown. Tests cover stalled ACK replacement, pending-projection retry, shutdown cancellation, command-consumer failure, and ambiguous caller timeout recovery."
+      - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a spr-007/spr-014 release dependency and is not claimed by these deterministic fault tests."
+    acceptance:
+      - Controller and agent kill tests do not create duplicate runners.
+      - One offline node does not block restored capacity from reconciled nodes.
+      - GitHub 5xx retains last-known state and surfaces stale metadata.
+      - Cleanup tombstones survive restart and keep a node quarantined.
+
+  - id: spr-012
+    title: Implement the management API and configuration contract
+    type: backend
+    description: >
+      Define OpenAPI, generated clients, REST/SSE handlers, single-admin session,
+      CSRF and Origin enforcement, audit persistence, and non-secret YAML import/export.
+    depends_on: [spr-004, spr-010, spr-011]
+    paths:
+      - api
+      - internal/api
+      - internal/auth
+      - internal/config
+      - internal/store
+      - internal/app
+      - cmd/sparerunner
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 12
+    status: done
+    notes:
+      - "2026-07-26: The first-release management authority is fixed to explicit same-origin loopback session bootstrap. Join codes are one-time loopback credential-delivery responses and GitHub Manifest callback routes remain unavailable until a signed one-time callback-state contract exists."
+      - "2026-07-26: The OpenAPI-generated Go and TypeScript contracts now own the loopback REST/SSE surface. Process-local owner sessions, exact Host/Origin/CSRF checks, immediate logout revocation even during audit failure, optimistic configuration revisions, bounded JSON/YAML transport, one-time join-code delivery, typed enrollment and Agent rejection audit, and cursor-bounded audit reads all fail closed under focused race and integration tests."
+      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until spr-013; live GitHub and three-OS authority remain spr-014 release gates."
+    acceptance:
+      - Generated Go and TypeScript contracts match the checked OpenAPI source.
+      - Unauthenticated, unauthorized, and cross-origin mutations return 401 or 403.
+      - Stale configuration revisions fail with an optimistic conflict.
+      - YAML export and every response exclude all secret material.
+
+  - id: spr-013
+    title: Build the embedded management UI
+    type: frontend
+    description: >
+      Add the owner-authorized browser handoff, then build Setup, Overview, Nodes,
+      Targets, Runs, and Settings against the generated client and embed the
+      production output into the controller.
+    depends_on: [spr-012]
+    paths:
+      - spec/sparerunner
+      - api
+      - internal/api
+      - internal/auth
+      - internal/store
+      - cmd/sparerunner
+      - web
+      - internal/webui
+    ci_targets: [lint, typecheck, test, build, e2e]
+    pr_order: 13
+    status: done
+    notes:
+      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. SPR-013 must show these controls as unavailable rather than fabricate a successful Target journey; SPR-016 now owns that missing provider authority and enables the final setup journey."
+      - "2026-07-26: Browser bootstrap is fixed to a two-party handoff. The browser-held claim secret never leaves volatile memory except for same-origin claim, while the CLI-visible signed code carries no session authority by itself."
+      - "2026-07-27: The process-key-signed two-minute browser handoff now requires exact Host/Origin, owner session and CSRF approval, and the browser-held 256-bit preimage. Approval and claim use rollback-capable fences; 16 concurrent HTTP claims issue exactly one cookie and audit, while audit, entropy, expiry, restart, tamper, wrong-secret, and replay failures remain fail closed without persisting claim or session material."
+      - "2026-07-27: The generated-client console implements Setup, Overview, Nodes, Targets, Runs, and Settings with explicit last-known, offline, stale, permission, quarantine, optimistic-conflict, and committed-but-unconfirmed states. Join-code responses racing Close/Escape/hidden/unmount are cancelled and scrubbed; GitHub App and Target controls remain visibly disabled with their missing authority rather than submitting an unverified Target."
+      - "2026-07-27: An interrupted browser-claim response reconciles against the current session instead of calling an ambiguous commit a rejection. Activity appends resume from an opaque final-page cursor without skipping older pages, and same-origin fetch-based SSE carries CSRF only in a header. Stream 401/403 is terminal in the browser; the Controller also closes every open stream at the absolute session deadline or exact logout revocation signal."
+      - "2026-07-27: Local machine-readable gates pass with 1,297 Go tests, 23 Vitest tests, 22 desktop/mobile Playwright component tests with zero axe violations, one release-binary browser E2E, and 171 networkless privileged Linux race tests, all with zero failures. Generated API/Web guards pass, known pnpm high-severity vulnerabilities are absent, focused auth/API race tests pass, and controller plus Agent cross-build for Linux, macOS, and Windows amd64/arm64."
+      - "2026-07-27: In an external-network-disabled Linux arm64 container, the cross-built release binary completed the actual owner CLI browser handoff, a 204 join-code cancellation, a consumed-code 404 reconciliation, real node enrollment, Drain/Resume, and audit rendering. A separate read-only-root, empty-PATH smoke served the checked-in hashed UI without a Node runtime; index and JavaScript returned 200 with CSP and no-store evidence."
+    acceptance:
+      - Playwright component fixtures cover loading, empty, running, offline, stale, permission error, and quarantined states.
+      - Browser handoff, join-code management, and node drain journeys complete without placing claim or session secrets in URLs, storage, logs, or diagnostics.
+      - GitHub and Target authority are exposed only when the signed provider boundary is available; no unverified Target can be submitted.
+      - Component screenshots have no unresolved visual or accessibility defects.
+      - A release binary serves the same generated UI with no Node.js runtime.
+
+  - id: spr-020
+    title: Implement GitHub App management authority and Target provisioning
+    type: integration
+    description: >
+      Implement the signed GitHub App Manifest callback, OS-private App credential
+      ownership, installation and private-scope discovery, fail-closed Target
+      verification, durable scale-set provisioning intent, and the corresponding
+      Setup and Target UI journey.
+    depends_on: [spr-012, spr-013]
+    paths:
+      - spec/sparerunner
+      - api
+      - internal/api
+      - internal/app
+      - internal/github
+      - internal/platform
+      - internal/store
+      - cmd/sparerunner
+      - web
+      - test/contract/github
+    ci_targets: [lint, typecheck, test, build, e2e]
+    pr_order: 14
+    status: in_progress
+    notes:
+      - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows host evidence remain pending for SPR-014/008/009."
+      - "2026-07-27: Runner-group authority now paginates every provider page and rejects a truncated 100-page view before provisioning; a second-page conflict test proves no scale set or group mutation occurs after the complete private-scope check."
+      - "2026-07-27: Controller startup now selects the service-user file credential store on Linux and the native private-material boundary (Keychain/DPAPI) on macOS/Windows; metadata decoding rejects unknown or trailing JSON and exact replay is no-clobber. Host credential/service evidence remains a live release gate."
+    acceptance:
+      - One user-owned GitHub App can be installed into and managed across two or more accounts.
+      - Manifest callback state is signed, single-use, bounded, and never leaks the App key or installation token.
+      - Public, unknown, unsafe runner-group, overlapping, and shared scale-set Targets fail closed before desired configuration commits.
+      - The operator can complete GitHub setup and private Target creation from the generated-client UI.
+
+  - id: spr-016
+    title: Implement node availability control
+    type: backend
+    description: >
+      Add the durable node-local availability intent, the same-host agent control
+      endpoint with OS peer authorization, protocol reporting, scheduler
+      enforcement, the shared API/CLI availability mutation, and the versioned
+      machine-readable CLI document that desktop clients integrate against.
+    depends_on: [spr-010, spr-012]
+    paths:
+      - internal/nodectl
+      - internal/agent
+      - internal/scheduler
+      - internal/transport
+      - internal/api
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+    ci_targets: [lint, test, build]
+    pr_order: 15
+    status: in_progress
+    notes:
+      - "2026-07-27: Durable intent, the same-host endpoint with kernel-verified peer authorization, agent readiness conjunction, transport reporting, and the versioned CLI document are implemented. `scripts/test-node-availability-linux.sh` proves stop, restart durability, pending resume until controller acknowledgement, offline stop, and endpoint refusal without --local-control against real controller, agent, and CLI binaries in a restricted container."
+      - "2026-07-27: Remaining for acceptance: the Windows named-pipe endpoint with an explicit DACL fails closed today, the controller does not yet persist an audit event per availability change, and the management API and Web UI do not yet expose the reported intent as a distinct field."
+      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as spr-019, not part of this task's acceptance."
+    acceptance:
+      - A stopped node receives no execution and remains stopped across agent service restart and reboot.
+      - Stopping during a running job leaves the job running and passes normal verified cleanup.
+      - Without a controller session, stopping applies locally and resuming reports pending instead of accepting.
+      - Controller Draining, Quarantined, and Revoked override a local Accepting intent.
+      - An unauthorized or unidentifiable local control peer is refused with no state change and an audit event.
+      - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
+      - "`sparerunner node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
+
+  - id: spr-017
+    title: Ship the desktop tray client
+    type: platform
+    description: >
+      Build the optional unprivileged per-user tray client for macOS, Windows, and
+      StatusNotifierItem Linux desktops, with login-item installation and native
+      per-platform build and packaging.
+    depends_on: [spr-007, spr-008, spr-009, spr-016]
+    paths:
+      - cmd/sparerunner-tray
+      - packaging/tray
+      - test/live/tray
+    ci_targets: [lint, test, build, e2e]
+    pr_order: 16
+    status: in_progress
+    notes:
+      - "2026-07-27: `cmd/sparerunner-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
+      - "2026-07-27: Remaining for acceptance: StatusNotifierItem Linux and Windows runs, login-item packaging, and reviewed screenshots of each rendered state."
+      - "2026-07-28: Per-target control/display is specified and tracked as spr-019; this task ships only the global accept/stop toggle."
+    acceptance:
+      - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
+      - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
+      - A desktop without a tray host exits with an explicit unsupported-environment error while the agent service and CLI continue unchanged.
+      - Removing, stopping, or never installing the tray changes no fleet behavior.
+      - Tray build failure does not gate controller or agent artifacts, and the support matrix states which packages include it.
+
+  - id: spr-019
+    title: Implement per-target node availability
+    type: backend
+    description: >
+      Add the node-owner-owned per-Target exclusion set, the controller-reported
+      eligible-Target list on heartbeat acknowledgement, controller adoption and
+      slot-availability enforcement, the agent-side fail-closed exec-boundary
+      backstop, target attribution in the agent journal, and the nodectl protocol
+      v2 exclude/include/list surface shared by the tray, CLI, and Raycast.
+    depends_on: [spr-016, spr-020]
+    paths:
+      - spec/sparerunner
+      - internal/domain
+      - internal/transport
+      - internal/store
+      - internal/app
+      - internal/nodectl
+      - internal/scheduler
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - cmd/sparerunner-tray
+      - extensions/raycast
+      - api
+      - web
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 17
+    status: in_progress
+    notes:
+      - "2026-07-28: The status was stale at `todo` while the work had already landed. The domain and transport carry eligible and excluded Targets on the agent session, the controller adopts and enforces owner exclusions, the agent enforces them at the exec boundary, and the nodectl v2 surface is exposed through the API, the Web console, the tray, the CLI, and Raycast. Restart, reboot, and disconnected-change acceptance still needs live evidence."
+    acceptance:
+      - When a node owner excludes one GitHub Target, that node receives no new execution for it while every other eligible Target on that node continues unaffected.
+      - An excluded Target remains excluded after an agent service restart or an OS reboot.
+      - Re-including a previously excluded Target remains pending, and ineffective, until the controller's adopted echo confirms it.
+      - The agent refuses a start for an excluded Target at the exec boundary with a durable classified `target_excluded` failure, and never touches a job whose JIT already crossed that boundary.
+      - The eligible-Target list, its excluded flags, and pending/synced state are visible and identical across the tray, the Raycast launcher, and the CLI.
+      - Excluding a Target while disconnected, including an unknown Target ID, records locally as a safe no-op and syncs on reconnect.
+      - Every exclusion or inclusion change persists an audit event with the node, the requesting surface, the previous and next value, and the result.
+
+  - id: spr-014
+    title: Validate cross-platform security and release behavior
+    type: verification
+    description: >
+      Run real three-OS, two-installation E2E and publish the threat model, security
+      contract, support matrix, native-isolation limitations, and machine-readable evidence.
+    depends_on: [spr-008, spr-009, spr-011, spr-013, spr-017, spr-020, spr-019]
+    paths:
+      - docs/security
+      - test/live
+      - output/release-evidence
+    ci_targets: [lint, test, build, e2e, deploy-check]
+    pr_order: 18
+    status: in_progress
+    notes:
+      - "2026-07-27: Added the SPR-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `sparerunner.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
+    acceptance:
+      - Private generic and OS-specific jobs route correctly across all three OSes.
+      - Public target creation and unsafe runner-group access fail closed.
+      - Secret canaries are absent from databases, journals, logs, metrics, UI, and diagnostics.
+      - Restart, disconnect, drain, stale-state, and quarantine scenarios pass with real agents.
+
+  - id: spr-015
+    title: Package and publish the first OSS release
+    type: release
+    description: >
+      Add installers, service manifests, GoReleaser, signed checksums, SBOM,
+      artifact attestations, upgrade/uninstall flows, and public release documentation.
+    depends_on: [spr-014]
+    paths:
+      - .github/workflows/release.yml
+      - packaging
+      - .goreleaser.yaml
+      - README.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - docs/RELEASE.md
+      - scripts/check-release-artifacts.sh
+      - scripts/generate-license-bundle.sh
+      - scripts/validate-release-evidence.sh
+    ci_targets: [lint, test, build, e2e, deploy-check]
+    pr_order: 19
+    status: in_progress
+    notes:
+      - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
+      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until SPR-014/live/signing gates pass."
+      - "2026-07-27: The local release runbook now keeps Syft enabled for snapshots and puts root license files and nested third-party files in the archive with explicit non-overlapping globs. A fresh v2.17.0/Syft v1.49.0 snapshot produced all six archives with no duplicate-entry warnings and passed the artifact checker."
+      - "2026-07-27: The release evidence validator now resolves the Go module from its own repository path, so the documented gate can be invoked from an external evidence directory and still fails closed on missing manifests."
+      - "2026-07-27: Hosted PR #17 run 30266682090 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 29a1b64. This validates the release plumbing only; no tagged artifact or live-fleet evidence was published."
+      - "2026-07-27: Hosted PR #17 run 30267782874 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head b420ea7 after the runner-group pagination hardening."
+      - "2026-07-27: Hosted PR #17 run 30268689444 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 581dc95 after the future-observation admission hardening."
+      - "2026-07-27: Hosted PR #17 run 30268998348 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 1666c79 after recording the hosted gate evidence."
+      - "2026-07-27: Hosted PR #17 run 30269475550 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 6e5803b after clarifying that the live sandbox is a release gate rather than an incomplete adapter implementation."
+      - "2026-07-27: Hosted PR #17 run 30274496720 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 61c24e7. Local `just check` and OSV source scan also pass with zero findings; the real private sandbox, signing, and clean-machine gates remain intentionally open."
+    acceptance:
+      - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
+      - Checksums, SBOM, provenance, and available platform signatures verify.
+      - >-
+        Each target's linked dependency closure produces a third-party license
+        and NOTICE bundle, and every archive and installer contains the
+        verified bundle.
+      - Every release gate and real-fleet evidence check succeeds.
+      - The public release documents unsupported signing or platform combinations explicitly.
+
+  - id: spr-018
+    title: Ship the Raycast launcher extension
+    type: frontend
+    description: >
+      Build the optional macOS Raycast extension over the versioned CLI contract,
+      with status view, pause and resume commands, CLI resolution and compatibility
+      checks, and no stored controller credential.
+    depends_on: [spr-008, spr-016]
+    paths:
+      - extensions/raycast
+      - docs/integrations
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 20
+    status: in_progress
+    notes:
+      - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no SpareRunner artifact."
+      - "2026-07-27: The extension is implemented and `ray build` type-checks it. Its own code path was verified against the real CLI and a live endpoint: status, pause, resume, pending resume, controller confirmation, a missing CLI, and an unreachable agent each produce the documented class. Remaining for acceptance: a run inside Raycast itself and reviewed screenshots."
+    acceptance:
+      - Pause and resume from Raycast produce the same effective state as the tray, the CLI, and the Web UI.
+      - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
+      - A missing, incompatible, or non-executable CLI produces an actionable installation error instead of an assumed state.
+      - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
+      - Removing or never installing the extension changes no fleet behavior, and its build gates no SpareRunner artifact.
+
+  - id: spr-021
+    title: Add the opt-in shared runner identity Linux mode
+    type: platform
+    description: >
+      Add a second Linux native-runner execution mode that runs the job as the
+      Agent's own Unix user, selected only by an explicit
+      `sparerunner-agent serve --allow-shared-runner-identity` flag. It drops uid
+      separation between Agent and job and nothing else: per-execution cgroup v2
+      descendant ownership through `cgroup.kill`, the durable start fence,
+      last-instant workspace verification, one-shot JIT delivery, verified
+      cleanup, and quarantine all remain fail-closed. Construction verifies the
+      cgroup v2 and delegated user subtree contract and the private root
+      ownership, uses its own user-data-directory roots and its own versioned
+      workspace-backend identity, and reports `sharedRunnerIdentity` as node state
+      through the agent snapshot and heartbeat, the management API, the CLI status
+      output, and the tray.
+    depends_on: [spr-007, spr-016]
+    paths:
+      - internal/platform/linux
+      - cmd/sparerunner-agent
+      - internal/nodectl
+      - internal/transport
+      - internal/app
+      - api/openapi.yaml
+      - spec/sparerunner
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 21
+    status: in_progress
+    notes:
+      - "2026-07-28: The mode is deliberately weaker than spr-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
+    acceptance:
+      - Without `--allow-shared-runner-identity`, no shared-identity backend is constructed and a missing privileged Supervisor still advertises zero capacity instead of falling back.
+      - Passing the flag together with the privileged Supervisor options is rejected at startup rather than silently preferring one mode.
+      - A job that calls `setsid()` under shared runner identity is still terminated with its descendants, and its workspace is not released until the descendant set is proven empty.
+      - Construction without a unified cgroup v2 hierarchy, without a writable systemd user delegated subtree, without `cgroup.kill`, or with a non-absolute, wrongly-owned, non-0700, symlinked, or group/world-writable-ancestor root returns strong-ownership-unavailable and advertises zero capacity, never a weaker containment.
+      - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
+      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `sparerunner node status`, and the tray, and grants no capacity and relaxes no check."
+
+  - id: spr-022
+    title: Rename the product to SpareRunner and restate its positioning
+    type: foundation
+    description: >
+      Rename the product from Tewake to SpareRunner across the specification,
+      documentation, Go module path, command binaries, OS service and account
+      identities, containment and enrollment identifiers, management session
+      surface, embedded Web console, and the Raycast extension. Restate the
+      product definition around spare capacity on computers the administrator
+      already owns, covering both a daily-use computer that participates while
+      idle and a surplus computer that serves full time, without weakening the
+      private-scope and trusted-workflow boundary. The rename is a deliberate
+      pre-alpha breaking change: enrolled nodes, stored private material, join
+      codes, and installed OS services from the previous name are not migrated.
+    depends_on: [spr-021]
+    paths:
+      - spec/sparerunner
+      - README.md
+      - AGENTS.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - docs
+      - go.mod
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - cmd/sparerunner-tray
+      - internal
+      - api/openapi.yaml
+      - packaging
+      - web
+      - extensions/raycast
+      - justfile
+      - scripts
+      - .goreleaser.yaml
+      - .github
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 22
+    status: in_progress
+    notes:
+      - "2026-07-28: Task IDs moved from `twk-NNN` to `spr-NNN` positionally. Merged commits and pull requests keep the old prefix because Git history is not rewritten."
+      - "The user-facing concepts stay Node, GitHub Target, and Runner Profile. `Machine` was considered and rejected: it would break the API schema, the store, the Web console, and the CLI without changing what the product does."
+      - "Container and VM execution modes, NAT traversal and relay for participation outside one LAN, and agent self-update are recorded as future direction, not as first-release scope. gRPC and protobuf stay rejected because the transport is versioned WebSocket JSON."
+      - "2026-07-28: Hosted run 30359476452 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required. Attempt 1 failed two Windows enrollment-bootstrap tests and was rerun unchanged; the cause is pre-existing cross-test contention on the single fixed bootstrap pipe name under FILE_FLAG_FIRST_PIPE_INSTANCE, not the rename. Locally `just check`, `just test-enrollment-cli-linux`, and `just test-node-availability-linux` pass, and the privileged Linux containment suite passes under the renamed build tag. Real macOS and Windows host installation and the live GitHub gates stay owned by spr-008, spr-009, and spr-014."
+    acceptance:
+      - No source file, filename, identifier, or generated artifact carries the previous product name, except the historical mapping note in this manifest.
+      - The join code magic stays three bytes, and its encoder and decoder agree, so enrollment succeeds end to end under the new prefix.
+      - Containment scope names, service accounts, ACL principals, and installation ownership markers are renamed together, so the privileged Linux, macOS, and Windows boundary tests still pass instead of failing open.
+      - The controller PKI names, the WebSocket subprotocol, and the discovery service are renamed together, so a node still enrolls, reconnects, and is rejected when the peer identity does not match.
+      - Generated OpenAPI code, the embedded Web console, and lock files are regenerated rather than edited, and their drift gates pass.
+      - The README status text matches the manifest status of every task it describes, and no capability is described as planned once it is implemented.
+      - Every statement that invites the reader to lend a computer they also use themselves carries the private-scope and not-a-sandbox boundary with it.

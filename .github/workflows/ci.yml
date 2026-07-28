@@ -88,15 +88,15 @@ jobs:
         run: pnpm --dir web test:ct
 
       - name: Build release binary for browser verification
-        run: go build -trimpath -o "${RUNNER_TEMP}/tewake" ./cmd/tewake
+        run: go build -trimpath -o "${RUNNER_TEMP}/sparerunner" ./cmd/sparerunner
 
       - name: Test critical management journey in a real browser
-        run: ./scripts/test-management-ui-linux.sh "${RUNNER_TEMP}/tewake"
+        run: ./scripts/test-management-ui-linux.sh "${RUNNER_TEMP}/sparerunner"
 
       - name: Smoke embedded Web UI from the release binary
         run: |
           ./scripts/smoke-embedded-ui.sh \
-            "${RUNNER_TEMP}/tewake" \
+            "${RUNNER_TEMP}/sparerunner" \
             output/test-results/embedded-ui-smoke.json
 
       - name: Install actionlint
@@ -158,10 +158,10 @@ jobs:
           ./internal/platform/windows/
 
       - name: Build controller
-        run: go build -trimpath ./cmd/tewake
+        run: go build -trimpath ./cmd/sparerunner
 
       - name: Build agent
-        run: go build -trimpath ./cmd/tewake-agent
+        run: go build -trimpath ./cmd/sparerunner-agent
 
   cross-build:
     name: Cross-build (all supported targets)

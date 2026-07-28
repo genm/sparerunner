@@ -70,7 +70,7 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	if decoded.TokenID() != code.TokenID() || decoded.secret != code.secret || decoded.CAFingerprint() != fingerprint {
 		t.Fatal("join code changed during canonical round-trip")
 	}
-	for _, malformed := range []string{encoded + "=", encoded + "A", "twk_"} {
+	for _, malformed := range []string{encoded + "=", encoded + "A", "spr_"} {
 		if _, err := DecodeJoinCode(malformed); err == nil {
 			t.Fatalf("accepted noncanonical code %q", malformed[:4])
 		}
@@ -335,7 +335,7 @@ func TestRenewalPreservesNodeAndSupersedesOldCredential(t *testing.T) {
 
 func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	service, _, now := testService(t)
 	identityDirectory := t.TempDir()
@@ -379,7 +379,7 @@ func TestPrivateIdentityPersistenceAndRenewalJitter(t *testing.T) {
 
 func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	service, _, _ := testService(t)
 	directory := t.TempDir()
@@ -402,7 +402,7 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/tmp/not-tewake", path); err != nil {
+	if err := os.Symlink("/tmp/not-sparerunner", path); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Identity.Save(path); err == nil {
@@ -426,7 +426,7 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 
 func TestPrivatePersistenceRemovalIsIdempotentAndRejectsSymlinks(t *testing.T) {
 	if runtime.GOOS != "linux" {
-		t.Skip("platform credential store adapter is owned by twk008/twk009")
+		t.Skip("platform credential store adapter is owned by spr008/spr009")
 	}
 	directory := t.TempDir()
 	if err := os.Chmod(directory, 0o700); err != nil {

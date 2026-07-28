@@ -250,7 +250,7 @@ func TestGitHubTargetFailsClosedWithoutPrivateVisibilityOrSafeRunnerGroup(t *tes
 		Scope:                 "owner/repository",
 		Visibility:            TargetPrivate,
 		RunnerGroupAccessSafe: true,
-		ScaleSetName:          "tewake",
+		ScaleSetName:          "sparerunner",
 		RunnerProfileID:       "profile-1",
 	}
 	if err := target.Validate(); err != nil {

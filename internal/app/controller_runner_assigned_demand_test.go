@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 // TestControllerRunnerEmptyPollReconcilesAssignedDemand proves the coordinator
@@ -16,7 +16,7 @@ import (
 func TestControllerRunnerEmptyPollReconcilesAssignedDemand(t *testing.T) {
 	stateStore := newRunnerCoordinatorFakeStore()
 	execution := domain.ExecutionSnapshot{
-		ID:       "twk-exec-assigned-demand",
+		ID:       "spr-exec-assigned-demand",
 		TargetID: "target-1",
 		Slot:     domain.SlotKey{NodeID: domain.NodeID("00000000000000000000000000000001"), Index: 0},
 		State:    domain.ExecutionReserved,

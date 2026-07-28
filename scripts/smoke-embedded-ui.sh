@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -gt 2 ]]; then
-  printf 'usage: %s [tewake-binary] [result-json]\n' "$0" >&2
+  printf 'usage: %s [sparerunner-binary] [result-json]\n' "$0" >&2
   exit 2
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-binary="${1:-${repo_root}/bin/tewake}"
+binary="${1:-${repo_root}/bin/sparerunner}"
 result_file="${2:-${repo_root}/output/test-results/embedded-ui-smoke.json}"
 runtime_parent="${TMPDIR:-/tmp}"
 runtime_parent="${runtime_parent%/}"
@@ -15,7 +15,7 @@ if [[ -z "${runtime_parent}" || "${runtime_parent}" != /* || ! -d "${runtime_par
   printf 'temporary directory parent is invalid\n' >&2
   exit 1
 fi
-runtime_dir="$(mktemp -d "${runtime_parent}/tewake-embedded-ui.XXXXXX")"
+runtime_dir="$(mktemp -d "${runtime_parent}/sparerunner-embedded-ui.XXXXXX")"
 serve_pid=""
 
 cleanup() {
@@ -27,7 +27,7 @@ cleanup() {
   # Only remove the exact mktemp directory owned by this invocation.
   if [[ -d "${runtime_dir}" ]]; then
     case "${runtime_dir}" in
-      "${runtime_parent}"/tewake-embedded-ui.*) find "${runtime_dir}" -depth -delete ;;
+      "${runtime_parent}"/sparerunner-embedded-ui.*) find "${runtime_dir}" -depth -delete ;;
     esac
   fi
 }
@@ -36,7 +36,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [[ ! -x "${binary}" ]]; then
-  printf 'tewake binary is not executable: %s\n' "${binary}" >&2
+  printf 'sparerunner binary is not executable: %s\n' "${binary}" >&2
   exit 1
 fi
 

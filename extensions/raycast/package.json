@@ -1,8 +1,8 @@
 {
   "$schema": "https://www.raycast.com/schemas/extension.json",
-  "name": "tewake",
-  "title": "Tewake",
-  "description": "See what this computer is running for your Tewake fleet, and stop or resume accepting new jobs.",
+  "name": "sparerunner",
+  "title": "SpareRunner",
+  "description": "See what this computer is running for your SpareRunner fleet, and stop or resume accepting new jobs.",
   "icon": "command-icon.png",
   "author": "genm",
   "license": "Apache-2.0",
@@ -11,21 +11,21 @@
     {
       "name": "status",
       "title": "Node Status",
-      "subtitle": "Tewake",
+      "subtitle": "SpareRunner",
       "description": "Show whether this computer accepts new fleet jobs and what it is running.",
       "mode": "view"
     },
     {
       "name": "pause",
       "title": "Stop Accepting Jobs",
-      "subtitle": "Tewake",
+      "subtitle": "SpareRunner",
       "description": "Withhold this computer's capacity without cancelling the job already running.",
       "mode": "no-view"
     },
     {
       "name": "resume",
       "title": "Resume Accepting Jobs",
-      "subtitle": "Tewake",
+      "subtitle": "SpareRunner",
       "description": "Offer this computer's capacity again once the controller confirms it.",
       "mode": "no-view"
     }
@@ -35,9 +35,9 @@
       "name": "cliPath",
       "type": "textfield",
       "required": false,
-      "title": "Tewake CLI",
-      "description": "Path to the tewake binary. Leave empty to search the standard install locations.",
-      "placeholder": "/usr/local/bin/tewake"
+      "title": "SpareRunner CLI",
+      "description": "Path to the sparerunner binary. Leave empty to search the standard install locations.",
+      "placeholder": "/usr/local/bin/sparerunner"
     },
     {
       "name": "stateDirectory",
@@ -45,7 +45,7 @@
       "required": false,
       "title": "Agent State Directory",
       "description": "Override the agent state directory when it is not the OS default.",
-      "placeholder": "~/Library/Application Support/tewake/agent"
+      "placeholder": "~/Library/Application Support/sparerunner/agent"
     }
   ],
   "dependencies": {

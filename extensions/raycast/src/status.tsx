@@ -33,7 +33,7 @@ export default function Command() {
       setFailure(controlError);
       await showToast({
         style: Toast.Style.Failure,
-        title: "Tewake could not read this node",
+        title: "SpareRunner could not read this node",
         message: explain(controlError.errorClass),
       });
     } finally {
@@ -57,7 +57,7 @@ export default function Command() {
       setFailure(controlError);
       await showToast({
         style: Toast.Style.Failure,
-        title: "Tewake could not update this Target",
+        title: "SpareRunner could not update this Target",
         message: explain(controlError.errorClass),
       });
     } finally {

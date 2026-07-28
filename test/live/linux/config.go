@@ -15,15 +15,15 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
 	liveConfigVersion       = 1
 	privateProofVersion     = 1
 	privateProofFileName    = "private-repository-proof.json"
-	liveScaleSetName        = "tewake-linux"
+	liveScaleSetName        = "sparerunner-linux"
 	maxLiveConfigBytes      = 64 << 10
 	maxPrivateKeyBytes      = 64 << 10
 	privateProofMaxAge      = 5 * time.Minute

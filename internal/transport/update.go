@@ -6,7 +6,7 @@ import (
 	"errors"
 	"io"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 type ExecutionErrorCode = domain.ExecutionErrorCode

@@ -1,4 +1,4 @@
-module github.com/genm/tewake
+module github.com/genm/sparerunner
 
 go 1.26.4
 

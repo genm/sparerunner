@@ -6,7 +6,7 @@ import "./styles.css";
 
 const root = document.getElementById("root");
 if (!root) {
-  throw new Error("Tewake UI root element is missing");
+  throw new Error("SpareRunner UI root element is missing");
 }
 
 createRoot(root).render(

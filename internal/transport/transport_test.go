@@ -20,8 +20,8 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/store"
 	"github.com/hashicorp/mdns"
 )
 
@@ -281,7 +281,7 @@ func TestAuthenticatedWSSRejectsMissingClientCertificate(t *testing.T) {
 	pool := x509.NewCertPool()
 	pool.AddCert(service.Identity.CA)
 	endpoint := "wss" + strings.TrimPrefix(server.URL, "https")
-	_, response, err := websocket.Dial(context.Background(), endpoint, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: enroll.ControllerDNSName}}}, Subprotocols: []string{"tewake.v1"}})
+	_, response, err := websocket.Dial(context.Background(), endpoint, &websocket.DialOptions{HTTPClient: &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: &tls.Config{RootCAs: pool, ServerName: enroll.ControllerDNSName}}}, Subprotocols: []string{"sparerunner.v1"}})
 	if err == nil {
 		t.Fatal("missing client certificate accepted")
 	}
@@ -318,7 +318,7 @@ func TestAuthenticatedWSSRejectsPeerLeafThatDiffersFromVerifiedChain(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "https://tewake-controller/", nil)
+	request := httptest.NewRequest(http.MethodGet, "https://sparerunner-controller/", nil)
 	request.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{peerLeaf, service.Identity.CA},
 		VerifiedChains:   [][]*x509.Certificate{{verifiedLeaf, service.Identity.CA}},
@@ -350,7 +350,7 @@ func TestAuthenticatedWSSReturnsTypedSecretFreeRevokedCredentialRejection(t *tes
 	if _, err := registry.RevokeNode(context.Background(), result.NodeID); err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "https://tewake-controller/", nil)
+	request := httptest.NewRequest(http.MethodGet, "https://sparerunner-controller/", nil)
 	request.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{leaf, service.Identity.CA},
 		VerifiedChains:   [][]*x509.Certificate{{leaf, service.Identity.CA}},

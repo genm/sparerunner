@@ -10,7 +10,7 @@ if [[ ! -f "${go_contract}" || ! -f "${typescript_contract}" ]]; then
   exit 1
 fi
 
-scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/tewake-api-contract.XXXXXX")"
+scratch_dir="$(mktemp -d "${TMPDIR:-/tmp}/sparerunner-api-contract.XXXXXX")"
 trap 'rm -rf "${scratch_dir}"' EXIT
 cp "${go_contract}" "${scratch_dir}/openapi.gen.go"
 cp "${typescript_contract}" "${scratch_dir}/schema.ts"

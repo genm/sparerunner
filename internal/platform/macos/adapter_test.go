@@ -11,7 +11,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type testWorkspace struct {
@@ -108,7 +108,7 @@ func TestAdapterExposesExactlyOneUIDBackedRunnerSlot(t *testing.T) {
 }
 
 func (*testRuntime) EnsureProcessGroup(_ context.Context, owner string) (ProcessGroup, error) {
-	return ProcessGroup{Scope: "tewake/" + owner, HostEpoch: "boot-test"}, nil
+	return ProcessGroup{Scope: "sparerunner/" + owner, HostEpoch: "boot-test"}, nil
 }
 func (runtime *testRuntime) LockFence(_ context.Context, containment runner.ContainmentRef) (Fence, error) {
 	runtime.mu.Lock()

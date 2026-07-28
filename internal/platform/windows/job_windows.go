@@ -19,8 +19,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 	"golang.org/x/sys/windows/svc/mgr"
@@ -29,7 +29,7 @@ import (
 const (
 	maxJITMaterialBytes = 256 << 10
 	jobPollInterval     = 100 * time.Millisecond
-	fenceVersionLine    = "tewake-windows-fence-v1"
+	fenceVersionLine    = "sparerunner-windows-fence-v1"
 
 	jobObjectQuery     = 0x0004
 	jobObjectTerminate = 0x0008
@@ -49,7 +49,7 @@ type runnerTokenSource interface {
 }
 
 // ServiceTokenSource duplicates the primary token of a dedicated inert Windows
-// service. SCM owns that service logon, so Tewake never stores a runner-account
+// service. SCM owns that service logon, so SpareRunner never stores a runner-account
 // password beside the Agent's DPAPI material.
 type ServiceTokenSource struct {
 	ServiceName string
@@ -434,8 +434,8 @@ func disposableRunnerEnvironment(
 	token syswindows.Token,
 	executionRoot string,
 ) ([]uint16, error) {
-	home := filepath.Join(executionRoot, "_tewake-home")
-	temporary := filepath.Join(executionRoot, "_tewake-tmp")
+	home := filepath.Join(executionRoot, "_sparerunner-home")
+	temporary := filepath.Join(executionRoot, "_sparerunner-tmp")
 	appData := filepath.Join(home, "AppData", "Roaming")
 	localAppData := filepath.Join(home, "AppData", "Local")
 	for _, directory := range []string{home, temporary, appData, localAppData} {
@@ -688,8 +688,8 @@ func validPreparedJobRef(ref runner.ContainmentRef) bool {
 
 func validPreparedJobBoundary(ref runner.ContainmentRef) bool {
 	return ref.Backend == containmentBackend &&
-		strings.HasPrefix(ref.OwnerID, "tewake-") &&
-		len(ref.OwnerID) == len("tewake-")+sha256HexLength &&
+		strings.HasPrefix(ref.OwnerID, "sparerunner-") &&
+		len(ref.OwnerID) == len("sparerunner-")+sha256HexLength &&
 		ref.Scope == jobObjectName(ref.HostEpoch, ref.OwnerID) &&
 		canonicalToken(ref.HostEpoch) &&
 		ref.InvocationID == ""
@@ -890,7 +890,7 @@ func lockFileFence(
 	runtimeRoot string,
 	ref runner.ContainmentRef,
 ) (*diskFence, error) {
-	fenceRoot := filepath.Join(runtimeRoot, ".tewake-fences")
+	fenceRoot := filepath.Join(runtimeRoot, ".sparerunner-fences")
 	if err := ensurePrivateFenceDirectory(fenceRoot); err != nil {
 		return nil, runner.ErrCleanupFailed
 	}

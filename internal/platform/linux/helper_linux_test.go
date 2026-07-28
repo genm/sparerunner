@@ -19,7 +19,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type helperTestWorkspace struct {
@@ -183,16 +183,16 @@ func (runtime *helperRecordingRuntime) Shutdown(ctx context.Context) error {
 
 func TestHelperPolicyRejectsBroadOrNoncanonicalPathsAndRootIdentities(t *testing.T) {
 	base := HelperPolicy{
-		SocketPath:  "/run/tewake/supervisor.sock",
-		RuntimeRoot: "/var/lib/tewake-runtime",
-		CacheRoot:   "/var/cache/tewake-agent",
+		SocketPath:  "/run/sparerunner/supervisor.sock",
+		RuntimeRoot: "/var/lib/sparerunner-runtime",
+		CacheRoot:   "/var/cache/sparerunner-agent",
 		AgentUID:    1001,
 		AgentGID:    1001,
 		RunnerUID:   1002,
 		RunnerGID:   1002,
 	}
 	mutations := []func(*HelperPolicy){
-		func(policy *HelperPolicy) { policy.SocketPath = "/run/tewake/../supervisor.sock" },
+		func(policy *HelperPolicy) { policy.SocketPath = "/run/sparerunner/../supervisor.sock" },
 		func(policy *HelperPolicy) { policy.RuntimeRoot = "/" },
 		func(policy *HelperPolicy) { policy.AgentUID = 0 },
 		func(policy *HelperPolicy) {
@@ -277,9 +277,9 @@ func newHelperHarness(t *testing.T) (*HelperServer, *HelperClient, *helperRecord
 
 func TestHelperServerRejectsWorkspaceWithoutOfficialPackageAuthority(t *testing.T) {
 	policy := HelperPolicy{
-		SocketPath:  "/run/tewake/supervisor.sock",
-		RuntimeRoot: "/var/lib/tewake-runtime",
-		CacheRoot:   "/var/cache/tewake-agent",
+		SocketPath:  "/run/sparerunner/supervisor.sock",
+		RuntimeRoot: "/var/lib/sparerunner-runtime",
+		CacheRoot:   "/var/cache/sparerunner-agent",
 		AgentUID:    1001,
 		AgentGID:    1001,
 		RunnerUID:   1002,
@@ -295,9 +295,9 @@ func TestHelperServerRejectsWorkspaceWithoutOfficialPackageAuthority(t *testing.
 
 func TestHelperServerRejectsRuntimeWithoutAdmissionProbe(t *testing.T) {
 	policy := HelperPolicy{
-		SocketPath:  "/run/tewake/supervisor.sock",
-		RuntimeRoot: "/var/lib/tewake-runtime",
-		CacheRoot:   "/var/cache/tewake-agent",
+		SocketPath:  "/run/sparerunner/supervisor.sock",
+		RuntimeRoot: "/var/lib/sparerunner-runtime",
+		CacheRoot:   "/var/cache/sparerunner-agent",
 		AgentUID:    1001,
 		AgentGID:    1001,
 		RunnerUID:   1002,
@@ -407,8 +407,8 @@ func unixSocketPair(t *testing.T) (*net.UnixConn, *net.UnixConn) {
 func helperTestContainment(rootName string) runner.ContainmentRef {
 	return runner.ContainmentRef{
 		Backend:    containmentBackend,
-		OwnerID:    "tewake-" + rootName,
-		Scope:      filepath.Join("tewake", "tewake-"+rootName),
+		OwnerID:    "sparerunner-" + rootName,
+		Scope:      filepath.Join("sparerunner", "sparerunner-"+rootName),
 		HostEpoch:  "boot-test",
 		FenceToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -1168,7 +1168,7 @@ func TestHelperSocketIsRootOwnedAndNotWorldAccessible(t *testing.T) {
 	if os.Geteuid() != 0 {
 		t.Skip("root-owned socket admission requires a root Supervisor test environment")
 	}
-	socketDirectory, err := os.MkdirTemp("/run", "tewake-helper-test-")
+	socketDirectory, err := os.MkdirTemp("/run", "sparerunner-helper-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1182,8 +1182,8 @@ func TestHelperSocketIsRootOwnedAndNotWorldAccessible(t *testing.T) {
 	}
 	policy := HelperPolicy{
 		SocketPath:  filepath.Join(socketDirectory, "supervisor.sock"),
-		RuntimeRoot: "/var/lib/tewake-runtime",
-		CacheRoot:   "/var/cache/tewake-agent",
+		RuntimeRoot: "/var/lib/sparerunner-runtime",
+		CacheRoot:   "/var/cache/sparerunner-agent",
 		AgentUID:    21001,
 		AgentGID:    agentGID,
 		RunnerUID:   22001,

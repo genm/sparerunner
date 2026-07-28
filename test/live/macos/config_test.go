@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestMacOSLiveConfigAcceptsPinnedDarwinPackage(t *testing.T) {
@@ -37,7 +37,7 @@ func TestMacOSLiveConfigFailsClosed(t *testing.T) {
 			config.ExpectedArchitecture = "386"
 		}},
 		{name: "relative harness", mutate: func(config *macOSLiveConfig) {
-			config.HarnessPath = "tewake-macos-live"
+			config.HarnessPath = "sparerunner-macos-live"
 		}},
 		{name: "package substitution", mutate: func(config *macOSLiveConfig) {
 			config.ExpectedRunnerPackageSHA256 = strings.Repeat("a", 64)
@@ -85,7 +85,7 @@ func validMacOSConfig(t *testing.T, architecture string) macOSLiveConfig {
 	return macOSLiveConfig{
 		Version:                      macOSLiveConfigVersion,
 		EvidenceDirectory:            filepath.Join(t.TempDir(), "evidence"),
-		HarnessPath:                  "/usr/local/libexec/tewake-macos-live",
+		HarnessPath:                  "/usr/local/libexec/sparerunner-macos-live",
 		ExecutionID:                  "macos-live-execution",
 		ExpectedArchitecture:         architecture,
 		ExpectedCommitSHA:            strings.Repeat("a", 40),

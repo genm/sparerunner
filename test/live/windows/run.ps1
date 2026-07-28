@@ -58,17 +58,17 @@ function Assert-ExactProperties {
 }
 
 function Get-ServiceEvidence {
-    $Agent = Get-CimInstance Win32_Service -Filter "Name='TewakeAgent'"
-    $Runner = Get-CimInstance Win32_Service -Filter "Name='TewakeRunnerIdentity'"
+    $Agent = Get-CimInstance Win32_Service -Filter "Name='SpareRunnerAgent'"
+    $Runner = Get-CimInstance Win32_Service -Filter "Name='SpareRunnerRunnerIdentity'"
     if ($null -eq $Agent -or $null -eq $Runner) {
-        throw "The packaged Tewake services are not installed."
+        throw "The packaged SpareRunner services are not installed."
     }
     $AgentArguments = @(
         "windows-service",
         "--role",
         "agent",
         "--service-name",
-        "TewakeAgent",
+        "SpareRunnerAgent",
         "--state-dir",
         [string] $Settings.agentStateDirectory,
         "--cache-root",
@@ -76,7 +76,7 @@ function Get-ServiceEvidence {
         "--runtime-root",
         [string] $Settings.runtimeRoot,
         "--runner-identity-service",
-        "TewakeRunnerIdentity",
+        "SpareRunnerRunnerIdentity",
         "--require-native-runner"
     )
     $RunnerArguments = @(
@@ -84,29 +84,29 @@ function Get-ServiceEvidence {
         "--role",
         "runner-identity",
         "--service-name",
-        "TewakeRunnerIdentity"
+        "SpareRunnerRunnerIdentity"
     )
-    [void] (Assert-TewakeServiceCommandLine `
+    [void] (Assert-SpareRunnerServiceCommandLine `
         -CommandLine ([string] $Agent.PathName) `
         -ExpectedExecutable ([string] $Settings.installedAgent) `
         -ExpectedArguments $AgentArguments `
         -PathArgumentIndexes @(6, 8, 10))
-    [void] (Assert-TewakeServiceCommandLine `
+    [void] (Assert-SpareRunnerServiceCommandLine `
         -CommandLine ([string] $Runner.PathName) `
         -ExpectedExecutable ([string] $Settings.installedAgent) `
         -ExpectedArguments $RunnerArguments)
-    if ($Agent.Name -cne "TewakeAgent" -or
+    if ($Agent.Name -cne "SpareRunnerAgent" -or
         $Agent.State -cne "Running" -or
         $Agent.StartName -notin @("LocalSystem", "NT AUTHORITY\LocalSystem") -or
         $Agent.ProcessId -le 0) {
-        throw "TewakeAgent effective SCM state does not match the package contract."
+        throw "SpareRunnerAgent effective SCM state does not match the package contract."
     }
-    if ($Runner.Name -cne "TewakeRunnerIdentity" -or
+    if ($Runner.Name -cne "SpareRunnerRunnerIdentity" -or
         $Runner.State -cne "Running" -or
-        $Runner.StartName -cne "NT SERVICE\TewakeRunnerIdentity" -or
+        $Runner.StartName -cne "NT SERVICE\SpareRunnerRunnerIdentity" -or
         $Runner.ProcessId -le 0 -or
         $Runner.ProcessId -eq $Agent.ProcessId) {
-        throw "TewakeRunnerIdentity effective SCM state does not match the package contract."
+        throw "SpareRunnerRunnerIdentity effective SCM state does not match the package contract."
     }
     return [ordered]@{
         agent = [ordered]@{
@@ -220,12 +220,12 @@ if (-not [string]::Equals(
     throw "The live config paths do not share one data root."
 }
 $SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
-$InstallAuthority = Assert-TewakeOwnershipMarker `
+$InstallAuthority = Assert-SpareRunnerOwnershipMarker `
     -ActualRoot $InstallRoot `
     -ExpectedBoundRoot $InstallRoot `
     -ExpectedRole "install" `
     -OwnerSid $SystemSid
-$DataAuthority = Assert-TewakeOwnershipMarker `
+$DataAuthority = Assert-SpareRunnerOwnershipMarker `
     -ActualRoot $DataRoot `
     -ExpectedBoundRoot $DataRoot `
     -ExpectedRole "data" `
@@ -233,7 +233,7 @@ $DataAuthority = Assert-TewakeOwnershipMarker `
 if ($InstallAuthority.InstallationId -cne $DataAuthority.InstallationId) {
     throw "The installed roots have different ownership identities."
 }
-$EvidenceAuthority = Initialize-TewakeLiveEvidenceRoot `
+$EvidenceAuthority = Initialize-SpareRunnerLiveEvidenceRoot `
     -EvidenceDirectory ([string] $Settings.evidenceDirectory) `
     -ProtectedPaths @(
         $RepositoryRoot,
@@ -266,8 +266,8 @@ switch ($Scenario) {
                 ./internal/enroll `
                 ./internal/platform/windows `
                 ./internal/runner `
-                ./cmd/tewake `
-                ./cmd/tewake-agent `
+                ./cmd/sparerunner `
+                ./cmd/sparerunner-agent `
                 ./packaging/windows 2>&1 |
                 Tee-Object -FilePath $Result
             if ($LASTEXITCODE -ne 0) {
@@ -280,7 +280,7 @@ switch ($Scenario) {
     }
     "service-preflight" {
         $Services = Get-ServiceEvidence
-        Assert-TewakePrivateAcl `
+        Assert-SpareRunnerPrivateAcl `
             -Path $Settings.agentStateDirectory `
             -OwnerSid $SystemSid `
             -Directory
@@ -290,7 +290,7 @@ switch ($Scenario) {
         )) {
             $Acl = Get-Acl -LiteralPath $Path
             if (-not $Acl.AreAccessRulesProtected) {
-                throw "A packaged Tewake directory has an inherited DACL."
+                throw "A packaged SpareRunner directory has an inherited DACL."
             }
         }
         Write-Evidence -Name "service-preflight.json" -Value ([ordered]@{
@@ -315,7 +315,7 @@ switch ($Scenario) {
             throw "DPAPI cross-identity evidence must run outside LocalSystem."
         }
         $Locator = Join-Path $Settings.agentStateDirectory "node-private-key.pem"
-        Assert-TewakePrivateAcl `
+        Assert-SpareRunnerPrivateAcl `
             -Path $Locator `
             -OwnerSid $SystemSid
         $Envelope = [System.IO.File]::ReadAllBytes($Locator)
@@ -347,7 +347,7 @@ switch ($Scenario) {
             $Ciphertext.Length
         )
         $Entropy = [System.Text.Encoding]::UTF8.GetBytes(
-            "tewake/private-material/windows/v1"
+            "sparerunner/private-material/windows/v1"
         )
         $Rejected = $false
         $UnexpectedPlaintext = $null
@@ -393,8 +393,8 @@ switch ($Scenario) {
             throw "A Runner.Listener process is active; recovery test refused."
         }
         $Before = Get-ServiceEvidence
-        Restart-Service -Name "TewakeAgent" -Force
-        (Get-Service -Name "TewakeAgent").WaitForStatus(
+        Restart-Service -Name "SpareRunnerAgent" -Force
+        (Get-Service -Name "SpareRunnerAgent").WaitForStatus(
             [System.ServiceProcess.ServiceControllerStatus]::Running,
             [TimeSpan]::FromSeconds(30)
         )

@@ -18,9 +18,9 @@ case "${target_arch}" in
 esac
 
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
-  go build -trimpath -o "${test_root}/tewake" "${repo_root}/cmd/tewake"
+  go build -trimpath -o "${test_root}/sparerunner" "${repo_root}/cmd/sparerunner"
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
-  go build -trimpath -o "${test_root}/tewake-agent" "${repo_root}/cmd/tewake-agent"
+  go build -trimpath -o "${test_root}/sparerunner-agent" "${repo_root}/cmd/sparerunner-agent"
 
 docker run --rm \
   --network none \
@@ -30,8 +30,8 @@ docker run --rm \
   --user 65532:65532 \
   --tmpfs /state:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
-  --mount "type=bind,src=${test_root}/tewake,dst=/opt/tewake,readonly" \
-  --mount "type=bind,src=${test_root}/tewake-agent,dst=/opt/tewake-agent,readonly" \
+  --mount "type=bind,src=${test_root}/sparerunner,dst=/opt/sparerunner,readonly" \
+  --mount "type=bind,src=${test_root}/sparerunner-agent,dst=/opt/sparerunner-agent,readonly" \
   alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
   /bin/sh -eu -c '
     controller_pid=
@@ -48,13 +48,13 @@ docker run --rm \
     }
     trap stop_processes EXIT INT TERM
 
-    init_output="$(/opt/tewake init \
+    init_output="$(/opt/sparerunner init \
       --state-dir /state/controller \
       --hint https://127.0.0.1:17443)"
-    join_code="$(printf "%s\n" "${init_output}" | awk "/^tewake join / { print \$3 }")"
+    join_code="$(printf "%s\n" "${init_output}" | awk "/^sparerunner join / { print \$3 }")"
     test -n "${join_code}"
 
-    /opt/tewake serve \
+    /opt/sparerunner serve \
       --state-dir /state/controller \
       --agent-listen 127.0.0.1:17443 \
       --admin-listen "" \
@@ -72,13 +72,13 @@ docker run --rm \
     done
     test "${ready}" = true
 
-    /opt/tewake join "${join_code}" \
+    /opt/sparerunner join "${join_code}" \
       --state-dir /state/agent \
       --controller https://127.0.0.1:17443 >/tmp/join.log 2>&1
     test -s /state/agent/node.json
     test -s /state/agent/node-private-key.pem
 
-    /opt/tewake-agent serve \
+    /opt/sparerunner-agent serve \
       --state-dir /state/agent \
       --connection-timeout 2s \
       --reconnect-delay 50ms >/tmp/agent.log 2>&1 &

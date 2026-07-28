@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const (
@@ -82,7 +82,7 @@ type RunnerProfileConfiguration struct {
 
 // GitHubTargetConfiguration is intentionally not domain.GitHubTarget. Only a
 // provider/store authority may add verified private visibility, safe
-// runner-group access, and the Tewake-owned scale-set ID before persistence.
+// runner-group access, and the SpareRunner-owned scale-set ID before persistence.
 type GitHubTargetConfiguration struct {
 	ID              domain.TargetID        `json:"id" yaml:"id"`
 	InstallationID  string                 `json:"installationId" yaml:"installationId"`

@@ -1,17 +1,17 @@
-# Tewake for Raycast
+# SpareRunner for Raycast
 
-Control this computer's Tewake node from Raycast: see what it is running, and
+Control this computer's SpareRunner node from Raycast: see what it is running, and
 stop or resume accepting new fleet jobs.
 
-The extension is a client of the `tewake` CLI, not of the agent socket. It holds
+The extension is a client of the `sparerunner` CLI, not of the agent socket. It holds
 no controller credential and no fleet address, so it can only affect the computer
 it runs on. Fleet-wide control stays in the Web UI and the CLI.
 
 ## Requirements
 
-- The Tewake agent running with its local control endpoint:
-  `tewake-agent serve --local-control`
-- The `tewake` CLI installed. The extension searches the standard locations and
+- The SpareRunner agent running with its local control endpoint:
+  `sparerunner-agent serve --local-control`
+- The `sparerunner` CLI installed. The extension searches the standard locations and
   accepts an explicit path in its preferences.
 
 ## Commands

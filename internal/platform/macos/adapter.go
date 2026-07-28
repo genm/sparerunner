@@ -17,8 +17,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
@@ -213,7 +213,7 @@ func (adapter *Adapter) PrepareContainment(
 	}
 	owner := containmentOwner(executionID)
 	group, err := adapter.runtime.EnsureProcessGroup(ctx, owner)
-	if err != nil || group.Scope != path.Join("tewake", owner) ||
+	if err != nil || group.Scope != path.Join("sparerunner", owner) ||
 		group.HostEpoch == "" || group.InvocationID != "" {
 		return runner.ContainmentRef{}, runner.ErrStrongOwnershipUnavailable
 	}
@@ -377,7 +377,7 @@ func (adapter *Adapter) FinalizeCleanup(
 ) error {
 	if ctx == nil || ctx.Err() != nil || root == nil ||
 		!adapter.validContainment(process.Containment) ||
-		process.Containment.OwnerID != "tewake-"+name ||
+		process.Containment.OwnerID != "sparerunner-"+name ||
 		expected.Backend != WorkspaceBackend || expected.OwnerID == "" {
 		return runner.ErrCleanupFailed
 	}
@@ -414,7 +414,7 @@ func (adapter *Adapter) GarbageCollectCleanup(
 func (adapter *Adapter) validContainment(ref runner.ContainmentRef) bool {
 	return ref.Backend == containmentBackend &&
 		ref.OwnerID != "" &&
-		ref.Scope == path.Join("tewake", ref.OwnerID) &&
+		ref.Scope == path.Join("sparerunner", ref.OwnerID) &&
 		ref.HostEpoch != "" &&
 		ref.InvocationID == "" &&
 		canonicalFenceToken(ref.FenceToken)
@@ -422,7 +422,7 @@ func (adapter *Adapter) validContainment(ref runner.ContainmentRef) bool {
 
 func containmentOwner(executionID string) string {
 	sum := sha256.Sum256([]byte(executionID))
-	return "tewake-" + hex.EncodeToString(sum[:])
+	return "sparerunner-" + hex.EncodeToString(sum[:])
 }
 
 func canonicalFenceToken(value string) bool {

@@ -1,67 +1,90 @@
-# Tewake
+# SpareRunner
 
-Tewake turns trusted Windows, macOS, and Linux computers you already own into a
-small private GitHub Actions fleet. Join a machine with one command, then let a
-local controller schedule one-job runner processes across repositories and
+**Flexible GitHub Actions runners from the machines you already own — on demand
+or full-time.**
+
+SpareRunner turns trusted Windows, macOS, and Linux computers you already own
+into a small private GitHub Actions fleet. Join a machine with one command, then
+let a local controller schedule one-job runner processes across repositories and
 organizations—without Kubernetes, cloud instances, or mandatory containers.
 
+The capacity is spare because you already own the hardware, not because it is
+short-lived. One fleet holds both kinds of machine at once:
+
+- the computer you work on, which contributes while you are willing to lend it
+  and which you reclaim in one click;
+- the surplus computer with nothing else to do, which serves full time.
+
+It fills the gap between registering runners by hand and running dedicated
+runner infrastructure:
+
+```text
+GitHub-hosted runners
+  ↓
+a self-hosted runner registered by hand on each machine, for each scope
+  ↓
+SpareRunner
+  ↓
+ARC / Kubernetes / commercial runner platforms
+```
+
 > [!WARNING]
-> Tewake is not a public-code sandbox. Native mode provides an ephemeral GitHub
-> runner identity and disposable work directory, not a disposable machine.
+> SpareRunner is not a public-code sandbox. Native mode provides an ephemeral
+> GitHub runner identity and disposable work directory, not a disposable machine.
 > Workflow code runs with the local runner account's privileges. Use it only with
 > private repositories and trusted workflows, contributors, actions, and
-> dependencies.
+> dependencies. Lending a computer you also use yourself does not change this.
 
 ## Status
 
-Tewake is under active pre-alpha development. The repository currently contains
-the accepted specification, durable domain/store foundations, the isolated GitHub
-scale-set adapter, and a Linux-capable controller/node enrollment path. `tewake
-init`, `tewake serve`, `tewake join`, `tewake node add`, and `tewake-agent serve`
-work for development, including pinned enrollment, mTLS WebSockets, reconnect,
-the signed GitHub App Manifest flow, installation discovery across multiple
-private org/repo scopes, private Target verification, generated management
-UI/API, node-affined scheduling, native runner lifecycle, verified cleanup, node
-availability control, the desktop tray, and the Raycast extension. The
+SpareRunner is under active pre-alpha development. The repository currently
+contains the accepted specification, durable domain/store foundations, the
+isolated GitHub scale-set adapter, and a Linux-capable controller/node
+enrollment path. `sparerunner init`, `sparerunner serve`, `sparerunner join`,
+`sparerunner node add`, and `sparerunner-agent serve` work for development,
+including pinned enrollment, mTLS WebSockets, reconnect, the signed GitHub App
+Manifest flow, installation discovery across multiple private org/repo scopes,
+private Target verification, generated management UI/API, node-affined
+scheduling, native runner lifecycle, verified cleanup, node availability
+control, per-Target exclusion, the desktop tray, and the Raycast extension. The
 production controller now starts a per-Target runner-coordinator fleet against
 real GitHub scale sets: each Target with a verified runtime binding gets its own
 message session and dispatch loop, and runner executions are created from
 GitHub's assigned-job statistic rather than from `JobAvailable` alone, which is
-what the scale-set protocol actually requires. End-to-end job execution is not
-yet proven live: the last verified live run received, committed, and
-acknowledged every message correctly while the workflow still sat `queued`, and
-the fix for that has deterministic coverage but no live confirmation. Those core
-paths have local and fault-injection coverage, but OS service installation, a
-real private GitHub job, and live three-OS sandbox evidence remain release
-gates; the
-Windows local control endpoint fails closed. Restart and disconnect
-reconciliation against live GitHub state (twk-011), node-affined scheduling's
-remaining live multi-Target evidence (twk-010), and macOS/Windows platform
-support (twk-008/twk-009) are still in progress, and per-Target availability —
-letting a node owner casually exclude one org/repo scope while the node keeps
-serving the rest — is specified and planned as twk-019, not yet implemented. A
-tag now produces a draft, checksummed six-platform bundle with CycloneDX SBOM
-and GitHub attestation steps; it is not a supported release until the
-real-machine gate and platform signing prerequisites pass. Do not install it on
-a production runner fleet.
+what the scale-set protocol actually requires.
+
+End-to-end job execution is not yet proven live: the last verified live run
+received, committed, and acknowledged every message correctly while the workflow
+still sat `queued`, and the fix for that has deterministic coverage but no live
+confirmation. Those core paths have local and fault-injection coverage, but OS
+service installation, a real private GitHub job, and live three-OS sandbox
+evidence remain release gates; the Windows local control endpoint fails closed.
+Restart and disconnect reconciliation against live GitHub state (spr-011),
+node-affined scheduling's remaining live multi-Target evidence (spr-010),
+per-Target availability's restart and reboot evidence (spr-019), and
+macOS/Windows platform support (spr-008/spr-009) are still in progress. A tag now
+produces a draft, checksummed six-platform bundle with CycloneDX SBOM and GitHub
+attestation steps; it is not a supported release until the real-machine gate and
+platform signing prerequisites pass. Do not install it on a production runner
+fleet.
 
 The specification is the project source of truth:
 
-- [Requirements](spec/tewake/requirements.md)
-- [Design](spec/tewake/design.md)
-- [Task graph](spec/tewake/tasks.yaml)
+- [Requirements](spec/sparerunner/requirements.md)
+- [Design](spec/sparerunner/design.md)
+- [Task graph](spec/sparerunner/tasks.yaml)
 
 ## Intended experience
 
 ```bash
-tewake init
-tewake serve
+sparerunner init
+sparerunner serve
 ```
 
 Then, on another computer:
 
 ```bash
-tewake join twk_...
+sparerunner join spr_...
 ```
 
 Connect a GitHub App you own, then point a Target at a private scope. This needs
@@ -69,30 +92,31 @@ no browser session with the controller — see
 [Connecting a GitHub App](docs/github-app.md):
 
 ```bash
-tewake github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
-tewake github installations
-tewake config apply fleet.yaml
+sparerunner github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
+sparerunner github installations
+sparerunner config apply fleet.yaml
 ```
 
 Workflows then select the fleet with:
 
 ```yaml
-runs-on: tewake
+runs-on: sparerunner
 ```
 
-OS-specific labels are `tewake-linux`, `tewake-macos`, and `tewake-windows`.
+OS-specific labels are `sparerunner-linux`, `sparerunner-macos`, and
+`sparerunner-windows`.
 
-On a computer you also use yourself, an optional tray client sits in the system tray
-or menu bar. It shows every private org/repo scope that computer currently waits on
-and what is running right now, and stops or resumes accepting new jobs in one
-click. A planned per-Target control (twk-019) will let the owner casually exclude
-one of those scopes without stopping the rest. Stopping never cancels the job
-already running, and the same switch is available from Raycast on macOS, and as
-`tewake node pause` / `tewake node resume`:
+On a computer you also use yourself, an optional tray client sits in the system
+tray or menu bar. It shows every private org/repo scope that computer currently
+waits on and what is running right now, and stops or resumes accepting new jobs
+in one click. The owner can also exclude a single scope while the machine keeps
+serving the rest. Stopping never cancels the job already running, and the same
+switch is available from Raycast on macOS, and as `sparerunner node pause` /
+`sparerunner node resume`:
 
 ```bash
-tewake-agent serve --local-control
-tewake node status
+sparerunner-agent serve --local-control
+sparerunner node status
 ```
 
 ## Product boundary
@@ -102,12 +126,19 @@ tewake node status
 - **vs GARM:** schedules on existing enrolled hosts instead of provisioning and
   deleting infrastructure instances
 - **vs ARC:** no Kubernetes; native Windows, macOS, and Linux hosts
-- **built on GitHub scale sets:** Tewake uses GitHub's official scale-set client and
-  runner instead of replacing GitHub's scheduling protocol
+- **built on GitHub scale sets:** SpareRunner uses GitHub's official scale-set
+  client and runner instead of replacing GitHub's scheduling protocol
+
+The thing SpareRunner competes with is not Kubernetes. It is the manual loop of
+SSHing into each machine, downloading a runner, registering it per repository,
+installing a service, adding a second runner for a second job, updating it,
+stopping it, and re-registering it when it breaks.
 
 The first release deliberately excludes public repositories and external forks,
 cloud providers, Kubernetes, controller HA, enterprise RBAC, VMs, external plugins,
-Iroh, GPU scheduling, and Docker mode.
+WAN/NAT traversal, GPU scheduling, and Docker mode. Directions the product may
+take later are recorded under Future Direction in the
+[requirements](spec/sparerunner/requirements.md).
 
 ## Development
 

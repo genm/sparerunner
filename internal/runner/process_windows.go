@@ -4,7 +4,7 @@ package runner
 
 import "context"
 
-// twk-009 installs a Windows Job Object adapter. Until then, a bare PID has no
+// spr-009 installs a Windows Job Object adapter. Until then, a bare PID has no
 // trustworthy descendant ownership, so runtime admission and hosted tests fail
 // closed rather than pretending process cleanup is complete.
 type windowsSupervisor struct{}

@@ -3,7 +3,7 @@ package scheduler
 import (
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // TestExcludedTargetRemovesOnlyThatTargetsCandidates proves the node-selection

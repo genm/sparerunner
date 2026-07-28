@@ -161,7 +161,7 @@ func (jitArgument) MarshalJSON() ([]byte, error) {
 }
 
 // Supervisor owns the whole descendant tree, not merely the listener PID.
-// Windows deliberately reports no strong capability until twk-009 supplies the
+// Windows deliberately reports no strong capability until spr-009 supplies the
 // Job Object adapter; callers must fail closed instead of claiming cleanup.
 type Supervisor interface {
 	StrongDescendantOwnership() bool

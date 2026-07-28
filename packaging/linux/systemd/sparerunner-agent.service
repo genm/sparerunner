@@ -1,0 +1,47 @@
+[Unit]
+Description=SpareRunner GitHub Actions runner agent
+Documentation=https://github.com/genm/sparerunner
+Wants=network-online.target
+After=network-online.target
+Wants=sparerunner-supervisor.service
+After=sparerunner-supervisor.service
+ConditionPathIsDirectory=/sys/fs/cgroup
+
+[Service]
+Type=simple
+User=sparerunner-agent
+Group=sparerunner-agent
+ExecStart=/usr/local/bin/sparerunner-agent serve \
+    --state-dir=/var/lib/sparerunner-agent \
+    --cache-root=/var/cache/sparerunner-agent \
+    --runtime-root=/var/lib/sparerunner-runtime \
+    --supervisor-socket=/run/sparerunner-supervisor/supervisor.sock \
+    --require-native-runner
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+
+# This process parses mTLS/WebSocket and GitHub-derived input. It never runs as
+# root and owns no cgroup, chown, setuid, or process-kill capability.
+CapabilityBoundingSet=
+NoNewPrivileges=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+PrivateDevices=yes
+
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectControlGroups=yes
+ProtectProc=invisible
+ProcSubset=all
+ReadWritePaths=/var/lib/sparerunner-agent /var/cache/sparerunner-agent /var/lib/sparerunner-runtime
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

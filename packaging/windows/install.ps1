@@ -12,10 +12,10 @@ param(
     [string] $CliBinary,
 
     [ValidateNotNullOrEmpty()]
-    [string] $InstallRoot = (Join-Path $env:ProgramFiles "Tewake"),
+    [string] $InstallRoot = (Join-Path $env:ProgramFiles "SpareRunner"),
 
     [ValidateNotNullOrEmpty()]
-    [string] $DataRoot = (Join-Path $env:ProgramData "Tewake")
+    [string] $DataRoot = (Join-Path $env:ProgramData "SpareRunner")
 )
 
 Set-StrictMode -Version Latest
@@ -24,8 +24,8 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "safe-tree.ps1")
 . (Join-Path $PSScriptRoot "ownership.ps1")
 
-$AgentService = "TewakeAgent"
-$RunnerService = "TewakeRunnerIdentity"
+$AgentService = "SpareRunnerAgent"
+$RunnerService = "SpareRunnerRunnerIdentity"
 $SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
 $AdministratorsSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-32-544")
 
@@ -38,7 +38,7 @@ function Get-CanonicalScopedPath {
     )
 
     if (-not [System.IO.Path]::IsPathRooted($Path)) {
-        throw "A Tewake install path must be absolute."
+        throw "A SpareRunner install path must be absolute."
     }
     $Canonical = [System.IO.Path]::GetFullPath($Path).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
@@ -53,7 +53,7 @@ function Get-CanonicalScopedPath {
             $Parent + [System.IO.Path]::DirectorySeparatorChar,
             [System.StringComparison]::OrdinalIgnoreCase
         )) {
-        throw "A Tewake install path escaped its owning Windows directory."
+        throw "A SpareRunner install path escaped its owning Windows directory."
     }
     return $Canonical
 }
@@ -67,7 +67,7 @@ function Assert-SourceBinary {
     if (-not [System.IO.Path]::IsPathRooted($Path)) {
         throw "A source binary path must be absolute."
     }
-    Assert-TewakeNoReparsePath -Path $Path
+    Assert-SpareRunnerNoReparsePath -Path $Path
     $Item = Get-Item -LiteralPath $Path -Force
     if ($Item.PSIsContainer -or $Item.Length -le 0) {
         throw "A source binary is not a non-empty regular file."
@@ -122,7 +122,7 @@ function Set-ProtectedDirectory {
     )
 
     [void] [System.IO.Directory]::CreateDirectory($Path)
-    Assert-TewakeNoReparsePath -Path $Path
+    Assert-SpareRunnerNoReparsePath -Path $Path
     $Acl = New-ProtectedDirectoryAcl -RunnerSid $RunnerSid -RunnerReadOnly:$RunnerReadOnly
     Set-Acl -LiteralPath $Path -AclObject $Acl
 }
@@ -179,7 +179,7 @@ function Invoke-ServiceControl {
 
     & (Join-Path $env:SystemRoot "System32\sc.exe") @Arguments | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "Windows Service Control Manager rejected the Tewake configuration."
+        throw "Windows Service Control Manager rejected the SpareRunner configuration."
     }
 }
 
@@ -192,14 +192,14 @@ function Install-FileNoClobber {
     )
 
     if (Test-Path -LiteralPath $Destination) {
-        throw "A Tewake install file already exists; use the future upgrade workflow."
+        throw "A SpareRunner install file already exists; use the future upgrade workflow."
     }
     $Staging = Join-Path (
         [System.IO.Path]::GetDirectoryName($Destination)
     ) (".{0}.{1}.staging" -f [System.IO.Path]::GetFileName($Destination), [Guid]::NewGuid().ToString("N"))
     Copy-Item -LiteralPath $Source -Destination $Staging
     try {
-        Assert-TewakeNoReparsePath -Path $Staging
+        Assert-SpareRunnerNoReparsePath -Path $Staging
         Move-Item -LiteralPath $Staging -Destination $Destination
     }
     finally {
@@ -216,15 +216,15 @@ $CliBinary = Assert-SourceBinary -Path $CliBinary
 
 if ((Test-Path -LiteralPath $InstallRoot) -or
     (Test-Path -LiteralPath $DataRoot)) {
-    throw "A Tewake root already exists; the first release does not support upgrades."
+    throw "A SpareRunner root already exists; the first release does not support upgrades."
 }
 if ((Get-Service -Name $AgentService -ErrorAction SilentlyContinue) -or
     (Get-Service -Name $RunnerService -ErrorAction SilentlyContinue)) {
-    throw "A Tewake Windows service already exists; installation will not overwrite it."
+    throw "A SpareRunner Windows service already exists; installation will not overwrite it."
 }
 
-$InstalledAgent = Join-Path $InstallRoot "tewake-agent.exe"
-$InstalledCli = Join-Path $InstallRoot "tewake.exe"
+$InstalledAgent = Join-Path $InstallRoot "sparerunner-agent.exe"
+$InstalledCli = Join-Path $InstallRoot "sparerunner.exe"
 $StateRoot = Join-Path $DataRoot "agent-state"
 $CacheRoot = Join-Path $DataRoot "cache"
 $RuntimeRoot = Join-Path $DataRoot "runtime"
@@ -235,13 +235,13 @@ $CreatedDataRoot = $false
 $InstallationId = [Guid]::NewGuid().ToString("D")
 
 try {
-    [void] (New-TewakeOwnedRoot `
+    [void] (New-SpareRunnerOwnedRoot `
         -Path $InstallRoot `
         -Role "install" `
         -InstallationId $InstallationId `
         -OwnerSid $SystemSid)
     $CreatedInstallRoot = $true
-    [void] (New-TewakeOwnedRoot `
+    [void] (New-SpareRunnerOwnedRoot `
         -Path $DataRoot `
         -Role "data" `
         -InstallationId $InstallationId `
@@ -258,7 +258,7 @@ try {
         "binPath=", $RunnerCommand,
         "start=", "auto",
         "obj=", "NT SERVICE\$RunnerService",
-        "DisplayName=", "Tewake Runner Identity"
+        "DisplayName=", "SpareRunner Runner Identity"
     )
     $CreatedRunnerService = $true
     Invoke-ServiceControl -Arguments @("sidtype", $RunnerService, "unrestricted")
@@ -295,7 +295,7 @@ try {
         "start=", "auto",
         "obj=", "LocalSystem",
         "depend=", $RunnerService,
-        "DisplayName=", "Tewake Agent"
+        "DisplayName=", "SpareRunner Agent"
     )
     $CreatedAgentService = $true
     Invoke-ServiceControl -Arguments @(
@@ -306,12 +306,12 @@ try {
     Invoke-ServiceControl -Arguments @("failureflag", $AgentService, "1")
     Invoke-ServiceControl -Arguments @("start", $RunnerService)
     Invoke-ServiceControl -Arguments @("start", $AgentService)
-    [void] (Assert-TewakeOwnershipMarker `
+    [void] (Assert-SpareRunnerOwnershipMarker `
         -ActualRoot $InstallRoot `
         -ExpectedBoundRoot $InstallRoot `
         -ExpectedRole "install" `
         -OwnerSid $SystemSid)
-    [void] (Assert-TewakeOwnershipMarker `
+    [void] (Assert-SpareRunnerOwnershipMarker `
         -ActualRoot $DataRoot `
         -ExpectedBoundRoot $DataRoot `
         -ExpectedRole "data" `
@@ -330,7 +330,7 @@ catch {
     $CleanupFailures = [System.Collections.Generic.List[string]]::new()
     if ($CreatedDataRoot -and (Test-Path -LiteralPath $DataRoot)) {
         try {
-            Remove-TewakeTreeNoReparse -Root $DataRoot
+            Remove-SpareRunnerTreeNoReparse -Root $DataRoot
         }
         catch {
             $CleanupFailures.Add("data root: $($_.Exception.Message)")
@@ -338,17 +338,17 @@ catch {
     }
     if ($CreatedInstallRoot -and (Test-Path -LiteralPath $InstallRoot)) {
         try {
-            Remove-TewakeTreeNoReparse -Root $InstallRoot
+            Remove-SpareRunnerTreeNoReparse -Root $InstallRoot
         }
         catch {
             $CleanupFailures.Add("install root: $($_.Exception.Message)")
         }
     }
     if ($CleanupFailures.Count -gt 0) {
-        throw "Tewake installation failed and owned-root cleanup also failed: $($CleanupFailures -join '; ')"
+        throw "SpareRunner installation failed and owned-root cleanup also failed: $($CleanupFailures -join '; ')"
     }
     throw $InstallFailure
 }
 
-Write-Output "Tewake services are installed and waiting for enrollment."
-Write-Output "Run this elevated command once: & `"$InstalledCli`" join twk_..."
+Write-Output "SpareRunner services are installed and waiting for enrollment."
+Write-Output "Run this elevated command once: & `"$InstalledCli`" join spr_..."

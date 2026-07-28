@@ -27,7 +27,7 @@ func TestCaptureProvenanceFailsClosedOnDirtyOrAlteredInputs(t *testing.T) {
 			authority.Agent.ExecutableSHA256 = strings.Repeat("9", 64)
 		}},
 		{name: "installed path differs from running binary", mutate: func(_ *liveConfig, _ *authorityEvidence, probe *fakeAuthorityProbe) {
-			probe.fileDigests["/usr/local/bin/tewake-agent"] = strings.Repeat("9", 64)
+			probe.fileDigests["/usr/local/bin/sparerunner-agent"] = strings.Repeat("9", 64)
 		}},
 		{name: "altered effective unit", mutate: func(_ *liveConfig, authority *authorityEvidence, _ *fakeAuthorityProbe) {
 			authority.Supervisor.EffectiveUnitSHA256 = strings.Repeat("9", 64)
@@ -36,7 +36,7 @@ func TestCaptureProvenanceFailsClosedOnDirtyOrAlteredInputs(t *testing.T) {
 			probe.runnerAuthority[1] = strings.Repeat("9", 64)
 		}},
 		{name: "decoy runner path", mutate: func(_ *liveConfig, _ *authorityEvidence, probe *fakeAuthorityProbe) {
-			probe.runnerAuthority[0] = "/var/cache/tewake-agent/decoy/archive"
+			probe.runnerAuthority[0] = "/var/cache/sparerunner-agent/decoy/archive"
 		}},
 		{name: "stale harness commit", mutate: func(_ *liveConfig, _ *authorityEvidence, probe *fakeAuthorityProbe) {
 			executable, _ := os.Executable()
@@ -104,23 +104,23 @@ func provenanceFixture(
 	authority := authorityEvidence{
 		Version: evidenceVersion, Status: "passed",
 		Agent: serviceAuthority{
-			Unit: "tewake-agent.service", FragmentPath: "/etc/systemd/system/tewake-agent.service",
+			Unit: "sparerunner-agent.service", FragmentPath: "/etc/systemd/system/sparerunner-agent.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedAgentUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("serve", config.RuntimeRoot),
-			Executable:          "/usr/local/bin/tewake-agent",
+			Executable:          "/usr/local/bin/sparerunner-agent",
 			ExecutableSHA256:    config.Provenance.ExpectedInstalledAgentSHA256,
 		},
 		Supervisor: serviceAuthority{
-			Unit: "tewake-supervisor.service", FragmentPath: "/etc/systemd/system/tewake-supervisor.service",
+			Unit: "sparerunner-supervisor.service", FragmentPath: "/etc/systemd/system/sparerunner-supervisor.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedSupervisorUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("supervisor", config.RuntimeRoot),
-			Executable:          "/usr/local/bin/tewake-agent",
+			Executable:          "/usr/local/bin/sparerunner-agent",
 			ExecutableSHA256:    config.Provenance.ExpectedInstalledAgentSHA256,
 		},
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	probe := validAuthorityProbe()
-	probe.fileDigests["/usr/local/bin/tewake-agent"] =
+	probe.fileDigests["/usr/local/bin/sparerunner-agent"] =
 		config.Provenance.ExpectedInstalledAgentSHA256
 	executable, err := os.Executable()
 	if err != nil {
@@ -131,8 +131,8 @@ func provenanceFixture(
 		"false",
 	}
 	probe.trustedFiles[executable] = true
-	probe.trustedFiles["/usr/local/bin/tewake-agent"] = true
-	probe.buildVCS["/usr/local/bin/tewake-agent"] = [2]string{
+	probe.trustedFiles["/usr/local/bin/sparerunner-agent"] = true
+	probe.buildVCS["/usr/local/bin/sparerunner-agent"] = [2]string{
 		config.Provenance.ExpectedCommitSHA,
 		"false",
 	}

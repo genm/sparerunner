@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
@@ -298,7 +298,7 @@ func (adapter *Adapter) FinalizeCleanup(
 	if ctx == nil || ctx.Err() != nil || root == nil ||
 		!adapter.validContainment(process.Containment) ||
 		!validWorkspaceName(name) ||
-		process.Containment.OwnerID != "tewake-"+name ||
+		process.Containment.OwnerID != "sparerunner-"+name ||
 		expected.Backend != WorkspaceBackend ||
 		expected.OwnerID == "" {
 		return runner.ErrCleanupFailed
@@ -382,11 +382,11 @@ func (adapter *Adapter) validContainment(ref runner.ContainmentRef) bool {
 
 func containmentOwner(executionID string) string {
 	sum := sha256.Sum256([]byte(executionID))
-	return "tewake-" + hex.EncodeToString(sum[:])
+	return "sparerunner-" + hex.EncodeToString(sum[:])
 }
 
 func jobObjectName(epoch, owner string) string {
-	return `Local\Tewake-` + epoch + "-" + owner
+	return `Local\SpareRunner-` + epoch + "-" + owner
 }
 
 func canonicalToken(value string) bool {

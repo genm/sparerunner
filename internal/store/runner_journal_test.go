@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestAgentRunnerJournalPersistsCASAcrossRestart(t *testing.T) {
@@ -167,7 +167,7 @@ func TestAgentRunnerJournalSchemaExcludesJITMaterial(t *testing.T) {
 }
 
 func TestAgentRunnerJournalSurvivesProcessKill(t *testing.T) {
-	const environment = "TEWAKE_AGENT_RUNNER_JOURNAL_CRASH_PATH"
+	const environment = "SPARERUNNER_AGENT_RUNNER_JOURNAL_CRASH_PATH"
 	if path := os.Getenv(environment); path != "" {
 		store, err := OpenAgent(context.Background(), path, Options{})
 		if err != nil {

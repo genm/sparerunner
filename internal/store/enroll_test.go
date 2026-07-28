@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 func TestEnrollmentRegistryConsumesTokenAtomicallyAcrossStoreHandles(t *testing.T) {

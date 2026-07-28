@@ -5,7 +5,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import { createManagementClient } from "./client";
 
 const server = setupServer(
-  http.get("http://tewake.test/api/v1/overview", () =>
+  http.get("http://sparerunner.test/api/v1/overview", () =>
     HttpResponse.json({
       version: "dev",
       controllerEpoch: "1",
@@ -16,7 +16,7 @@ const server = setupServer(
       conditions: [],
     }),
   ),
-  http.post("http://tewake.test/api/v1/browser-handoffs", async ({ request }) => {
+  http.post("http://sparerunner.test/api/v1/browser-handoffs", async ({ request }) => {
     expect(await request.json()).toEqual({ claimDigest: "digest" });
     return HttpResponse.json({
       code: "TWA-DEVICE-CODE",
@@ -32,7 +32,7 @@ afterAll(() => server.close());
 
 describe("createManagementClient", () => {
   it("uses the generated-safe overview projection", async () => {
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
     await expect(client.getOverview()).resolves.toMatchObject({
       configuredCapacity: 2,
       nodeCount: 1,
@@ -40,7 +40,7 @@ describe("createManagementClient", () => {
   });
 
   it("registers only a browser handoff digest", async () => {
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
     await expect(client.createBrowserHandoff("digest")).resolves.toEqual({
       code: "TWA-DEVICE-CODE",
       state: "pending",
@@ -50,17 +50,17 @@ describe("createManagementClient", () => {
 
   it("keeps GitHub setup mutations on the authenticated API contract", async () => {
     server.use(
-      http.post("http://tewake.test/api/v1/github/app/manifest", async ({ request }) => {
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+      http.post("http://sparerunner.test/api/v1/github/app/manifest", async ({ request }) => {
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf");
         expect(await request.json()).toEqual({ registrationAccount: "acme" });
         return HttpResponse.json({
           actionUrl: "https://github.com/settings/apps/new",
-          manifest: '{"name":"Tewake"}',
+          manifest: '{"name":"SpareRunner"}',
           state: "twm1_test",
           expiresAt: "2026-07-27T00:10:00Z",
         });
       }),
-      http.get("http://tewake.test/api/v1/github/installations", () =>
+      http.get("http://sparerunner.test/api/v1/github/installations", () =>
         HttpResponse.json({
           installations: [
             {
@@ -72,9 +72,9 @@ describe("createManagementClient", () => {
           ],
         }),
       ),
-      http.post("http://tewake.test/api/v1/github/targets", async ({ request }) => {
+      http.post("http://sparerunner.test/api/v1/github/targets", async ({ request }) => {
         expect(request.headers.get("If-Match")).toBe('"cfg-0"');
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf");
         expect(await request.json()).toMatchObject({
           installationId: "42",
           scopeKind: "repository",
@@ -85,8 +85,8 @@ describe("createManagementClient", () => {
             installationId: "42",
             scopeKind: "repository",
             scope: "acme/private",
-            scaleSetName: "tewake",
-            runnerProfileId: "profile-tewake",
+            scaleSetName: "sparerunner",
+            runnerProfileId: "profile-sparerunner",
             status: "ready",
             freshness: { state: "unknown" },
           },
@@ -94,7 +94,7 @@ describe("createManagementClient", () => {
         });
       }),
     );
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
     await expect(client.startGitHubAppManifest?.("acme", "csrf")).resolves.toMatchObject({
       state: "twm1_test",
     });
@@ -107,8 +107,8 @@ describe("createManagementClient", () => {
           installationId: "42",
           scopeKind: "repository",
           scope: "acme/private",
-          scaleSetName: "tewake",
-          runnerProfileId: "profile-tewake",
+          scaleSetName: "sparerunner",
+          runnerProfileId: "profile-sparerunner",
         },
         "0",
         "csrf",
@@ -118,7 +118,7 @@ describe("createManagementClient", () => {
 
   it("posts the exact code and browser-held secret and preserves a 202 pending state", async () => {
     server.use(
-      http.post("http://tewake.test/api/v1/browser-handoffs/claim", async ({ request }) => {
+      http.post("http://sparerunner.test/api/v1/browser-handoffs/claim", async ({ request }) => {
         expect(request.credentials).toBe("same-origin");
         expect(await request.json()).toEqual({
           code: "twh1.test-code",
@@ -130,7 +130,7 @@ describe("createManagementClient", () => {
         );
       }),
     );
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
 
     await expect(
       client.claimBrowserHandoff("twh1.test-code", "browser-only-secret"),
@@ -143,7 +143,7 @@ describe("createManagementClient", () => {
   ] as const) {
     it(`fails closed on a ${status} browser claim rejection`, async () => {
       server.use(
-        http.post("http://tewake.test/api/v1/browser-handoffs/claim", () =>
+        http.post("http://sparerunner.test/api/v1/browser-handoffs/claim", () =>
           HttpResponse.json(
             {
               type: "about:blank",
@@ -158,7 +158,7 @@ describe("createManagementClient", () => {
           ),
         ),
       );
-      const client = createManagementClient("http://tewake.test/api/v1");
+      const client = createManagementClient("http://sparerunner.test/api/v1");
 
       await expect(client.claimBrowserHandoff("code", "secret")).rejects.toMatchObject({
         name: "ApiError",
@@ -170,9 +170,9 @@ describe("createManagementClient", () => {
 
   it("streams invalidations with the session CSRF header and an opaque resume cursor", async () => {
     server.use(
-      http.get("http://tewake.test/api/v1/events", ({ request }) => {
+      http.get("http://sparerunner.test/api/v1/events", ({ request }) => {
         expect(request.credentials).toBe("same-origin");
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf-for-stream");
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf-for-stream");
         return new HttpResponse(
           [
             "id: 3:7:1",
@@ -185,7 +185,7 @@ describe("createManagementClient", () => {
         );
       }),
     );
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
     let stop: () => void = () => undefined;
     const received = new Promise<unknown>((resolve) => {
       stop = client.subscribe("csrf-for-stream", undefined, {
@@ -205,7 +205,7 @@ describe("createManagementClient", () => {
   it("rejects a stream frame whose event ID and payload cursor disagree", async () => {
     server.use(
       http.get(
-        "http://tewake.test/api/v1/events",
+        "http://sparerunner.test/api/v1/events",
         () =>
           new HttpResponse(
             [
@@ -219,7 +219,7 @@ describe("createManagementClient", () => {
           ),
       ),
     );
-    const client = createManagementClient("http://tewake.test/api/v1");
+    const client = createManagementClient("http://sparerunner.test/api/v1");
     const onError = vi.fn();
     let stop: () => void = () => undefined;
     const rejected = new Promise<void>((resolve) => {
@@ -242,7 +242,7 @@ describe("createManagementClient", () => {
     const requestCounts = new Map<number, number>();
     server.use(
       ...([401, 403] as const).map((status) =>
-        http.get(`http://tewake.test/api/${status}/events`, () => {
+        http.get(`http://sparerunner.test/api/${status}/events`, () => {
           requestCounts.set(status, (requestCounts.get(status) ?? 0) + 1);
           return new HttpResponse(null, { status });
         }),
@@ -253,7 +253,7 @@ describe("createManagementClient", () => {
     const failures = ([401, 403] as const).map(
       (status) =>
         new Promise<void>((resolve) => {
-          const client = createManagementClient(`http://tewake.test/api/${status}`);
+          const client = createManagementClient(`http://sparerunner.test/api/${status}`);
           stops.push(
             client.subscribe("csrf-for-stream", undefined, {
               onEvent: () => undefined,

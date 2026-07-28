@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const (
@@ -228,7 +228,7 @@ func (fixture *fleetFixture) applyConfiguration(
 	architecture := domain.ArchAMD64
 	profile := domain.RunnerProfile{
 		ID:                      fleetProfileID,
-		Label:                   "tewake-fleet",
+		Label:                   "sparerunner-fleet",
 		OS:                      &operatingSystem,
 		Architecture:            &architecture,
 		MinAvailableMemoryBytes: 4 << 30,

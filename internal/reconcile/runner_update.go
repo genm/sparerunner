@@ -4,7 +4,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // GitHubRunnerUpdateWindow is the provider-owned support window for a

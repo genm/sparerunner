@@ -138,7 +138,7 @@ func (store FileAppCredentialStore) Save(credential AppCredential) error {
 	if err != nil {
 		return ErrSecretStoreUnavailable
 	}
-	temporary, err := os.CreateTemp(parent, ".tewake-github-app-*")
+	temporary, err := os.CreateTemp(parent, ".sparerunner-github-app-*")
 	if err != nil {
 		return ErrSecretStoreUnavailable
 	}
@@ -257,8 +257,8 @@ func (manager *ManifestManager) Start(callbackURL, registrationAccount string) (
 	manager.pending[digest] = manifestStateRecord{payload: payload}
 	manager.mu.Unlock()
 	manifest := map[string]any{
-		"name":         "Tewake",
-		"url":          "https://github.com/genm/tewake",
+		"name":         "SpareRunner",
+		"url":          "https://github.com/genm/sparerunner",
 		"redirect_url": callbackURL,
 		"public":       false,
 		"description":  "Trusted private GitHub Actions runner fleet",
@@ -377,7 +377,7 @@ func (manager *ManifestManager) exchange(ctx context.Context, code string) (AppC
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("Content-Type", "application/json")
-	request.Header.Set("User-Agent", "tewake")
+	request.Header.Set("User-Agent", "sparerunner")
 	response, err := manager.client.Do(request)
 	if err != nil || response == nil {
 		return AppCredential{}, ErrManifestUnavailable

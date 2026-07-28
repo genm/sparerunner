@@ -20,7 +20,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // PipeLauncher performs an atomic spawn into the opened cgroup. Its JIT reader
@@ -126,7 +126,7 @@ func reapCommand(command *exec.Cmd) <-chan error {
 	return reaped
 }
 
-const helperModeArgument = "--tewake-linux-launcher-helper"
+const helperModeArgument = "--sparerunner-linux-launcher-helper"
 
 func helperArguments(spec LaunchSpec) []string {
 	args := []string{helperModeArgument, "--"}
@@ -191,7 +191,7 @@ func RunExecLauncherHelper(args []string) (handled bool, err error) {
 }
 
 func reportHelperFailure() {
-	status := os.NewFile(uintptr(3), "tewake-launch-status")
+	status := os.NewFile(uintptr(3), "sparerunner-launch-status")
 	if status == nil {
 		return
 	}
@@ -226,8 +226,8 @@ func (owner fileOwner) isRoot() bool { return owner.UID == 0 && owner.GID == 0 }
 
 const (
 	finalizedFenceDirectory = ".finalized"
-	finalizedFenceVersion   = "tewake-finalized-fence-v2"
-	fenceStateVersion       = "tewake-containment-fence-v2"
+	finalizedFenceVersion   = "sparerunner-finalized-fence-v2"
+	fenceStateVersion       = "sparerunner-containment-fence-v2"
 	fenceStateActive        = "active"
 	fenceStateLaunched      = "launched"
 	fenceStateRevoked       = "revoked"
@@ -477,7 +477,7 @@ func (runtime *FileRuntime) EnsureCgroup(ctx context.Context, owner string) (Cgr
 	if err := ctx.Err(); err != nil || !validOwner(owner) {
 		return Cgroup{}, runner.ErrStrongOwnershipUnavailable
 	}
-	scope := filepath.Join("tewake", owner)
+	scope := filepath.Join("sparerunner", owner)
 	path := filepath.Join(runtime.cgroupRoot, scope)
 	if err := os.MkdirAll(path, 0o755); err != nil {
 		return Cgroup{}, runner.ErrStrongOwnershipUnavailable
@@ -533,12 +533,12 @@ func (runtime *FileRuntime) LockFence(ctx context.Context, containment runner.Co
 		_ = lock.Close()
 	}
 	if lockCreated {
-		if err := initializeFenceFile(lock, "tewake-containment-lock-v1\n", directory); err != nil {
+		if err := initializeFenceFile(lock, "sparerunner-containment-lock-v1\n", directory); err != nil {
 			closeLock()
 			return nil, runner.ErrCleanupFailed
 		}
 	}
-	if !validFenceFile(lock, lockPath, runtime.owner) || !fenceFileHasValue(lock, "tewake-containment-lock-v1\n") {
+	if !validFenceFile(lock, lockPath, runtime.owner) || !fenceFileHasValue(lock, "sparerunner-containment-lock-v1\n") {
 		closeLock()
 		return nil, runner.ErrCleanupFailed
 	}
@@ -628,7 +628,7 @@ func (runtime *FileRuntime) FinalizeFence(ctx context.Context, containment runne
 		return runner.ErrCleanupFailed
 	}
 	if !validFenceFile(lock, lockPath, runtime.owner) ||
-		!fenceFileHasValue(lock, "tewake-containment-lock-v1\n") ||
+		!fenceFileHasValue(lock, "sparerunner-containment-lock-v1\n") ||
 		!validFenceFile(state, statePath, runtime.owner) ||
 		!fenceFileHasValue(state, fenceStateContent(containment, fenceStateRevoked)) ||
 		!exactFenceOwnerEntries(directory, containment.FenceToken) {
@@ -740,7 +740,7 @@ func (runtime *FileRuntime) Shutdown(ctx context.Context) error {
 		containment := runner.ContainmentRef{
 			Backend:    containmentBackend,
 			OwnerID:    entry.Name(),
-			Scope:      filepath.Join("tewake", entry.Name()),
+			Scope:      filepath.Join("sparerunner", entry.Name()),
 			HostEpoch:  epoch,
 			FenceToken: token,
 		}
@@ -791,7 +791,7 @@ func (runtime *FileRuntime) singleFenceToken(owner string) (string, error) {
 func validFinalizedContainment(containment runner.ContainmentRef) bool {
 	return containment.Backend == containmentBackend &&
 		validOwner(containment.OwnerID) &&
-		containment.Scope == filepath.Join("tewake", containment.OwnerID) &&
+		containment.Scope == filepath.Join("sparerunner", containment.OwnerID) &&
 		containment.HostEpoch != "" &&
 		containment.InvocationID == "" &&
 		canonicalToken(containment.FenceToken)
@@ -875,7 +875,7 @@ func (runtime *FileRuntime) removeFinalizedOwner(ctx context.Context, containmen
 			return err
 		}
 		if !validFenceFile(lock, lockPath, runtime.owner) ||
-			!fenceFileHasValue(lock, "tewake-containment-lock-v1\n") {
+			!fenceFileHasValue(lock, "sparerunner-containment-lock-v1\n") {
 			unlockFenceFile(lock)
 			return runner.ErrCleanupFailed
 		}
@@ -1466,7 +1466,7 @@ func (runtime *FileRuntime) SlotBusy(ctx context.Context, candidate runner.Conta
 	if err := ctx.Err(); err != nil || !runtime.validScope(candidate) {
 		return false, runner.ErrStrongOwnershipUnavailable
 	}
-	entries, err := os.ReadDir(filepath.Join(runtime.cgroupRoot, "tewake"))
+	entries, err := os.ReadDir(filepath.Join(runtime.cgroupRoot, "sparerunner"))
 	if err != nil {
 		return false, runner.ErrStrongOwnershipUnavailable
 	}
@@ -1488,7 +1488,7 @@ func (runtime *FileRuntime) SlotBusy(ctx context.Context, candidate runner.Conta
 		ref := runner.ContainmentRef{
 			Backend:   containmentBackend,
 			OwnerID:   entry.Name(),
-			Scope:     filepath.Join("tewake", entry.Name()),
+			Scope:     filepath.Join("sparerunner", entry.Name()),
 			HostEpoch: candidate.HostEpoch,
 		}
 		cgroup, openErr := runtime.openCgroup(ref)
@@ -1564,7 +1564,7 @@ func (runtime *FileRuntime) openCgroup(containment runner.ContainmentRef) (*os.F
 func (runtime *FileRuntime) validScope(containment runner.ContainmentRef) bool {
 	if containment.Backend != containmentBackend ||
 		!validOwner(containment.OwnerID) ||
-		containment.Scope != filepath.Join("tewake", containment.OwnerID) ||
+		containment.Scope != filepath.Join("sparerunner", containment.OwnerID) ||
 		containment.InvocationID != "" {
 		return false
 	}
@@ -1866,10 +1866,10 @@ func cgroupControlWritable(cgroup *os.File, name string) bool {
 }
 
 func validOwner(owner string) bool {
-	if !strings.HasPrefix(owner, "tewake-") || len(owner) != len("tewake-")+64 {
+	if !strings.HasPrefix(owner, "sparerunner-") || len(owner) != len("sparerunner-")+64 {
 		return false
 	}
-	for _, character := range owner[len("tewake-"):] {
+	for _, character := range owner[len("sparerunner-"):] {
 		if !(character >= '0' && character <= '9') && !(character >= 'a' && character <= 'f') {
 			return false
 		}
@@ -1893,7 +1893,7 @@ func fixedRunnerEnvironment(uid, gid int) ([]string, error) {
 		!filepath.IsAbs(account.HomeDir) {
 		return nil, runner.ErrStrongOwnershipUnavailable
 	}
-	const executionHome = "/proc/self/fd/4/.tewake-home"
+	const executionHome = "/proc/self/fd/4/.sparerunner-home"
 	return []string{
 		"HOME=" + executionHome,
 		"XDG_CACHE_HOME=" + executionHome + "/.cache",

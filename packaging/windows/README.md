@@ -1,6 +1,6 @@
 # Windows agent packaging
 
-Status: implementation and cross-compilation are available, but TWK-009 remains
+Status: implementation and cross-compilation are available, but SPR-009 remains
 `in_progress` until the real Windows acceptance matrix below has been captured.
 Cross-compilation is not evidence for SCM, DPAPI, Job Object, locked-file, sleep,
 or reboot behavior.
@@ -11,14 +11,14 @@ The packaged Agent uses two Windows services:
 
 | Service | Account | Responsibility |
 |---|---|---|
-| `TewakeAgent` | `LocalSystem` | mTLS session, DPAPI-owned node state, runner journal, package verification, Job Object ownership |
-| `TewakeRunnerIdentity` | `NT SERVICE\TewakeRunnerIdentity` | inert service whose distinct primary token is duplicated for one-job runner processes |
+| `SpareRunnerAgent` | `LocalSystem` | mTLS session, DPAPI-owned node state, runner journal, package verification, Job Object ownership |
+| `SpareRunnerRunnerIdentity` | `NT SERVICE\SpareRunnerRunnerIdentity` | inert service whose distinct primary token is duplicated for one-job runner processes |
 
 The runner-identity service executes no network listener and accepts no
 commands. The Agent refuses native capacity if that service is stopped, its
 process token changes SID, or its SID equals the Agent SID. A runner is created
 suspended with `CreateProcessAsUser`, assigned to a named Job Object with
-`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed. Tewake launches
+`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, and only then resumed. SpareRunner launches
 `bin\Runner.Listener.exe` directly; it does not invoke `cmd.exe` or PowerShell
 for a workflow.
 
@@ -38,8 +38,8 @@ Run an elevated Windows PowerShell 5.1 or newer session from an unpacked release
 
 ```powershell
 .\packaging\windows\install.ps1 `
-  -AgentBinary (Resolve-Path .\tewake-agent.exe) `
-  -CliBinary (Resolve-Path .\tewake.exe)
+  -AgentBinary (Resolve-Path .\sparerunner-agent.exe) `
+  -CliBinary (Resolve-Path .\sparerunner.exe)
 ```
 
 The installer:
@@ -52,8 +52,8 @@ The installer:
   path and distinct `install`/`data` roles;
 - copies the binaries with a staging rename and refuses to clobber an existing
   installation;
-- creates protected, non-reparse directories under `%ProgramFiles%\Tewake` and
-  `%ProgramData%\Tewake`;
+- creates protected, non-reparse directories under `%ProgramFiles%\SpareRunner` and
+  `%ProgramData%\SpareRunner`;
 - grants the runner service SID read/execute on the installed Agent and runtime
   root, but no access to Agent state or the verified package cache;
 - configures both services for automatic restart and makes the Agent depend on
@@ -65,12 +65,12 @@ The service starts without enrollment state and exposes exactly one local named
 pipe instance. In the same elevated session, run:
 
 ```powershell
-& "$env:ProgramFiles\Tewake\tewake.exe" join twk_...
+& "$env:ProgramFiles\SpareRunner\sparerunner.exe" join spr_...
 ```
 
-On Windows, `tewake join` does not write Agent state as the interactive user. It
-verifies that `\\.\pipe\TewakeEnroll` belongs to the running LocalSystem
-`TewakeAgent` SCM PID, submits one versioned request, and reports success only
+On Windows, `sparerunner join` does not write Agent state as the interactive user. It
+verifies that `\\.\pipe\SpareRunnerEnroll` belongs to the running LocalSystem
+`SpareRunnerAgent` SCM PID, submits one versioned request, and reports success only
 after the service has durably persisted and reloaded the node credential. If
 that durable join succeeds but the acknowledgement cannot reach the CLI, the
 Agent exits non-zero so SCM recovery restarts from the durable state; it never
@@ -93,18 +93,18 @@ capacity instead of falling back to plaintext.
 
 | Path | Protected ACL |
 |---|---|
-| `%ProgramFiles%\Tewake` | LocalSystem/Administrators full; runner service SID read/execute |
-| `%ProgramData%\Tewake` | LocalSystem/Administrators full; runner service SID read/execute for traversal |
-| `%ProgramData%\Tewake\agent-state` | LocalSystem/Administrators only |
-| `%ProgramData%\Tewake\cache` | LocalSystem/Administrators only |
-| `%ProgramData%\Tewake\runtime` | LocalSystem/Administrators full; runner service SID read/execute |
+| `%ProgramFiles%\SpareRunner` | LocalSystem/Administrators full; runner service SID read/execute |
+| `%ProgramData%\SpareRunner` | LocalSystem/Administrators full; runner service SID read/execute for traversal |
+| `%ProgramData%\SpareRunner\agent-state` | LocalSystem/Administrators only |
+| `%ProgramData%\SpareRunner\cache` | LocalSystem/Administrators only |
+| `%ProgramData%\SpareRunner\runtime` | LocalSystem/Administrators full; runner service SID read/execute |
 | `runtime\executions\<digest>` | runner service SID owner/full; LocalSystem/Administrators full |
 
 Every authoritative path rejects reparse points. Workspace cleanup validates
 the volume/file ID and protected DACL before removal. A sharing violation from a
 locked file is a cleanup failure: the locator remains in the Agent journal and
-the Node becomes quarantined. Tewake never reports an empty/healthy workspace
-in that state. Durable execution fences live below `runtime\.tewake-fences`
+the Node becomes quarantined. SpareRunner never reports an empty/healthy workspace
+in that state. Durable execution fences live below `runtime\.sparerunner-fences`
 with a separate LocalSystem/Administrators-only DACL; the runner identity can
 read its execution tree but cannot inspect or modify its cleanup authority.
 
@@ -113,11 +113,11 @@ read its execution tree but cannot inspect or modify its cleanup authority.
 These commands expose non-secret effective state:
 
 ```powershell
-Get-CimInstance Win32_Service -Filter "Name='TewakeAgent'" |
+Get-CimInstance Win32_Service -Filter "Name='SpareRunnerAgent'" |
   Select-Object Name, State, StartName, ProcessId, PathName
-Get-CimInstance Win32_Service -Filter "Name='TewakeRunnerIdentity'" |
+Get-CimInstance Win32_Service -Filter "Name='SpareRunnerRunnerIdentity'" |
   Select-Object Name, State, StartName, ProcessId, PathName
-Get-Acl "$env:ProgramData\Tewake\agent-state" |
+Get-Acl "$env:ProgramData\SpareRunner\agent-state" |
   Select-Object Owner, AreAccessRulesProtected
 ```
 
@@ -179,7 +179,7 @@ hosts prove all of the following:
 - install, elevated one-command join, service restart/recovery, sleep/wake, and
   a real reboot;
 - same-identity runner rejection and DPAPI decryptability only in the
-  `TewakeAgent` service identity;
+  `SpareRunnerAgent` service identity;
 - a real descendant process tree is gone after Job Object termination;
 - a locked workspace produces `cleanup_failed`/`quarantined`, retains its
   locator, and only returns to service after the lock is removed and cleanup is

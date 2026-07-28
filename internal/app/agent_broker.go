@@ -10,10 +10,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 const DefaultAgentReadinessLease = 4 * time.Second

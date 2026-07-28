@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 func TestStartAdvancesEpochAndStartsEveryNodeOfflineWithZeroCapacity(t *testing.T) {
@@ -786,7 +786,7 @@ func TestGitHubAmbiguityAlwaysSuppressesItsReservation(t *testing.T) {
 				ClaimKey:        8,
 				Attempt:         1,
 				ControllerEpoch: 1,
-				RunnerName:      "tewake-a",
+				RunnerName:      "sparerunner-a",
 				State:           store.GitHubJITStartAmbiguous,
 				RunnerID:        9,
 				JITDigest:       domain.PayloadDigest([]byte("jit")),
@@ -857,7 +857,7 @@ func TestTerminalExecutionRetainsGitHubReconciliationIdentityWithoutHoldingSlot(
 				ClaimKey:        8,
 				Attempt:         1,
 				ControllerEpoch: 1,
-				RunnerName:      "tewake-terminal",
+				RunnerName:      "sparerunner-terminal",
 				State:           store.GitHubJITStarted,
 				RunnerID:        9,
 				JITDigest:       domain.PayloadDigest([]byte("jit-terminal")),
@@ -920,7 +920,7 @@ func TestAcceptedAmbiguousStartIsNeverReplayedWithoutJITReconciliation(t *testin
 				ClaimKey:        8,
 				Attempt:         1,
 				ControllerEpoch: 1,
-				RunnerName:      "tewake-a",
+				RunnerName:      "sparerunner-a",
 				State:           store.GitHubJITStartAmbiguous,
 				RunnerID:        9,
 				JITDigest:       domain.PayloadDigest([]byte("jit")),
@@ -966,7 +966,7 @@ func TestGitHubFenceProjectionAcceptsForwardStateAndRejectsDelayedApplyAndClear(
 			ClaimKey:        8,
 			Attempt:         1,
 			ControllerEpoch: 2,
-			RunnerName:      "tewake-fence-cas",
+			RunnerName:      "sparerunner-fence-cas",
 			State:           store.GitHubJITIntent,
 		},
 	}
@@ -1059,7 +1059,7 @@ func TestTerminalGitHubFenceBlocksNodeAdmissionUntilExactRemovalFenceClears(
 			ClaimKey:        8,
 			Attempt:         1,
 			ControllerEpoch: 3,
-			RunnerName:      "tewake-terminal-github-fence",
+			RunnerName:      "sparerunner-terminal-github-fence",
 			State:           store.GitHubJITStarted,
 			RunnerID:        9,
 			JITDigest:       "jit-terminal-github-fence",
@@ -1189,7 +1189,7 @@ func TestGitHubFenceProjectionRequiresMonotonicAttemptGeneration(t *testing.T) {
 			ClaimKey:        8,
 			Attempt:         1,
 			ControllerEpoch: 1,
-			RunnerName:      "tewake-fence-generation",
+			RunnerName:      "sparerunner-fence-generation",
 			State:           store.GitHubJITRemovalPending,
 			RunnerID:        9,
 		},
@@ -1250,7 +1250,7 @@ func TestGitHubFenceProjectionAllowsLostJITRemovalAfterAgentAccepted(t *testing.
 			ClaimKey:        8,
 			Attempt:         1,
 			ControllerEpoch: 2,
-			RunnerName:      "tewake-fence-lost-jit",
+			RunnerName:      "sparerunner-fence-lost-jit",
 			State:           store.GitHubJITAgentAccepted,
 			RunnerID:        9,
 			JITDigest:       domain.PayloadDigest([]byte("jit-fence-lost-jit")),

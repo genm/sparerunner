@@ -3,7 +3,7 @@ package transport
 import (
 	"strings"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // MaxEligibleTargets bounds the informational list carried on a heartbeat

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func testAgentSnapshot() AgentSnapshot {

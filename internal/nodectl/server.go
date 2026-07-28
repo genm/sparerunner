@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // RequestTimeout bounds one same-host exchange. A desktop client that stops

@@ -12,16 +12,16 @@ import (
 	"sync"
 	"time"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/buildinfo"
-	"github.com/genm/tewake/internal/config"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/scheduler"
-	"github.com/genm/tewake/internal/store"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/buildinfo"
+	"github.com/genm/sparerunner/internal/config"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/scheduler"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 // ManagementTargetVerifier is the only path that may turn operator-controlled

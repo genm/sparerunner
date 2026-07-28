@@ -22,7 +22,7 @@ func TestGitHubAuthorityPersistenceKeepsSecretsOutOfSQLite(t *testing.T) {
 	if err != nil || len(installations) != 1 || installations[0].ID != 42 {
 		t.Fatalf("installations = %#v, err=%v", installations, err)
 	}
-	if err := controller.BeginGitHubTargetProvisioning(ctx, GitHubTargetProvisioningIntent{TargetID: "target-private", InstallationID: 42, ScopeKind: "repository", Scope: "acme/private", ScaleSetName: "tewake", ProfileID: "profile-tewake"}); err != nil {
+	if err := controller.BeginGitHubTargetProvisioning(ctx, GitHubTargetProvisioningIntent{TargetID: "target-private", InstallationID: 42, ScopeKind: "repository", Scope: "acme/private", ScaleSetName: "sparerunner", ProfileID: "profile-sparerunner"}); err != nil {
 		t.Fatal(err)
 	}
 	scaleSetID, groupID := int64(99), int64(7)

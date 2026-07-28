@@ -1,4 +1,4 @@
-// Package app composes Tewake's enrollment, transport, and durable stores into
+// Package app composes SpareRunner's enrollment, transport, and durable stores into
 // executable controller and agent flows. Domain and transport packages remain
 // independently testable; this package owns process-level wiring.
 package app
@@ -20,13 +20,13 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 const (
@@ -40,8 +40,8 @@ const (
 )
 
 var (
-	ErrAlreadyInitialized         = errors.New("tewake state is already initialized")
-	ErrNotInitialized             = errors.New("tewake state is not initialized")
+	ErrAlreadyInitialized         = errors.New("sparerunner state is already initialized")
+	ErrNotInitialized             = errors.New("sparerunner state is not initialized")
 	ErrAgentCredentialUnavailable = errors.New("agent credential is unavailable")
 )
 
@@ -622,7 +622,7 @@ func ensurePrivateStateDirectory(directory string) error {
 // state directory this host may write private material into. Commands that
 // touch credentials directly — rather than through the management API — call it
 // so an uninitialized or hand-made directory produces the actionable "run
-// tewake init" error instead of a platform credential-store failure, which on
+// sparerunner init" error instead of a platform credential-store failure, which on
 // Windows is how a missing directory ACL surfaces.
 func RequireInitializedControllerState(directory string) error {
 	absolute, err := absoluteStateDirectory(directory)

@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -413,7 +413,7 @@ func bootstrapStageError(stage string, started time.Time, err error) error {
 // gives up returns the same ErrBootstrapUnavailable whether the server never
 // created its pipe, rejected the pipe ACL, or simply never answered, so a
 // failure that hides the server's own error is not diagnosable from CI logs.
-// TEWAKE_WINDOWS_DEBUG is already set for these tests, so an identity rejection
+// SPARERUNNER_WINDOWS_DEBUG is already set for these tests, so an identity rejection
 // arrives here with its reason attached.
 func bootstrapServerDetail(server <-chan error) string {
 	select {
@@ -433,12 +433,12 @@ func bootstrapTestPipeName(t *testing.T) string {
 	if _, err := rand.Read(suffix[:]); err != nil {
 		t.Fatal(err)
 	}
-	return fmt.Sprintf(`\\.\pipe\TewakeEnrollTest-%d-%x`, os.Getpid(), suffix)
+	return fmt.Sprintf(`\\.\pipe\SpareRunnerEnrollTest-%d-%x`, os.Getpid(), suffix)
 }
 
 func validBootstrapJoinOptions(t *testing.T) BootstrapJoinOptions {
 	t.Helper()
-	t.Setenv("TEWAKE_WINDOWS_DEBUG", "1")
+	t.Setenv("SPARERUNNER_WINDOWS_DEBUG", "1")
 	var fingerprint [sha256.Size]byte
 	if _, err := rand.Read(fingerprint[:]); err != nil {
 		t.Fatal(err)

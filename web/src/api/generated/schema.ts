@@ -825,7 +825,7 @@ export interface operations {
       query?: never;
       header: {
         /** @description Short-lived, one-use owner proof derived from the Controller credential boundary. */
-        "X-Tewake-Admin-Bootstrap": components["parameters"]["AdminBootstrap"];
+        "X-SpareRunner-Admin-Bootstrap": components["parameters"]["AdminBootstrap"];
       };
       path?: never;
       cookie?: never;
@@ -853,7 +853,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -952,7 +952,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -1008,7 +1008,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -1089,7 +1089,7 @@ export interface operations {
       query?: never;
       header: {
         "If-Match": components["parameters"]["IfMatch"];
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -1173,7 +1173,7 @@ export interface operations {
       query?: never;
       header: {
         "If-Match": components["parameters"]["IfMatch"];
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path: {
         nodeId: components["parameters"]["NodeID"];
@@ -1199,7 +1199,7 @@ export interface operations {
       query?: never;
       header: {
         "If-Match": components["parameters"]["IfMatch"];
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path: {
         nodeId: components["parameters"]["NodeID"];
@@ -1225,7 +1225,7 @@ export interface operations {
       query?: never;
       header: {
         "If-Match": components["parameters"]["IfMatch"];
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path: {
         nodeId: components["parameters"]["NodeID"];
@@ -1330,7 +1330,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -1365,7 +1365,7 @@ export interface operations {
     parameters: {
       query?: never;
       header: {
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path: {
         tokenId: string;
@@ -1417,7 +1417,7 @@ export interface operations {
       query?: never;
       header: {
         "If-Match": components["parameters"]["IfMatch"];
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;
@@ -1482,7 +1482,7 @@ export interface operations {
       };
       header: {
         "Last-Event-ID"?: string;
-        "X-Tewake-CSRF": components["parameters"]["CSRFToken"];
+        "X-SpareRunner-CSRF": components["parameters"]["CSRFToken"];
       };
       path?: never;
       cookie?: never;

@@ -6,9 +6,9 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/nodectl"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/nodectl"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 func TestAvailabilityStopAppliesWhileDisconnectedAndResumeStaysPending(t *testing.T) {

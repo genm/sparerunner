@@ -10,9 +10,9 @@ import (
 )
 
 func TestSystemdUnitsKeepNetworkAgentOutsideRootBoundary(t *testing.T) {
-	agent := readPackagingFile(t, "systemd/tewake-agent.service")
-	supervisor := readPackagingFile(t, "systemd/tewake-supervisor.service")
-	tmpfiles := readPackagingFile(t, "tmpfiles.d/tewake.conf")
+	agent := readPackagingFile(t, "systemd/sparerunner-agent.service")
+	supervisor := readPackagingFile(t, "systemd/sparerunner-supervisor.service")
+	tmpfiles := readPackagingFile(t, "tmpfiles.d/sparerunner.conf")
 
 	if err := validateAgentUnit(agent); err != nil {
 		t.Fatalf("agent unit: %v", err)
@@ -23,9 +23,9 @@ func TestSystemdUnitsKeepNetworkAgentOutsideRootBoundary(t *testing.T) {
 }
 
 func TestAgentUnitPolicyRejectsRootOrCgroupPrivilege(t *testing.T) {
-	agent := readPackagingFile(t, "systemd/tewake-agent.service")
+	agent := readPackagingFile(t, "systemd/sparerunner-agent.service")
 	for _, unsafe := range []string{
-		strings.Replace(agent, "User=tewake-agent", "User=root", 1),
+		strings.Replace(agent, "User=sparerunner-agent", "User=root", 1),
 		strings.Replace(agent, "CapabilityBoundingSet=\n", "CapabilityBoundingSet=CAP_KILL\n", 1),
 		strings.Replace(agent, "KillMode=control-group\n", "KillMode=control-group\nDelegate=yes\n", 1),
 	} {
@@ -36,35 +36,35 @@ func TestAgentUnitPolicyRejectsRootOrCgroupPrivilege(t *testing.T) {
 }
 
 func TestSupervisorUnitKeepsDelegatedCgroupRootOwned(t *testing.T) {
-	supervisor := readPackagingFile(t, "systemd/tewake-supervisor.service")
-	tmpfiles := readPackagingFile(t, "tmpfiles.d/tewake.conf")
+	supervisor := readPackagingFile(t, "systemd/sparerunner-supervisor.service")
+	tmpfiles := readPackagingFile(t, "tmpfiles.d/sparerunner.conf")
 	type layout struct {
 		unit     string
 		tmpfiles string
 	}
 	for name, unsafe := range map[string]layout{
 		"agent primary group": {
-			unit:     strings.Replace(supervisor, "Group=root", "Group=tewake-agent", 1),
+			unit:     strings.Replace(supervisor, "Group=root", "Group=sparerunner-agent", 1),
 			tmpfiles: tmpfiles,
 		},
 		"missing socket directory": {
 			unit: supervisor,
 			tmpfiles: strings.Replace(
 				tmpfiles,
-				"d /run/tewake-supervisor 0750 root tewake-agent -\n",
+				"d /run/sparerunner-supervisor 0750 root sparerunner-agent -\n",
 				"",
 				1,
 			),
 		},
 		"wrong socket directory owner": {
 			unit:     supervisor,
-			tmpfiles: strings.Replace(tmpfiles, "0750 root tewake-agent", "0750 root root", 1),
+			tmpfiles: strings.Replace(tmpfiles, "0750 root sparerunner-agent", "0750 root root", 1),
 		},
 		"systemd managed socket directory": {
 			unit: strings.Replace(
 				supervisor,
 				"[Service]\n",
-				"[Service]\nRuntimeDirectory=tewake-supervisor\nRuntimeDirectoryMode=0750\n",
+				"[Service]\nRuntimeDirectory=sparerunner-supervisor\nRuntimeDirectoryMode=0750\n",
 				1,
 			),
 			tmpfiles: tmpfiles,
@@ -79,25 +79,25 @@ func TestSupervisorUnitKeepsDelegatedCgroupRootOwned(t *testing.T) {
 }
 
 func TestSysusersAndTmpfilesSeparateAgentSupervisorAndSlotState(t *testing.T) {
-	sysusers := readPackagingFile(t, "sysusers.d/tewake.conf")
-	tmpfiles := readPackagingFile(t, "tmpfiles.d/tewake.conf")
+	sysusers := readPackagingFile(t, "sysusers.d/sparerunner.conf")
+	tmpfiles := readPackagingFile(t, "tmpfiles.d/sparerunner.conf")
 
 	for _, required := range []string{
-		`u tewake-agent - "Tewake node agent"`,
-		`u tewake-runner-0 - "Tewake native runner slot 0"`,
+		`u sparerunner-agent - "SpareRunner node agent"`,
+		`u sparerunner-runner-0 - "SpareRunner native runner slot 0"`,
 	} {
 		if strings.Count(sysusers, required) != 1 {
 			t.Fatalf("sysusers entry %q count is not one", required)
 		}
 	}
 	for _, required := range []string{
-		"d /run/tewake-supervisor 0750 root tewake-agent -",
-		"d /var/lib/tewake-agent 0700 tewake-agent tewake-agent -",
-		"d /var/cache/tewake-agent 0700 tewake-agent tewake-agent -",
-		"d /var/lib/tewake-supervisor/fences 0700 root root -",
-		"d /var/lib/tewake-runtime 0711 root root -",
-		"d /var/lib/tewake-runtime/executions 0711 tewake-agent tewake-agent -",
-		"d /var/lib/tewake-runner/0 0700 tewake-runner-0 tewake-runner-0 -",
+		"d /run/sparerunner-supervisor 0750 root sparerunner-agent -",
+		"d /var/lib/sparerunner-agent 0700 sparerunner-agent sparerunner-agent -",
+		"d /var/cache/sparerunner-agent 0700 sparerunner-agent sparerunner-agent -",
+		"d /var/lib/sparerunner-supervisor/fences 0700 root root -",
+		"d /var/lib/sparerunner-runtime 0711 root root -",
+		"d /var/lib/sparerunner-runtime/executions 0711 sparerunner-agent sparerunner-agent -",
+		"d /var/lib/sparerunner-runner/0 0700 sparerunner-runner-0 sparerunner-runner-0 -",
 	} {
 		if strings.Count(tmpfiles, required) != 1 {
 			t.Fatalf("tmpfiles entry %q count is not one", required)
@@ -107,12 +107,12 @@ func TestSysusersAndTmpfilesSeparateAgentSupervisorAndSlotState(t *testing.T) {
 
 func validateAgentUnit(unit string) error {
 	for _, required := range []string{
-		"User=tewake-agent",
-		"Group=tewake-agent",
-		"Wants=tewake-supervisor.service",
+		"User=sparerunner-agent",
+		"Group=sparerunner-agent",
+		"Wants=sparerunner-supervisor.service",
 		"CapabilityBoundingSet=\n",
 		"ProtectControlGroups=yes",
-		"--supervisor-socket=/run/tewake-supervisor/supervisor.sock",
+		"--supervisor-socket=/run/sparerunner-supervisor/supervisor.sock",
 		"--require-native-runner",
 	} {
 		if !strings.Contains(unit, required) {
@@ -140,10 +140,10 @@ func validateSupervisorUnit(unit, tmpfiles string) error {
 		"Group=root",
 		"After=systemd-tmpfiles-setup.service",
 		"Delegate=yes",
-		"--runner-user=tewake-runner-0",
-		"--agent-user=tewake-agent",
-		"--fence-root=/var/lib/tewake-supervisor/fences",
-		"--cache-root=/var/cache/tewake-agent",
+		"--runner-user=sparerunner-runner-0",
+		"--agent-user=sparerunner-agent",
+		"--fence-root=/var/lib/sparerunner-supervisor/fences",
+		"--cache-root=/var/cache/sparerunner-agent",
 		"ProtectControlGroups=no",
 		"TimeoutStopSec=30s",
 	} {
@@ -160,14 +160,14 @@ func validateSupervisorUnit(unit, tmpfiles string) error {
 			return errors.New("Supervisor ownership directive is missing or ambiguous")
 		}
 	}
-	if countDirective(tmpfiles, "d /run/tewake-supervisor 0750 root tewake-agent -") != 1 {
+	if countDirective(tmpfiles, "d /run/sparerunner-supervisor 0750 root sparerunner-agent -") != 1 {
 		return errors.New("Supervisor socket directory ownership is missing or ambiguous")
 	}
-	if strings.Contains(unit, "ReadWritePaths=/var/lib/tewake-supervisor /var/lib/tewake-runtime /var/lib/tewake-runner/0") {
+	if strings.Contains(unit, "ReadWritePaths=/var/lib/sparerunner-supervisor /var/lib/sparerunner-runtime /var/lib/sparerunner-runner/0") {
 		return errors.New("Supervisor retained writable access to the persistent runner home")
 	}
 	for _, forbidden := range []string{
-		"Group=tewake-agent",
+		"Group=sparerunner-agent",
 		"ExecStartPre=",
 		"RuntimeDirectory=",
 		"RuntimeDirectoryMode=",

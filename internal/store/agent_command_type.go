@@ -6,7 +6,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // AcceptedAgentCommand is the non-secret local admission record used only for

@@ -6,7 +6,7 @@
 --
 -- The fix separates identity from provider correlation.
 --
---   claim_key         Tewake-owned durable identity for one runner lifecycle.
+--   claim_key         SpareRunner-owned durable identity for one runner lifecycle.
 --                     Positive when the claim came from a JobAvailable offer, in
 --                     which case it is exactly the provider request ID, so every
 --                     existing row keeps its identity and every child FK keeps

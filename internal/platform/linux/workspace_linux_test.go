@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
@@ -26,12 +26,12 @@ func newPrivilegedWorkspaceRoot(t *testing.T) (string, *os.Root, *OSWorkspace) {
 	if os.Geteuid() != 0 {
 		t.Skip("workspace ownership handoff requires a root Supervisor test environment")
 	}
-	runtimeRoot, err := os.MkdirTemp("/var/lib", "tewake-workspace-test-")
+	runtimeRoot, err := os.MkdirTemp("/var/lib", "sparerunner-workspace-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if strings.HasPrefix(runtimeRoot, "/var/lib/tewake-workspace-test-") {
+		if strings.HasPrefix(runtimeRoot, "/var/lib/sparerunner-workspace-test-") {
 			_ = os.RemoveAll(runtimeRoot)
 			_ = os.RemoveAll(runtimeRoot + ".moved")
 		}
@@ -63,12 +63,12 @@ func newAuthorityTestWorkspace(
 	archiveData string,
 ) (*OSWorkspace, string, *int, *int) {
 	t.Helper()
-	cacheRoot, err := os.MkdirTemp("/var/cache", "tewake-authority-cache-test-")
+	cacheRoot, err := os.MkdirTemp("/var/cache", "sparerunner-authority-cache-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if strings.HasPrefix(cacheRoot, "/var/cache/tewake-authority-cache-test-") {
+		if strings.HasPrefix(cacheRoot, "/var/cache/sparerunner-authority-cache-test-") {
 			_ = os.RemoveAll(cacheRoot)
 		}
 	})
@@ -400,12 +400,12 @@ func TestOSWorkspaceRejectsExternalHardLinkBeforeOwnershipHandoff(t *testing.T) 
 	name := strings.Repeat("f", 64)
 	createAgentOwnedWorkspace(t, filepath.Join(runtimeRoot, "executions"), name, false)
 
-	agentState, err := os.MkdirTemp("/var/lib", "tewake-agent-state-test-")
+	agentState, err := os.MkdirTemp("/var/lib", "sparerunner-agent-state-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if strings.HasPrefix(agentState, "/var/lib/tewake-agent-state-test-") {
+		if strings.HasPrefix(agentState, "/var/lib/sparerunner-agent-state-test-") {
 			_ = os.RemoveAll(agentState)
 		}
 	})
@@ -518,7 +518,7 @@ func TestWorkspaceRemovalDeletesExecutionHomeCanaryBeforeNextJob(t *testing.T) {
 	executionsPath := filepath.Join(runtimeRoot, "executions")
 	first := strings.Repeat("7", 64)
 	createAgentOwnedWorkspace(t, executionsPath, first, false)
-	home := filepath.Join(executionsPath, first, ".tewake-home")
+	home := filepath.Join(executionsPath, first, ".sparerunner-home")
 	if err := os.Mkdir(home, 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -539,7 +539,7 @@ func TestWorkspaceRemovalDeletesExecutionHomeCanaryBeforeNextJob(t *testing.T) {
 
 	second := strings.Repeat("8", 64)
 	createAgentOwnedWorkspace(t, executionsPath, second, false)
-	if _, err := os.Lstat(filepath.Join(executionsPath, second, ".tewake-home", "canary")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(executionsPath, second, ".sparerunner-home", "canary")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("first job HOME canary survived into next workspace: %v", err)
 	}
 }

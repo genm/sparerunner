@@ -14,12 +14,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 var (
@@ -2410,7 +2410,7 @@ func deterministicExecutionID(
 	messageID int,
 	claimKey int64,
 ) domain.ExecutionID {
-	return domain.ExecutionID("twk-exec-" + deterministicControllerToken(
+	return domain.ExecutionID("spr-exec-" + deterministicControllerToken(
 		fmt.Sprintf(
 			"execution\x00%d\x00%d\x00%d",
 			scaleSetID,
@@ -2421,12 +2421,12 @@ func deterministicExecutionID(
 }
 
 func deterministicRunnerName(scaleSetID store.ScaleSetID, claimKey int64) string {
-	return "tewake-" + deterministicControllerToken(
+	return "sparerunner-" + deterministicControllerToken(
 		fmt.Sprintf("runner\x00%d\x00%d", scaleSetID, claimKey))
 }
 
 func deterministicCommandID(kind string, executionID domain.ExecutionID, discriminator string) domain.CommandID {
-	return domain.CommandID("twk-" + kind + "-" + deterministicControllerToken(
+	return domain.CommandID("spr-" + kind + "-" + deterministicControllerToken(
 		kind+"\x00"+string(executionID)+"\x00"+discriminator))
 }
 

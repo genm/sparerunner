@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // SharedWorkspaceBackend is the versioned stat identity encoding used only by
@@ -141,7 +141,7 @@ func (adapter *RootlessAdapter) PrepareContainment(ctx context.Context, executio
 	}
 	owner := containmentOwner(executionID)
 	cgroup, err := adapter.runtime.EnsureCgroup(ctx, owner)
-	if err != nil || cgroup.Scope != path.Join("tewake", owner) ||
+	if err != nil || cgroup.Scope != path.Join("sparerunner", owner) ||
 		cgroup.HostEpoch == "" || cgroup.InvocationID != "" {
 		return runner.ContainmentRef{}, runner.ErrStrongOwnershipUnavailable
 	}
@@ -279,7 +279,7 @@ func (adapter *RootlessAdapter) FinalizeCleanup(
 	finalizer, ok := adapter.runtime.(RuntimeCleanupFinalizer)
 	if !ok || ctx.Err() != nil || !adapter.validContainment(process.Containment) ||
 		root == nil || !validAdapterWorkspaceName(name) ||
-		process.Containment.OwnerID != "tewake-"+name ||
+		process.Containment.OwnerID != "sparerunner-"+name ||
 		expected.Backend != SharedWorkspaceBackend || expected.OwnerID == "" {
 		return runner.ErrCleanupFailed
 	}
@@ -375,7 +375,7 @@ func (adapter *RootlessAdapter) launchWithPipe(ctx context.Context, request runn
 func (adapter *RootlessAdapter) validContainment(ref runner.ContainmentRef) bool {
 	return ref.Backend == containmentBackend &&
 		ref.OwnerID != "" &&
-		ref.Scope == path.Join("tewake", ref.OwnerID) &&
+		ref.Scope == path.Join("sparerunner", ref.OwnerID) &&
 		ref.HostEpoch != "" &&
 		ref.InvocationID == "" &&
 		canonicalToken(ref.FenceToken)

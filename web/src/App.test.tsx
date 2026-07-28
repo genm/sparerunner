@@ -39,7 +39,7 @@ describe("App", () => {
             status: 401,
             code: "authentication_failed",
             detail: "A valid administrator session is required.",
-            instance: "urn:tewake:request:req_test",
+            instance: "urn:sparerunner:request:req_test",
             requestId: "req_test",
           }),
           {
@@ -124,7 +124,7 @@ describe("App", () => {
     render(<App api={createScenarioClient("handoff_required")} initialRoute="setup" />);
 
     await user.click(await screen.findByRole("button", { name: "Begin browser authorization" }));
-    expect(await screen.findByText(/tewake ui authorize 'TWA-TEST-DEVICE-CODE'/)).toBeTruthy();
+    expect(await screen.findByText(/sparerunner ui authorize 'TWA-TEST-DEVICE-CODE'/)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Continue after authorization" }));
 
@@ -351,7 +351,7 @@ describe("App", () => {
     await act(async () => {
       resolveDelivery?.({
         tokenId: "0123456789abcdef0123456789abcdef",
-        code: "twk_late_secret_for_test",
+        code: "spr_late_secret_for_test",
       });
       await pendingDelivery;
     });
@@ -362,7 +362,7 @@ describe("App", () => {
         "csrf-for-test",
       ),
     );
-    expect(screen.queryByText("twk_late_secret_for_test")).toBeNull();
+    expect(screen.queryByText("spr_late_secret_for_test")).toBeNull();
   });
 });
 

@@ -21,14 +21,14 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/runner"
 	"golang.org/x/sys/unix"
 	_ "modernc.org/sqlite"
 )
 
 const (
-	privateMaterialProbeArgument = "--tewake-live-private-material-probe"
+	privateMaterialProbeArgument = "--sparerunner-live-private-material-probe"
 	runnerCouldReadExitCode      = 77
 )
 
@@ -468,7 +468,7 @@ func countOwnedRuntimeDirectories(
 
 func countOwnedFenceDirectories(executionID string) (int, error) {
 	expected := sha256.Sum256([]byte(executionID))
-	expectedName := "tewake-" + hex.EncodeToString(expected[:])
+	expectedName := "sparerunner-" + hex.EncodeToString(expected[:])
 	return countExactDirectories(fenceRootPath, expectedName, 0, 0, true)
 }
 

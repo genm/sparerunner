@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/genm/tewake/internal/api/gen"
+	"github.com/genm/sparerunner/internal/api/gen"
 )
 
 // generatedServerContract makes the OpenAPI operation set a compile-time

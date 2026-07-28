@@ -13,8 +13,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/nodectl"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 type fakeController struct {
@@ -124,7 +124,7 @@ func startServer(t *testing.T, controller nodectl.Controller, authorizer nodectl
 // name alone can exceed the platform socket path limit on macOS.
 func shortTempDir(t *testing.T) string {
 	t.Helper()
-	directory, err := os.MkdirTemp("/tmp", "twkctl")
+	directory, err := os.MkdirTemp("/tmp", "sprctl")
 	if err != nil {
 		t.Fatalf("create temporary directory: %v", err)
 	}

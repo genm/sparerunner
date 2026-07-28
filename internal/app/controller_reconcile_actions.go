@@ -5,10 +5,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 // driveNodeReconciliationAction advances at most one action derived from the

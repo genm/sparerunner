@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestMacOSLiveManifestValidatesNormalSleepAndReboot(t *testing.T) {

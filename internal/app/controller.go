@@ -15,11 +15,11 @@ import (
 	"strconv"
 	"time"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
-	"github.com/genm/tewake/internal/webui"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
+	"github.com/genm/sparerunner/internal/webui"
 )
 
 const DefaultHTTPReadHeaderTimeout = 10 * time.Second
@@ -94,7 +94,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 			return err
 		}
 		fingerprint := state.Identity.CAFingerprint()
-		advertiser, err = transport.StartMDNSAdvertiser("tewake-"+hex.EncodeToString(fingerprint[:4]), port, nil)
+		advertiser, err = transport.StartMDNSAdvertiser("sparerunner-"+hex.EncodeToString(fingerprint[:4]), port, nil)
 		if err != nil {
 			return err
 		}

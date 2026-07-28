@@ -12,9 +12,9 @@ mkdir -p "${result_dir}"
 # process receives source and dependencies read-only, so it can exercise
 # ownership handoff without being able to rewrite the checkout or fetch code.
 go mod download
-tewake_module_cache="$(go env GOMODCACHE)"
-if [[ ! -d "${tewake_module_cache}" ]]; then
-  echo "Go module cache is unavailable: ${tewake_module_cache}" >&2
+sparerunner_module_cache="$(go env GOMODCACHE)"
+if [[ ! -d "${sparerunner_module_cache}" ]]; then
+  echo "Go module cache is unavailable: ${sparerunner_module_cache}" >&2
   exit 1
 fi
 
@@ -23,11 +23,11 @@ fi
 docker run --rm \
   --network none \
   --mount "type=bind,src=${repo_root},dst=/src,readonly" \
-  --mount "type=bind,src=${tewake_module_cache},dst=/go/pkg/mod,readonly" \
+  --mount "type=bind,src=${sparerunner_module_cache},dst=/go/pkg/mod,readonly" \
   --tmpfs /tmp:rw,nosuid,nodev,exec,mode=1777 \
   --workdir /src \
   "${go_image}" \
-  go test -race -json -count=1 -tags=tewake_privileged \
+  go test -race -json -count=1 -tags=sparerunner_privileged \
     ./internal/platform/linux \
     ./internal/runner \
     ./packaging/linux \

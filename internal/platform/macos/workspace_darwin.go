@@ -13,7 +13,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // OSWorkspace transfers one extracted runner tree from the launch daemon
@@ -115,10 +115,10 @@ func (workspace *OSWorkspace) Prepare(
 		return runner.WorkspaceRef{}, runner.ErrStrongOwnershipUnavailable
 	}
 	for _, directory := range []string{
-		".tewake-home",
-		".tewake-home/.config",
-		".tewake-home/.cache",
-		".tewake-home/.tmp",
+		".sparerunner-home",
+		".sparerunner-home/.config",
+		".sparerunner-home/.cache",
+		".sparerunner-home/.tmp",
 	} {
 		if err := workspaceRoot.MkdirAll(directory, 0o700); err != nil {
 			return runner.WorkspaceRef{}, runner.ErrStrongOwnershipUnavailable

@@ -20,7 +20,7 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func TestControllerWALAtomicReplayAndEpoch(t *testing.T) {
@@ -385,7 +385,7 @@ func TestControllerSnapshotSurvivesRestartAndPreventsDuplicateAssignment(t *test
 }
 
 func TestControllerSnapshotSurvivesProcessKillAndPreventsDuplicateAssignment(t *testing.T) {
-	const helperEnvironment = "TEWAKE_CONTROLLER_CRASH_PATH"
+	const helperEnvironment = "SPARERUNNER_CONTROLLER_CRASH_PATH"
 	if path := os.Getenv(helperEnvironment); path != "" {
 		store, err := OpenController(context.Background(), path, Options{Now: func() time.Time { return time.Unix(100, 0) }})
 		if err != nil {
@@ -439,7 +439,7 @@ func TestControllerSnapshotSurvivesProcessKillAndPreventsDuplicateAssignment(t *
 }
 
 func TestMigrationTransactionRollsBackAfterProcessKill(t *testing.T) {
-	const helperEnvironment = "TEWAKE_MIGRATION_CRASH_PATH"
+	const helperEnvironment = "SPARERUNNER_MIGRATION_CRASH_PATH"
 	if path := os.Getenv(helperEnvironment); path != "" {
 		_, err := OpenController(context.Background(), path, Options{
 			Now: func() time.Time { return time.Unix(100, 0) },
@@ -749,7 +749,7 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 		ClaimKey:        claimKey,
 		Attempt:         1,
 		ControllerEpoch: controllerEpoch,
-		RunnerName:      "tewake-v8-migration",
+		RunnerName:      "sparerunner-v8-migration",
 		State:           GitHubJITGenerationAmbiguous,
 	}
 	tx, err := db.BeginTx(ctx, nil)
@@ -957,7 +957,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 		freshMessageID MessageID  = 2102
 		oldExecutionID            = "v9-lifecycle-old-execution"
 		replacementID             = "v9-lifecycle-replacement"
-		runnerName                = "tewake-v9-lifecycle-runner"
+		runnerName                = "sparerunner-v9-lifecycle-runner"
 	)
 	now := time.Unix(101, 0).UnixNano()
 	for _, message := range []struct {
@@ -2360,7 +2360,7 @@ func assertRawCount(t *testing.T, path, query string, want int) {
 
 func assertNoTemporaryStoreFiles(t *testing.T, directory string) {
 	t.Helper()
-	for _, pattern := range []string{".tewake-backup-*", ".tewake-restore-*"} {
+	for _, pattern := range []string{".sparerunner-backup-*", ".sparerunner-restore-*"} {
 		matches, err := filepath.Glob(filepath.Join(directory, pattern))
 		if err != nil {
 			t.Fatal(err)

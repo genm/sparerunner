@@ -16,14 +16,14 @@ import (
 	"testing"
 	"time"
 
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/config"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/store"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/config"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const managementTestRequestID = "req_00112233445566778899aabbccddeeff"
@@ -517,14 +517,14 @@ func TestManagementTargetVerificationFailsClosedAndAcceptsOnlyVerifiedPrivateAut
 		t.Fatal(err)
 	}
 	document.RunnerProfiles = []config.RunnerProfileConfiguration{{
-		ID: "profile-default", Label: "tewake",
+		ID: "profile-default", Label: "sparerunner",
 		VersionPolicy: domain.RunnerVersionAutoUpdate,
 		Runtime:       domain.RuntimeNative,
 	}}
 	target := config.GitHubTargetConfiguration{
 		ID: "target-private", InstallationID: "installation-41",
 		ScopeKind: domain.TargetOrganization, Scope: "example-org",
-		ScaleSetName: "tewake", RunnerProfileID: "profile-default",
+		ScaleSetName: "sparerunner", RunnerProfileID: "profile-default",
 	}
 	document.Targets = []config.GitHubTargetConfiguration{target}
 	payload, err := config.EncodeJSON(document)
@@ -621,14 +621,14 @@ func TestSetupKeepsTargetCreationAvailableWhileRuntimeIsUnverified(t *testing.T)
 		t.Fatal(err)
 	}
 	document.RunnerProfiles = []config.RunnerProfileConfiguration{{
-		ID: "profile-default", Label: "tewake",
+		ID: "profile-default", Label: "sparerunner",
 		VersionPolicy: domain.RunnerVersionAutoUpdate,
 		Runtime:       domain.RuntimeNative,
 	}}
 	document.Targets = []config.GitHubTargetConfiguration{{
 		ID: "target-org", InstallationID: "installation-41",
 		ScopeKind: domain.TargetOrganization, Scope: "example-org",
-		ScaleSetName: "tewake", RunnerProfileID: "profile-default",
+		ScaleSetName: "sparerunner", RunnerProfileID: "profile-default",
 	}}
 	payload, err := config.EncodeJSON(document)
 	if err != nil {
@@ -738,7 +738,7 @@ func TestManagementBackendConsumedJoinCodeCannotImplicitlyRevokeNode(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tokenID) != 32 || !strings.HasPrefix(code, "twk_") {
+	if len(tokenID) != 32 || !strings.HasPrefix(code, "spr_") {
 		t.Fatalf("join delivery = token %q code %q", tokenID, code)
 	}
 	csr := managementTestCSR(t)

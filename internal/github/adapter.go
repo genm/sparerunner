@@ -1,6 +1,6 @@
-// Package github isolates the GitHub Actions scale-set client from Tewake.
+// Package github isolates the GitHub Actions scale-set client from SpareRunner.
 //
-// The package intentionally exposes Tewake-owned transport values rather than
+// The package intentionally exposes SpareRunner-owned transport values rather than
 // github.com/actions/scaleset values. This keeps the public-preview dependency
 // from leaking into domain code and makes the commit-before-ack boundary testable.
 package github

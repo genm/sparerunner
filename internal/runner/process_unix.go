@@ -6,7 +6,7 @@ import "context"
 
 // A process group is not a production containment boundary: a workflow may
 // setsid(2) out of it, and PID/Wait observations are not durable ownership.
-// Platform adapters replace this fail-closed implementation in twk-007/008.
+// Platform adapters replace this fail-closed implementation in spr-007/008.
 type unixSupervisor struct{}
 
 func newPlatformSupervisor() Supervisor { return unixSupervisor{} }

@@ -8,7 +8,7 @@ import (
 	"net"
 	"os"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type HelperPolicy struct {

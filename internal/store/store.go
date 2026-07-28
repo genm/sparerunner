@@ -21,7 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 const sqliteDriver = "sqlite"
@@ -50,7 +50,7 @@ var (
 	ErrDestinationExists    = errors.New("store destination already exists")
 	ErrStaleControllerEpoch = errors.New("store command is from a stale controller epoch")
 	ErrStoreBusy            = errors.New("store contention deadline exceeded")
-	ErrUnownedDatabase      = errors.New("database is not owned by Tewake")
+	ErrUnownedDatabase      = errors.New("database is not owned by SpareRunner")
 )
 
 // MigrationHook is test fault injection at the boundary before version recording.
@@ -157,7 +157,7 @@ func open(ctx context.Context, path, role string, migrations fs.FS, options Opti
 	}
 	// Both checks are read-only and deliberately precede journal_mode=WAL. An
 	// unrelated SQLite database must be rejected without changing its bytes,
-	// sidecars, schema, or data merely because it was passed to Tewake.
+	// sidecars, schema, or data merely because it was passed to SpareRunner.
 	if err := validateDatabaseCheck(ctx, db, "quick_check"); err != nil {
 		base.recovery = err
 		return base, fmt.Errorf("%w: open %s store: %w", ErrRecoveryMode, role, err)
@@ -296,7 +296,7 @@ type queryer interface {
 }
 
 // validateMigrationOwnership distinguishes a genuinely empty SQLite database
-// from an existing Tewake store. Owned stores must exactly match the schema and
+// from an existing SpareRunner store. Owned stores must exactly match the schema and
 // metadata produced by their already-applied migration prefix before any pending
 // migration is allowed to run.
 func validateMigrationOwnership(ctx context.Context, q queryer, role string, migrations []migration) ([]int, error) {
@@ -516,7 +516,7 @@ func (s *baseStore) backup(ctx context.Context, destination string) (resultErr e
 	if err != nil {
 		return err
 	}
-	temporary, err := vacuumTemporary(filepath.Dir(destination), ".tewake-backup-")
+	temporary, err := vacuumTemporary(filepath.Dir(destination), ".sparerunner-backup-")
 	if err != nil {
 		return err
 	}
@@ -1245,7 +1245,7 @@ func restore(ctx context.Context, destination, backup, role string) (resultErr e
 	if err != nil {
 		return err
 	}
-	temporaryFile, err := os.CreateTemp(filepath.Dir(destination), ".tewake-restore-")
+	temporaryFile, err := os.CreateTemp(filepath.Dir(destination), ".sparerunner-restore-")
 	if err != nil {
 		return err
 	}
