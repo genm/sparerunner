@@ -101,7 +101,9 @@ not justify them.
 A persistent enrolled computer. Stable fields include immutable `NodeID`, display
 name, certificate serial/epoch, OS, architecture, configured `maxRunners`, and
 administrative state. Observed fields include heartbeat time, available memory, CPU
-usage, runner package cache, running executions, and reconciliation status.
+usage, runner package cache, running executions, reconciliation status, and — on a
+Linux node started with `--allow-shared-runner-identity` — `sharedRunnerIdentity`,
+which records that this node runs jobs without uid separation from its Agent.
 
 Node administrative states are:
 
@@ -234,6 +236,39 @@ potentially truncated message list.
 The adapter preserves last-known data on transient errors and exposes staleness
 metadata. It never converts an external 5xx into an empty successful snapshot.
 
+### Fleet supervision
+
+`ControllerFleet` (`internal/app/controller_fleet.go`) is the production
+supervisor that starts and stops one coordinator per Target, started from and
+shut down with `ServeController`. It derives the desired coordinator set from
+`store.ReadManagementConfiguration` plus the durable `github_target_runtime_bindings`
+rows: one coordinator per configured Target that has a committed runtime
+binding (scale set ID and runner profile). A Target with no verified binding
+runs no coordinator and stays at zero capacity — the existing
+`github_target_runtime_unverified` condition already surfaces that.
+
+Per Target the fleet builds a `github.Client` for that Target's installation
+through the narrow exported `(*github.Authority).InstallationClient`, which
+takes the installation ID and scope and returns a ready client (the App private
+key never leaves `internal/github`; the method also re-proves that the App is
+still installed for that owner before returning),
+confirms the stored scale set ID against GitHub with `client.GetScaleSet` and
+refuses on mismatch, opens a message session, and runs `coordinator.Run(ctx)`
+in its own goroutine. It reacts to configuration changes by observing the same
+management revision/invalidation signal `publishManagementInvalidations`
+uses: adding a Target starts a coordinator, removing one cancels it and closes
+its session. Failures are restarted with bounded exponential backoff and a
+classified log, and never take down the agent or admin listeners. Shutdown
+cancels, waits, closes sessions with a bounded budget, and returns the first
+error. The fleet is skipped entirely when the controller has no GitHub App
+authority — a disconnected controller stays a normal, non-fatal state.
+
+Before this supervisor existed, `app.NewControllerRunnerCoordinator` was
+constructed only by the live acceptance rig (`test/live/linux/composition.go`);
+production `ServeController` had no scale-set wiring, so an enrolled,
+runner-ready node never got a GitHub message session and dispatched workflows
+stayed `queued` forever with all `github_*` tables empty.
+
 ## Enrollment and PKI
 
 `tewake init` creates a controller CA/identity, controller database, management
@@ -349,6 +384,44 @@ Protocol version mismatch is an explicit error before 1.0. Future WAN transport 
 limited to internal `PeerID`, discovery, and authenticated-session interfaces;
 Iroh-specific types or binaries are absent.
 
+## Runner Coordinator Scope
+
+A GitHub scale set exposes exactly one message queue. Two concurrent message
+sessions, or two pollers over one session, would race and double-consume that
+queue. Exactly one coordinator, one session, and one poller may therefore exist
+per Target/scale set — never per node.
+
+Because the coordinator is per Target, its `store.SingleSlotBinding` is resolved
+per operation instead of being a fixed field:
+
+- advertised demand is the sum of `GitHubSingleSlotCapacity` over every
+  candidate node of the Target; there is no invented cap, only the honest sum
+  reported to GitHub;
+- the node that receives a durable claim is chosen deterministically —
+  candidate nodes ordered by NodeID, the first whose durable capacity read is
+  greater than zero wins. Determinism is a correctness requirement, not a
+  nicety: a redelivered queue message that landed a claim on a different node
+  after a crash or restart would be a replay mismatch. When a queue message
+  replays a job that already has a durable claim, the binding is therefore
+  taken from that existing claim's own execution slot rather than re-selected;
+- per-node exclusion, drain, and stop are not re-implemented at this layer —
+  they already fall out of the existing `githubSlotAvailable` predicate
+  (administrative state plus the `node_target_exclusions` NOT EXISTS clause;
+  see Node Selection and Per-Target availability above), so an excluded or
+  stopped node naturally reports zero capacity and drops out of candidacy;
+- admission checks and node reconciliation actions act on the node that owns
+  the claim in question, read from the claim's execution slot, not on a
+  coordinator-wide node. `ControllerRunnerConfig.NodeID` survives only as an
+  explicit single-node pin used by the live acceptance rig;
+- the poll-claim authority attached to a binding still carries that one node's
+  own capacity (the store requires exactly 1); only the capacity advertised
+  upstream to GitHub is the fleet-wide sum above.
+
+Production wiring runs one coordinator per Target with a verified runtime
+binding as a `ControllerFleet` supervisor inside `ServeController`; see
+Fleet supervision under GitHub Integration for its lifecycle and failure
+posture.
+
 ## Native Runner Lifecycle
 
 The agent uses a dedicated service account and OS process containment:
@@ -369,6 +442,60 @@ It never accepts an arbitrary command, path, environment, UID, or GID from the
 network-facing process. Losing the Supervisor or failing any peer, filesystem,
 cgroup-v2, or protocol check makes native runner admission unavailable while the
 Agent may remain connected for diagnostics.
+
+That privileged mode depends on a root Supervisor service. A personal computer
+whose owner cannot or will not install one connects and then advertises zero
+capacity forever. That is the correct fail-closed outcome, not a usable one, so
+Linux has a second execution mode selected exclusively by an explicit
+`tewake-agent serve --allow-shared-runner-identity` flag.
+
+The mode drops exactly one property: uid separation between the Agent and the job.
+The official runner executes as the same Unix user as the Agent, so a job can read
+and write everything that user can, including the Agent's own state directory.
+Native mode is already declared a trusted-workflow boundary rather than a sandbox,
+so a second, clearly weaker mode is legitimate — but only while it is explicit,
+visible, and never inferred.
+
+Nothing else is relaxed. Every remaining property is the one already specified for
+the privileged mode and stays fail-closed:
+
+- descendant ownership comes from a per-execution cgroup v2 child terminated
+  through `cgroup.kill`, so a workflow that calls `setsid()` is still killed with
+  its grandchildren;
+- the durable start fence still linearizes `Start` with `Stop`, so a `Start`
+  carrying a revoked fence token can never create a process;
+- workspace identity is still verified at the last instant before exec, and
+  one-shot JIT material is still delivered exactly once immediately before it;
+- cleanup is still verified — the descendant set is proven empty before a
+  workspace is released — and an unprovable cleanup still quarantines.
+
+Construction is the containment gate. It verifies a unified cgroup v2 hierarchy, a
+writable systemd *user* delegated cgroup subtree, the presence of `cgroup.kill`,
+and that the runtime, cache, and fence roots are absolute, owned by the running
+effective uid, mode `0700`, free of symlink components, and free of group- or
+world-writable ancestors. Any failing check returns strong-ownership-unavailable
+and the node advertises zero capacity. The mode never degrades to a weaker
+containment, because a weaker containment would drop a second property silently.
+
+Selection is opt-in only. Without the flag, behavior is byte-for-byte what it is
+today. The mode is never a fallback for a missing privileged Supervisor: an absent
+or unverifiable Supervisor still means zero capacity, exactly as before. Combining
+the flag with the privileged Supervisor options is rejected at startup rather than
+silently preferring one of them.
+
+Because the mode owns no privileged path, its cache, runtime, and fence roots
+default below the user's data directory — `$XDG_DATA_HOME`, else
+`~/.local/share/tewake/…` — instead of `/var/…`. The two modes also use different
+versioned workspace-backend strings, so a workspace created under one mode can
+never be verified or cleaned under the other; a cross-mode workspace fails the
+existing identity check instead of being adopted or repaired.
+
+The mode is reported, not hidden. `sharedRunnerIdentity` is node state on the
+node-local status document, travels on the agent→controller snapshot and
+heartbeat, and is exposed through the management API, the `tewake node status`
+text output, and the tray, so an operator inspecting the fleet can tell which
+nodes lack uid isolation. The field is pure observation: it never grants capacity
+and never relaxes a check.
 
 Every authenticated snapshot carries an explicit `nativeRunnerReady` observation.
 The Controller treats a missing or false value as zero capacity even if the Agent
@@ -587,8 +714,9 @@ provides:
   Keychain/DPAPI adapters remain platform-task work; Linux uses the service-user
   private credential file boundary until those adapters land
 - node inventory, join-code creation/cancellation, drain/resume, revoke, the
-  node-reported availability intent with its observation age, and each node's
-  eligible-Target list with its controller-adopted excluded flags
+  node-reported availability intent with its observation age, each node's
+  eligible-Target list with its controller-adopted excluded flags, and each node's
+  reported `sharedRunnerIdentity` state
 - target and runner-profile configuration
 - execution history and audit events
 - controller settings and non-secret YAML export/apply
@@ -1010,6 +1138,8 @@ prevents new starts but does not turn known running jobs into an empty state.
 | Agent offline before start | release only after desired state is reconciled; do not create a second runtime blindly |
 | Agent offline during job | continue locally, cleanup locally, reconcile on reconnect |
 | Cleanup failure | `CleanupFailed`, node `Quarantined`, capacity zero |
+| Shared-identity containment unverifiable | construction returns strong-ownership-unavailable, capacity zero; never a weaker containment |
+| `--allow-shared-runner-identity` combined with privileged Supervisor options | explicit startup rejection; neither mode is silently preferred |
 | Secret store failure | runner admission and protected mutations fail closed |
 | Node stopped by its owner | withhold capacity immediately; running job completes and cleans up normally |
 | Availability intent unreported | controller keeps the last reported intent and marks it stale; resume stays pending |
@@ -1053,6 +1183,11 @@ secrets, or raw environment snapshots.
   authorization, and diagnostics redaction
 - Golden-document contract tests for `tewake node --json`, plus launcher tests for
   missing, incompatible, and non-executable CLI resolution
+- Linux shared-runner-identity tests for opt-in-only selection, `setsid` descendant
+  termination through `cgroup.kill`, fail-closed construction without a delegated
+  user cgroup subtree or with an unsafe root, rejection of the flag alongside the
+  privileged Supervisor options, refusal to verify a workspace created under the
+  other mode, and `sharedRunnerIdentity` reaching every reporting surface
 - Availability tests for durable intent across restart, stop during a running job,
   disconnected stop and pending resume, and the precedence of controller `Draining`,
   `Quarantined`, and `Revoked` over a local `Accepting`

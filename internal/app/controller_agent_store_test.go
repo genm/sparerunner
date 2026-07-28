@@ -40,6 +40,9 @@ type recordedNodeOwnerState struct {
 	SnapshotDigest string
 	Intent         domain.AvailabilityIntent
 	Exclusions     *[]domain.TargetID
+	// SharedRunnerIdentity captures the same nil-versus-present semantics for
+	// the reported runner isolation mode.
+	SharedRunnerIdentity *bool
 }
 
 func (recording *recordingControllerAgentStore) ManagementConfigurationRevision(context.Context) (uint64, error) {
@@ -142,14 +145,16 @@ func (recording *recordingControllerAgentStore) RecordNodeOwnerState(
 	snapshotDigest string,
 	intent domain.AvailabilityIntent,
 	exclusions *[]domain.TargetID,
+	sharedRunnerIdentity *bool,
 ) error {
 	recording.mu.Lock()
 	defer recording.mu.Unlock()
 	recording.ownerStates = append(recording.ownerStates, recordedNodeOwnerState{
-		NodeID:         nodeID,
-		SnapshotDigest: snapshotDigest,
-		Intent:         intent,
-		Exclusions:     exclusions,
+		NodeID:               nodeID,
+		SnapshotDigest:       snapshotDigest,
+		Intent:               intent,
+		Exclusions:           exclusions,
+		SharedRunnerIdentity: sharedRunnerIdentity,
 	})
 	if recording.ownerStateErr != nil {
 		return recording.ownerStateErr

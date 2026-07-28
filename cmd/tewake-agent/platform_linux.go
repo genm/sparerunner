@@ -5,6 +5,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/user"
 	"path/filepath"
@@ -31,6 +32,9 @@ func defaultNativeRunnerOptions() nativeRunnerOptions {
 }
 
 func platformCommandRuntime(options nativeRunnerOptions) (func(context.Context, *app.AgentState) (*app.AgentCommandRuntime, error), error) {
+	if options.SharedRunnerIdentity {
+		return sharedIdentityCommandRuntime(options)
+	}
 	if !filepath.IsAbs(options.CacheRoot) || !filepath.IsAbs(options.RuntimeRoot) ||
 		!filepath.IsAbs(options.SupervisorSocket) {
 		if options.Required {
@@ -121,6 +125,135 @@ func optionalNativeRunnerFactory(
 		}
 		return runtime, err
 	}
+}
+
+// sharedIdentityCommandRuntime builds the opt-in native runner that executes
+// jobs under this Agent's own Unix credential. It is selected only by an
+// explicit --allow-shared-runner-identity and never as a fallback: when the
+// privileged Supervisor is missing, the node still advertises zero capacity.
+//
+// The one property it drops is UID separation between the Agent and the job.
+// Descendant ownership, the start fence, exec-boundary workspace verification,
+// one-shot JIT delivery, and verified cleanup are unchanged, and construction
+// fails closed if the cgroup delegation that backs them cannot be proven.
+func sharedIdentityCommandRuntime(options nativeRunnerOptions) (func(context.Context, *app.AgentState) (*app.AgentCommandRuntime, error), error) {
+	// The privileged Supervisor socket names a boundary this mode does not have.
+	// Accepting both and picking one silently would leave the owner believing the
+	// node is isolated when it is not.
+	for _, name := range []string{"supervisor-socket", "runner-identity-service"} {
+		if options.ExplicitFlags[name] {
+			return nil, fmt.Errorf(
+				"--allow-shared-runner-identity cannot be combined with --%s: "+
+					"the shared-identity runner has no privileged supervisor boundary",
+				name,
+			)
+		}
+	}
+	dataRoot, err := userDataRoot()
+	if err != nil {
+		return nil, err
+	}
+	cacheRoot := filepath.Join(dataRoot, "cache")
+	if options.ExplicitFlags["cache-root"] {
+		cacheRoot = options.CacheRoot
+	}
+	runtimeRoot := filepath.Join(dataRoot, "runtime")
+	if options.ExplicitFlags["runtime-root"] {
+		runtimeRoot = options.RuntimeRoot
+	}
+	fenceRoot := filepath.Join(dataRoot, "fences")
+	if !filepath.IsAbs(cacheRoot) || !filepath.IsAbs(runtimeRoot) {
+		return nil, errors.New("native runner paths must be absolute")
+	}
+	cacheRoot = filepath.Clean(cacheRoot)
+	runtimeRoot = filepath.Clean(runtimeRoot)
+
+	build := func(ctx context.Context, state *app.AgentState) (*app.AgentCommandRuntime, error) {
+		identity := linux.RunnerIdentity{UID: os.Geteuid(), GID: os.Getegid()}
+		if identity.UID <= 0 || identity.GID <= 0 {
+			return nil, errors.New(
+				"shared runner identity requires an unprivileged agent; " +
+					"run the root supervisor for a dedicated runner account",
+			)
+		}
+		workspace, err := linux.NewRootlessWorkspace(identity.UID, identity.GID)
+		if err != nil {
+			return nil, err
+		}
+		for _, directory := range []string{
+			dataRoot,
+			cacheRoot,
+			runtimeRoot,
+			filepath.Join(runtimeRoot, "executions"),
+			fenceRoot,
+		} {
+			if err := ensurePrivateDirectory(directory); err != nil {
+				return nil, err
+			}
+		}
+		if err := runner.ValidateCacheRoot(cacheRoot); err != nil {
+			return nil, err
+		}
+		pkg, err := runner.OfficialPackage(runner.CurrentPlatform())
+		if err != nil {
+			return nil, err
+		}
+		cache := runner.Cache{Root: cacheRoot, Fetcher: runner.NewHTTPFetcher()}
+		// Capacity is not advertised until the exact pinned archive is locally
+		// verified, exactly as in the privileged mode.
+		if err := prewarmOfficialPackage(ctx, cache, pkg); err != nil {
+			return nil, err
+		}
+		executable, err := os.Executable()
+		if err != nil {
+			return nil, runner.ErrStrongOwnershipUnavailable
+		}
+		launcher, err := linux.NewSharedIdentityLauncher(executable, identity)
+		if err != nil {
+			return nil, err
+		}
+		nativeRuntime, err := linux.NewRootlessRuntime(fenceRoot, runtimeRoot, launcher, workspace)
+		if err != nil {
+			return nil, err
+		}
+		adapter, err := linux.NewRootless(nativeRuntime, workspace, 0)
+		if err != nil {
+			return nil, err
+		}
+		manager, err := runner.NewManager(runner.Options{
+			RuntimeRoot: runtimeRoot,
+			Cache:       cache,
+			Journal:     state.Store.RunnerJournal(),
+			Supervisor:  adapter,
+			Cleaner:     adapter,
+		})
+		if err != nil {
+			return nil, err
+		}
+		lifecycle, err := bindNativeRunnerCredential(manager, state.CredentialReady)
+		if err != nil {
+			return nil, err
+		}
+		return app.NewAgentCommandRuntime(state.NodeID, state.Store, lifecycle, pkg)
+	}
+	return optionalNativeRunnerFactory(options.Required, build), nil
+}
+
+// userDataRoot resolves the owner's own data directory. The shared-identity
+// mode keeps every durable root under it rather than under /var, because it has
+// no privileged component that could create or own a system path.
+func userDataRoot() (string, error) {
+	if explicit := os.Getenv("XDG_DATA_HOME"); explicit != "" {
+		if !filepath.IsAbs(explicit) {
+			return "", errors.New("XDG_DATA_HOME must be an absolute path")
+		}
+		return filepath.Join(filepath.Clean(explicit), "tewake"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || !filepath.IsAbs(home) {
+		return "", errors.New("resolve user home directory for shared runner identity roots")
+	}
+	return filepath.Join(filepath.Clean(home), ".local", "share", "tewake"), nil
 }
 
 type officialPackageCache interface {

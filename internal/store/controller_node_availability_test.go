@@ -41,6 +41,86 @@ func adoptedIntent(t *testing.T, controller *ControllerStore, nodeID string) (st
 	return intent.String, intent.Valid
 }
 
+// TestSharedRunnerIdentityAdoptionPreservesLastKnownWhenOmitted pins the
+// fail-safe direction of the nil semantics: a snapshot or heartbeat that does
+// not report the isolation mode keeps whatever was adopted. Silently resetting
+// to false would downgrade a reported weakness into an unearned claim of uid
+// isolation, which is the one wrong answer an operator cannot detect.
+func TestSharedRunnerIdentityAdoptionPreservesLastKnownWhenOmitted(t *testing.T) {
+	ctx := context.Background()
+	controller := openController(t, "controller-shared-identity.db")
+	defer controller.Close()
+	nodeID, epoch := enrollControllerAgentNode(t, controller, 3)
+	node := domain.NodeID(nodeID)
+
+	// Never reported stays NULL: absent must not render as the isolated mode.
+	if err := controller.RecordAgentSnapshot(
+		ctx, nodeOwnerSnapshot(node, epoch, "", nil)); err != nil {
+		t.Fatal(err)
+	}
+	if states, err := controller.ReadNodeOwnerStates(ctx); err != nil ||
+		states[node].SharedRunnerIdentity != nil {
+		t.Fatalf(
+			"unreported isolation mode = %#v, err = %v, want nil",
+			states[node].SharedRunnerIdentity, err,
+		)
+	}
+
+	// A snapshot that reports the weaker mode adopts it.
+	shared := true
+	snapshot := nodeOwnerSnapshot(node, epoch, "", nil)
+	snapshot.SharedRunnerIdentity = &shared
+	if err := controller.RecordAgentSnapshot(ctx, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	assertAdoptedSharedRunnerIdentity(t, controller, node, true)
+
+	// A later snapshot that omits it keeps the adopted true.
+	if err := controller.RecordAgentSnapshot(
+		ctx, nodeOwnerSnapshot(node, epoch, "", nil)); err != nil {
+		t.Fatal(err)
+	}
+	assertAdoptedSharedRunnerIdentity(t, controller, node, true)
+
+	// A heartbeat that omits it keeps it too, even while adopting other state.
+	digest := currentSnapshotDigest(t, controller, nodeID)
+	if err := controller.RecordNodeOwnerState(
+		ctx, node, digest, domain.AvailabilityStopped, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertAdoptedSharedRunnerIdentity(t, controller, node, true)
+
+	// Only an explicit report moves it back to the isolated mode.
+	isolated := false
+	if err := controller.RecordNodeOwnerState(
+		ctx, node, digest, "", nil, &isolated); err != nil {
+		t.Fatal(err)
+	}
+	assertAdoptedSharedRunnerIdentity(t, controller, node, false)
+
+	// Adoption writes no audit event: it records no actor's decision.
+	if count := auditActionCount(t, controller, AuditActionNodeAvailabilityChanged); count != 1 {
+		t.Fatalf("availability audit events = %d, want only the intent change", count)
+	}
+}
+
+func assertAdoptedSharedRunnerIdentity(
+	t *testing.T,
+	controller *ControllerStore,
+	node domain.NodeID,
+	want bool,
+) {
+	t.Helper()
+	states, err := controller.ReadNodeOwnerStates(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	adopted := states[node].SharedRunnerIdentity
+	if adopted == nil || *adopted != want {
+		t.Fatalf("adopted shared runner identity = %#v, want %t", adopted, want)
+	}
+}
+
 func auditActionCount(t *testing.T, controller *ControllerStore, action AuditAction) int {
 	t.Helper()
 	var count int
@@ -188,7 +268,7 @@ func TestNodeOwnerAdoptionFailsClosedWhenAuditDegraded(t *testing.T) {
 
 	exclusions := []domain.TargetID{"target-a"}
 	if err := controller.RecordNodeOwnerState(
-		ctx, node, digest, domain.AvailabilityStopped, &exclusions,
+		ctx, node, digest, domain.AvailabilityStopped, &exclusions, nil,
 	); !errors.Is(err, ErrManagementAuditPersistence) {
 		t.Fatalf("heartbeat adoption error = %v, want audit persistence", err)
 	}
@@ -220,7 +300,7 @@ func TestRecordNodeOwnerStateRequiresCurrentSnapshotAuthority(t *testing.T) {
 
 	stale := "0000000000000000000000000000000000000000000000000000000000000000"
 	if err := controller.RecordNodeOwnerState(
-		ctx, node, stale, "", &exclusions); err == nil {
+		ctx, node, stale, "", &exclusions, nil); err == nil {
 		t.Fatal("stale snapshot digest adopted owner state")
 	}
 	if excluded, err := controller.ReadNodeTargetExclusions(ctx, node); err != nil ||
@@ -230,7 +310,7 @@ func TestRecordNodeOwnerStateRequiresCurrentSnapshotAuthority(t *testing.T) {
 
 	digest := currentSnapshotDigest(t, controller, nodeID)
 	if err := controller.RecordNodeOwnerState(
-		ctx, node, digest, domain.AvailabilityAccepting, &exclusions); err != nil {
+		ctx, node, digest, domain.AvailabilityAccepting, &exclusions, nil); err != nil {
 		t.Fatal(err)
 	}
 	excluded, err := controller.ReadNodeTargetExclusions(ctx, node)
@@ -239,7 +319,7 @@ func TestRecordNodeOwnerStateRequiresCurrentSnapshotAuthority(t *testing.T) {
 	}
 
 	// Nothing reported is an explicit no-op rather than a wipe.
-	if err := controller.RecordNodeOwnerState(ctx, node, digest, "", nil); err != nil {
+	if err := controller.RecordNodeOwnerState(ctx, node, digest, "", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if excluded, err := controller.ReadNodeTargetExclusions(ctx, node); err != nil ||

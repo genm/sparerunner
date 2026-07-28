@@ -193,6 +193,12 @@ type AgentOwnerStateRecord struct {
 	SnapshotDigest     string
 	AvailabilityIntent domain.AvailabilityIntent
 	ExcludedTargets    []domain.TargetID
+	// SharedRunnerIdentity is the node's reported runner-isolation mode. A nil
+	// pointer means "no change reported" and preserves the last-known adopted
+	// value, exactly like an empty AvailabilityIntent; it never resets to false,
+	// because silently downgrading a reported weakness to "isolated" would be
+	// the one wrong answer an operator cannot detect.
+	SharedRunnerIdentity *bool
 }
 
 // AgentOwnerStateConsumer owns the durable adoption of node-owner availability
@@ -1197,6 +1203,10 @@ func cloneAgentSnapshot(snapshot AgentSnapshot) AgentSnapshot {
 		set := append([]domain.TargetID{}, *snapshot.ExcludedTargets...)
 		snapshot.ExcludedTargets = &set
 	}
+	if snapshot.SharedRunnerIdentity != nil {
+		reported := *snapshot.SharedRunnerIdentity
+		snapshot.SharedRunnerIdentity = &reported
+	}
 	return snapshot
 }
 
@@ -1281,7 +1291,18 @@ func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
 			!sameTargetIDSet(*actor.snapshot.ExcludedTargets, *heartbeat.ExcludedTargets)) {
 		exclusions = append([]domain.TargetID{}, *heartbeat.ExcludedTargets...)
 	}
-	if intent == "" && exclusions == nil {
+	// A nil heartbeat field is "no change reported" and keeps the adopted value.
+	// A present value that already matches the last-known one is a steady-state
+	// repeat rather than a change, so a static fact re-sent every tick does not
+	// force a durable write at heartbeat cadence.
+	var sharedRunnerIdentity *bool
+	if heartbeat.SharedRunnerIdentity != nil &&
+		(actor.snapshot.SharedRunnerIdentity == nil ||
+			*actor.snapshot.SharedRunnerIdentity != *heartbeat.SharedRunnerIdentity) {
+		reported := *heartbeat.SharedRunnerIdentity
+		sharedRunnerIdentity = &reported
+	}
+	if intent == "" && exclusions == nil && sharedRunnerIdentity == nil {
 		actor.stateMu.Unlock()
 		return nil
 	}
@@ -1298,10 +1319,11 @@ func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
 	if err := actor.broker.consumers.OwnerState.HandleAgentOwnerState(
 		actor.ctx,
 		AgentOwnerStateRecord{
-			NodeID:             actor.nodeID,
-			SnapshotDigest:     snapshotDigest,
-			AvailabilityIntent: intent,
-			ExcludedTargets:    exclusions,
+			NodeID:               actor.nodeID,
+			SnapshotDigest:       snapshotDigest,
+			AvailabilityIntent:   intent,
+			ExcludedTargets:      exclusions,
+			SharedRunnerIdentity: sharedRunnerIdentity,
 		},
 	); err != nil {
 		return ErrAgentSnapshotCommit
@@ -1313,6 +1335,10 @@ func (actor *agentSessionActor) adoptOwnerStateUnderLifecycle(
 	if exclusions != nil {
 		set := append([]domain.TargetID{}, exclusions...)
 		actor.snapshot.ExcludedTargets = &set
+	}
+	if sharedRunnerIdentity != nil {
+		reported := *sharedRunnerIdentity
+		actor.snapshot.SharedRunnerIdentity = &reported
 	}
 	actor.stateMu.Unlock()
 	return nil

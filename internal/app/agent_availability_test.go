@@ -97,7 +97,46 @@ func TestAvailabilityStatusReportsRunningExecutionsFromTheJournal(t *testing.T) 
 	}
 }
 
+// TestAvailabilityStatusReportsSharedRunnerIdentityWithoutGatingCapacity pins
+// both halves of the contract: the isolation mode reaches every node-local
+// observer unchanged from the serve flag, and it changes no admission decision.
+func TestAvailabilityStatusReportsSharedRunnerIdentityWithoutGatingCapacity(t *testing.T) {
+	ctx := context.Background()
+	for _, shared := range []bool{false, true} {
+		availability := newTestAvailabilityWithSharedRunnerIdentity(t, shared)
+		availability.setNativeReady(true)
+		availability.setConnected(true)
+		availability.confirm(availability.Intent())
+		status, err := availability.Status(ctx)
+		if err != nil {
+			t.Fatalf("status: %v", err)
+		}
+		if status.SharedRunnerIdentity != shared {
+			t.Fatalf("status.SharedRunnerIdentity = %t, want %t", status.SharedRunnerIdentity, shared)
+		}
+		// Observation only: the weaker mode must neither grant nor withhold
+		// capacity relative to the isolated one.
+		if !status.NativeRunnerReady || !status.EffectiveAccepting() {
+			t.Fatalf(
+				"sharedRunnerIdentity=%t changed admission: ready=%t accepting=%t",
+				shared, status.NativeRunnerReady, status.EffectiveAccepting(),
+			)
+		}
+		if !availability.Accepts() {
+			t.Fatalf("sharedRunnerIdentity=%t changed the local admission gate", shared)
+		}
+	}
+}
+
 func newTestAvailability(t *testing.T) *agentAvailability {
+	t.Helper()
+	return newTestAvailabilityWithSharedRunnerIdentity(t, false)
+}
+
+func newTestAvailabilityWithSharedRunnerIdentity(
+	t *testing.T,
+	sharedRunnerIdentity bool,
+) *agentAvailability {
 	t.Helper()
 	directory := filepath.Join(t.TempDir(), "private")
 	if err := os.Mkdir(directory, 0o700); err != nil {
@@ -110,7 +149,8 @@ func newTestAvailability(t *testing.T) *agentAvailability {
 		t.Fatalf("open agent store: %v", err)
 	}
 	t.Cleanup(func() { _ = agentStore.Close() })
-	availability, err := newAgentAvailability(context.Background(), agentStore, "node-1")
+	availability, err := newAgentAvailability(
+		context.Background(), agentStore, "node-1", sharedRunnerIdentity)
 	if err != nil {
 		t.Fatalf("open availability: %v", err)
 	}

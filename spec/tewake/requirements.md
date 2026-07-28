@@ -65,6 +65,11 @@ parallelism, and re-registering broken runners.
   on and exclude specific ones from the tray, the Raycast launcher, or the CLI, so
   that I can casually keep this machine out of one project without stopping the
   rest of the fleet or asking the Administrator to reconfigure anything.
+- As a Node owner on a personal Linux computer where I cannot or will not install a
+  root system service, I want to explicitly opt in to running jobs as my own Unix
+  user so that the machine contributes capacity instead of connecting and
+  advertising zero forever, while every operator can still see that this node lacks
+  uid isolation.
 - As an Administrator, I want a one-job runner identity and disposable workspace so
   that jobs do not leave ordinary runner state behind.
 
@@ -214,6 +219,29 @@ identical operation against the local agent, so none of them is a privileged pat
   copy, and descriptor-pin the resulting workspace and executable at launch. An
   Agent-owned cache entry or prebuilt workspace shall never be privileged
   execution authority.
+- Linux additionally supports one weaker execution mode, shared runner identity,
+  selected exclusively by an explicit `tewake-agent serve
+  --allow-shared-runner-identity` flag. It drops exactly one property of the mode
+  above: uid separation between the Agent and the job. The job runs as the same
+  Unix user as the Agent and can therefore read and write everything that user
+  can, including the Agent's own state directory. Nothing else is relaxed, and
+  every other containment property — cgroup-v2 descendant ownership through
+  `cgroup.kill`, the durable start fence, last-instant workspace verification,
+  one-shot JIT delivery, verified cleanup, and quarantine on unverifiable
+  cleanup — remains as specified above and remains fail-closed.
+- Shared runner identity shall never be a fallback. Absent the flag, behavior is
+  unchanged, and a missing or unverifiable privileged Supervisor shall still mean
+  zero capacity. Combining the flag with the privileged Supervisor options shall be
+  rejected at startup rather than silently preferring one mode.
+- Shared runner identity shall use its own cache, runtime, and fence roots below the
+  user's data directory (`$XDG_DATA_HOME`, else `~/.local/share/tewake/…`) and its
+  own versioned workspace-backend identity, so that no workspace is shared,
+  verified, or cleaned across the two modes.
+- A node running under shared runner identity shall report that fact as node state
+  (`sharedRunnerIdentity`) through the node-local status document, the agent
+  snapshot and heartbeat, the management API, `tewake node status`, and the tray.
+  The reported state is observation only: it shall never grant capacity or relax a
+  check.
 - The controller CA defaults to a ten-year validity. Controller and node leaf
   certificates default to one year and automatically renew at a jittered point
   between 70% and 90% of their lifetime. Expired or superseded leaf credentials fail
@@ -305,6 +333,24 @@ identical operation against the local agent, so none of them is a privileged pat
 - If the Linux Supervisor socket, peer identity, cgroup-v2 contract, or root-owned
   configuration cannot be verified, native runner admission shall fail without
   elevating the network-facing Agent.
+- When `--allow-shared-runner-identity` is absent, the Linux agent shall behave
+  exactly as it does without the mode: no shared-identity backend shall be
+  constructed, and an unavailable privileged Supervisor shall still advertise zero
+  capacity rather than falling back.
+- When the flag is present, construction shall verify a unified cgroup v2
+  hierarchy, a writable systemd user delegated cgroup subtree, the presence of
+  `cgroup.kill`, and runtime/cache/fence roots that are absolute, owned by the
+  running effective uid, mode `0700`, free of symlink components, and free of
+  group- or world-writable ancestors. Any failing check shall return
+  strong-ownership-unavailable and advertise zero capacity rather than degrade to a
+  weaker containment.
+- A job started under shared runner identity that calls `setsid()` shall still be
+  terminated with its descendants, and its workspace shall not be released until
+  the descendant set is proven empty.
+- A workspace created under one Linux execution mode shall never be verifiable or
+  cleanable under the other.
+- An operator inspecting the fleet through the management API, `tewake node
+  status`, or the tray shall be able to tell which nodes run without uid isolation.
 - Each Linux execution shall receive a private `HOME`, XDG cache/config roots, and
   `TMPDIR` below its disposable execution root. Their residue shall be absent before
   the slot can serve a later job.

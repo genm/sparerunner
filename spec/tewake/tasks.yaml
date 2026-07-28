@@ -352,6 +352,8 @@ tasks:
       - "2026-07-26: Fresh non-replayed JobAvailable first commits a zero-capacity unpicked-requeue intent without creating an execution, reservation, or Acquire attempt. Zero-capacity polls separate ACK, exact provider removal, and two delayed absence reads; late pickup discards the proposal, while final absence atomically creates and immediately dispatches exactly one replacement. A durable reconciled_pending acquire marker preserves drive-before-poll across the final-commit crash seam while ordinary pre-ACK Pending remains poll-first. CleanupFailed retains the reservation, node quarantine, and zero capacity."
       - "2026-07-27: Fresh-only recovery availability now rolls back the entire message transaction when recovery admission is disabled, the concrete slot is occupied, or poll authority is stale. Real SQLite tests prove that no dedupe row or intent survives and that eligible redelivery creates the exact intent/rearm instead of being consumed as replay."
       - "2026-07-27: Runner-release admission now rejects a validated current/due status whose observation timestamp is still in the future relative to the Controller clock. This closes the restart/clock-rollback boundary where internally consistent but future evidence could otherwise re-enable new capacity; a regression test covers the fail-closed result."
+      - "2026-07-28: Production wiring now exists. `internal/app/controller_fleet.go` adds a `ControllerFleet` supervisor started from and shut down with `ServeController`; it derives the desired coordinator set from `store.ReadManagementConfiguration` plus committed `github_target_runtime_bindings` rows, opens one message session and runs one `app.NewControllerRunnerCoordinator` per Target with a verified runtime binding, confirms the stored scale set ID against GitHub before use, reacts to configuration changes through the same revision/invalidation signal as `publishManagementInvalidations`, restarts failures with bounded exponential backoff and a classified log, and is skipped entirely (non-fatal) when the controller has no GitHub App authority. Before this, `app.NewControllerRunnerCoordinator` was constructed only by the live acceptance rig, so an enrolled runner-ready node never got a GitHub message session and dispatched workflows stayed `queued` with all `github_*` tables empty."
+      - "2026-07-28: The coordinator is now resolved per Target rather than pinned to a node, because one scale set exposes exactly one message queue and only one coordinator/session/poller may exist per Target. Advertised demand is the honest sum of `GitHubSingleSlotCapacity` over every candidate node of the Target, with no invented cap. The node that receives a durable claim is chosen deterministically: candidates ordered by NodeID, first with durable capacity greater than zero wins; a replayed queue message takes the binding from the existing claim's own execution slot instead of re-selecting, so a crash/restart cannot land a replay on a different node. Per-node exclusion, drain, and stop still fall out of the existing `githubSlotAvailable` predicate in `internal/store/controller_github.go` and are not re-implemented in the app layer. Admission checks and node reconciliation now act on the node read from the claim's execution slot rather than a coordinator-wide node; `ControllerRunnerConfig.NodeID` survives only as the live acceptance rig's explicit single-node pin. The poll-claim authority attached to a binding still carries that one node's own capacity (the store requires exactly 1); only the upstream-advertised capacity is the fleet-wide sum."
       - "2026-07-26: Agent Hello acknowledgement records a per-Node command-sequence baseline before snapshot capture. Ordinary and recovery command dispatch shares the Node lifecycle boundary with snapshot commit, so an overlapping replacement snapshot is rejected before SQLite projection and an old actor cannot receive a command after replacement. Prepare, Start, Cancel, replay Prepare, reconciliation Cancel, the reverse commit order, and exact SQLite snapshot/epoch replay CAS have deterministic race tests."
       - "2026-07-26: Snapshot ACK and disconnect persistence no longer hold the Node lifecycle lock. A stalled ACK can be superseded; unresolved disconnect persistence rejects reconnect immediately and is canceled by Controller shutdown. Tests cover stalled ACK replacement, pending-projection retry, shutdown cancellation, command-consumer failure, and ambiguous caller timeout recovery."
       - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a twk-007/twk-014 release dependency and is not claimed by these deterministic fault tests."
@@ -639,3 +641,41 @@ tasks:
       - A missing, incompatible, or non-executable CLI produces an actionable installation error instead of an assumed state.
       - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
       - Removing or never installing the extension changes no fleet behavior, and its build gates no Tewake artifact.
+
+  - id: twk-021
+    title: Add the opt-in shared runner identity Linux mode
+    type: platform
+    description: >
+      Add a second Linux native-runner execution mode that runs the job as the
+      Agent's own Unix user, selected only by an explicit
+      `tewake-agent serve --allow-shared-runner-identity` flag. It drops uid
+      separation between Agent and job and nothing else: per-execution cgroup v2
+      descendant ownership through `cgroup.kill`, the durable start fence,
+      last-instant workspace verification, one-shot JIT delivery, verified
+      cleanup, and quarantine all remain fail-closed. Construction verifies the
+      cgroup v2 and delegated user subtree contract and the private root
+      ownership, uses its own user-data-directory roots and its own versioned
+      workspace-backend identity, and reports `sharedRunnerIdentity` as node state
+      through the agent snapshot and heartbeat, the management API, the CLI status
+      output, and the tray.
+    depends_on: [twk-007, twk-016]
+    paths:
+      - internal/platform/linux
+      - cmd/tewake-agent
+      - internal/nodectl
+      - internal/transport
+      - internal/app
+      - api/openapi.yaml
+      - spec/tewake
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 21
+    status: in_progress
+    notes:
+      - "2026-07-28: The mode is deliberately weaker than twk-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
+    acceptance:
+      - Without `--allow-shared-runner-identity`, no shared-identity backend is constructed and a missing privileged Supervisor still advertises zero capacity instead of falling back.
+      - Passing the flag together with the privileged Supervisor options is rejected at startup rather than silently preferring one mode.
+      - A job that calls `setsid()` under shared runner identity is still terminated with its descendants, and its workspace is not released until the descendant set is proven empty.
+      - Construction without a unified cgroup v2 hierarchy, without a writable systemd user delegated subtree, without `cgroup.kill`, or with a non-absolute, wrongly-owned, non-0700, symlinked, or group/world-writable-ancestor root returns strong-ownership-unavailable and advertises zero capacity, never a weaker containment.
+      - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
+      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `tewake node status`, and the tray, and grants no capacity and relaxes no check."

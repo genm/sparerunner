@@ -164,9 +164,17 @@ type Status struct {
 	// PendingResume is true when the owner accepts jobs but the controller has
 	// not confirmed it. Resuming adds capacity, so it stays ineffective until
 	// then and must never render as accepting.
-	PendingResume     bool               `json:"pendingResume"`
-	NativeRunnerReady bool               `json:"nativeRunnerReady"`
-	RunningExecutions []RunningExecution `json:"runningExecutions"`
+	PendingResume     bool `json:"pendingResume"`
+	NativeRunnerReady bool `json:"nativeRunnerReady"`
+	// SharedRunnerIdentity is true when this node's native runner executes jobs
+	// under the Agent's own uid instead of a dedicated per-runner uid. The
+	// property that is dropped is uid isolation: a job can reach whatever the
+	// Agent's own user can reach, including the Agent's state directory and any
+	// other job running on this computer. It is always reported so an operator
+	// can never mistake this mode for the isolated one, and it is observation
+	// only — it never adds or withholds capacity.
+	SharedRunnerIdentity bool               `json:"sharedRunnerIdentity"`
+	RunningExecutions    []RunningExecution `json:"runningExecutions"`
 	// EligibleTargets is the last-known list of configured GitHub Targets whose
 	// Runner Profile matches this node's platform, as refreshed by the
 	// controller's heartbeat acknowledgement. It is omitted until the first

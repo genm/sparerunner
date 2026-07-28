@@ -1103,6 +1103,15 @@ components:
             the node has never reported one; this is display provenance only
             and never a controller-invented default.
           enum: [accepting, stopped]
+        sharedRunnerIdentity:
+          type: boolean
+          description: >-
+            True when this node's native runner executes jobs under the agent's
+            own uid instead of a dedicated per-runner uid, so uid isolation
+            between the agent and the job it runs is absent. Absent means the
+            node has never reported the property; absent is not "isolated" and
+            must not be rendered as the stronger mode. Observation only: it
+            never affects whether the node is admitted work.
         excludedTargets:
           type: array
           description: >-

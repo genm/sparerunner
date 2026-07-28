@@ -36,7 +36,14 @@ type NodeAgentSnapshot struct {
 	// authoritative full set, including an empty one.
 	AvailabilityIntent domain.AvailabilityIntent
 	ExcludedTargets    []domain.TargetID
-	Journal            AgentSnapshot
+	// SharedRunnerIdentity is the node-reported runner isolation mode: true when
+	// jobs execute under the agent's own uid, without uid isolation. It is
+	// adopted alongside the owner-editable state because it is owner-visible
+	// observation with the same nil semantics — nil is "not reported" and keeps
+	// whatever was previously adopted rather than resetting to the stronger
+	// claim. It never affects capacity.
+	SharedRunnerIdentity *bool
+	Journal              AgentSnapshot
 }
 
 // AgentExecutionUpdate is the persistence-safe form of one durable Agent outbox
@@ -561,7 +568,7 @@ func (s *ControllerStore) RecordAgentSnapshot(ctx context.Context, snapshot Node
 	}
 	adoption, err := adoptNodeOwnerState(
 		ctx, tx, snapshot.NodeID, snapshot.AvailabilityIntent, exclusions,
-		receivedAt)
+		snapshot.SharedRunnerIdentity, receivedAt)
 	if err != nil {
 		return err
 	}

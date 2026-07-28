@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/genm/tewake/internal/app"
@@ -85,5 +86,47 @@ func TestOptionalNativeRunnerFactoryDegradesToZeroCapacity(t *testing.T) {
 		&app.AgentState{},
 	); !errors.Is(err, unavailable) {
 		t.Fatalf("required runtime error = %v, want unavailable", err)
+	}
+}
+
+// The shared-identity runner drops UID isolation, so it must never appear
+// merely because the privileged supervisor is missing. Only the explicit flag
+// selects it.
+func TestSharedRunnerIdentityIsNeverTheDefault(t *testing.T) {
+	options := defaultNativeRunnerOptions()
+	if options.SharedRunnerIdentity {
+		t.Fatal("the shared-identity runner must never be a default")
+	}
+}
+
+// Accepting both the flag and the privileged supervisor socket and silently
+// picking one would leave the owner believing the node is isolated.
+func TestSharedRunnerIdentityRejectsPrivilegedOptions(t *testing.T) {
+	for _, name := range []string{"supervisor-socket", "runner-identity-service"} {
+		options := defaultNativeRunnerOptions()
+		options.SharedRunnerIdentity = true
+		options.ExplicitFlags = map[string]bool{name: true}
+		if _, err := platformCommandRuntime(options); err == nil {
+			t.Fatalf("--%s combined with --allow-shared-runner-identity must be rejected", name)
+		}
+	}
+}
+
+func TestUserDataRootPrefersXDGDataHome(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/home/example/.local/share")
+	root, err := userDataRoot()
+	if err != nil || root != "/home/example/.local/share/tewake" {
+		t.Fatalf("userDataRoot = %q, %v", root, err)
+	}
+	t.Setenv("XDG_DATA_HOME", "relative/share")
+	if _, err := userDataRoot(); err == nil {
+		t.Fatal("a relative XDG_DATA_HOME must be rejected")
+	}
+	t.Setenv("XDG_DATA_HOME", "")
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	root, err = userDataRoot()
+	if err != nil || root != filepath.Join(home, ".local", "share", "tewake") {
+		t.Fatalf("userDataRoot = %q, %v", root, err)
 	}
 }

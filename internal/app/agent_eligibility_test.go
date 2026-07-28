@@ -213,7 +213,7 @@ func TestAgentSessionHeartbeatAckEligibleTargetsWireStates(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			agentStore := openAgentCommandStore(t)
 			defer agentStore.Close()
-			availability, err := newAgentAvailability(context.Background(), agentStore, "node-1")
+			availability, err := newAgentAvailability(context.Background(), agentStore, "node-1", false)
 			if err != nil {
 				t.Fatal(err)
 			}

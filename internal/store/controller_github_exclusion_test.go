@@ -33,7 +33,7 @@ func TestNodeTargetExclusionWithholdsCapacityClaimAndRecovery(t *testing.T) {
 	digest := currentSnapshotDigest(t, controller, nodeID)
 	exclusions := []domain.TargetID{binding.TargetID}
 	if err := controller.RecordNodeOwnerState(
-		ctx, binding.NodeID, digest, "", &exclusions); err != nil {
+		ctx, binding.NodeID, digest, "", &exclusions, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -61,7 +61,7 @@ func TestNodeTargetExclusionWithholdsCapacityClaimAndRecovery(t *testing.T) {
 	// Including the Target again restores every path.
 	empty := []domain.TargetID{}
 	if err := controller.RecordNodeOwnerState(
-		ctx, binding.NodeID, digest, "", &empty); err != nil {
+		ctx, binding.NodeID, digest, "", &empty, nil); err != nil {
 		t.Fatal(err)
 	}
 	assertSlotAdmission(t, controller, binding, true)

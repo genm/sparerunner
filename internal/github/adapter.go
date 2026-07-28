@@ -356,12 +356,20 @@ func validateJobMessages(jobs []JobMessage) error {
 			return ErrInvalidJobMessage
 		}
 		switch job.Type {
-		case MessageTypeJobAvailable, MessageTypeJobAssigned:
-			// AcquireJobs requires RunnerRequestID. Lifecycle events can
-			// legitimately omit it and are instead correlated by the exact
-			// provider runner ID and name.
+		case MessageTypeJobAvailable:
+			// AcquireJobs is keyed on RunnerRequestID, so an available job
+			// without one is genuinely unusable and must fail closed here.
 			if job.RunnerRequestID == 0 ||
 				job.RunnerID != 0 || job.RunnerName != "" || job.Result != "" {
+				return ErrInvalidJobMessage
+			}
+		case MessageTypeJobAssigned:
+			// Live GitHub sends JobAssigned with RunnerRequestID unset. Nothing
+			// downstream correlates on it — assignment is recorded as evidence and
+			// pickup is proven by JobStarted/JobCompleted runner identity — so
+			// demanding one rejected every real message and left the queue
+			// redelivering a runnable job forever.
+			if job.RunnerID != 0 || job.RunnerName != "" || job.Result != "" {
 				return ErrInvalidJobMessage
 			}
 		case MessageTypeJobStarted:
@@ -370,8 +378,20 @@ func validateJobMessages(jobs []JobMessage) error {
 				return ErrInvalidJobMessage
 			}
 		case MessageTypeJobCompleted:
-			if job.RunnerID <= 0 || job.RunnerName == "" ||
-				!validJobCompletionResult(job.Result) {
+			if !validJobCompletionResult(job.Result) {
+				return ErrInvalidJobMessage
+			}
+			// A job canceled before it ever reached a runner legitimately carries
+			// no runner identity, and live GitHub sends exactly that. Accepting it
+			// cannot weaken pickup proof: that query matches only succeeded/failed
+			// completions against an exact non-zero runner ID and name, so an
+			// identity-less canceled completion can never satisfy it. Partial
+			// identity stays invalid, and succeeded/failed still require both.
+			if job.Result == JobResultCanceled &&
+				job.RunnerID == 0 && job.RunnerName == "" {
+				break
+			}
+			if job.RunnerID <= 0 || job.RunnerName == "" {
 				return ErrInvalidJobMessage
 			}
 		default:

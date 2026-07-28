@@ -446,6 +446,13 @@ p {
   color: var(--danger);
   background: color-mix(in srgb, var(--danger) 14%, transparent);
 }
+/* A reduced isolation guarantee is a caution, not a failure: it reads as a
+   warning rather than danger so it is not confused with a broken runner. */
+.badge-shared-identity {
+  color: var(--warning);
+  background: color-mix(in srgb, var(--warning) 16%, transparent);
+  cursor: help;
+}
 .node-identity strong,
 .target-row strong,
 .run-row strong {

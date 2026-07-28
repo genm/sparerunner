@@ -60,6 +60,10 @@ func (consumer *SnapshotConsumer) HandleAgentSnapshot(
 		// "no change reported", not an empty set.
 		AvailabilityIntent: snapshot.AvailabilityIntent,
 		ExcludedTargets:    copiedExclusionSet(snapshot.ExcludedTargets),
+		// The reported runner-isolation mode travels the same way and for the same
+		// reason: dropping it here would leave every node's isolation column NULL
+		// in production while the consumer-level tests still pass.
+		SharedRunnerIdentity: copiedReportedFlag(snapshot.SharedRunnerIdentity),
 		Journal: store.AgentSnapshot{
 			MaxControllerEpoch: snapshot.MaxControllerEpoch,
 			Commands:           append([]domain.Command(nil), snapshot.Commands...),
@@ -116,6 +120,17 @@ func copiedExclusionSet(set *[]domain.TargetID) []domain.TargetID {
 		return nil
 	}
 	return append([]domain.TargetID{}, *set...)
+}
+
+// copiedReportedFlag preserves the nil-versus-present distinction of a reported
+// boolean across the wire-to-store boundary: nil is "not reported" and must not
+// collapse into false, which would claim the stronger isolated mode.
+func copiedReportedFlag(reported *bool) *bool {
+	if reported == nil {
+		return nil
+	}
+	value := *reported
+	return &value
 }
 
 // EnsureStoreBackedRestartNode projects a newly enrolled node from a fresh

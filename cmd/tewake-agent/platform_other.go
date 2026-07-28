@@ -19,6 +19,9 @@ func defaultNativeRunnerOptions() nativeRunnerOptions {
 }
 
 func platformCommandRuntime(options nativeRunnerOptions) (func(context.Context, *app.AgentState) (*app.AgentCommandRuntime, error), error) {
+	if options.SharedRunnerIdentity {
+		return nil, errors.New("--allow-shared-runner-identity is only supported on Linux")
+	}
 	if options.Required {
 		return nil, errors.New("native runner is not implemented for this platform")
 	}

@@ -98,6 +98,58 @@ func TestSnapshotConsumerMapsOwnerStateIntoTheRecordedSnapshot(t *testing.T) {
 	}
 }
 
+// The reported runner-isolation mode reaches production only through this
+// consumer, which replaces the store-backed one in every activated Controller.
+// A live deployment found it silently dropped here while every other test
+// passed, so this asserts the mapping directly and keeps nil distinct from
+// false: nil is "never reported", and reading it as false would claim the
+// stronger isolated mode for a node that has no uid separation at all.
+func TestSnapshotConsumerMapsSharedRunnerIdentityIntoTheRecordedSnapshot(t *testing.T) {
+	controller := restoreForTest(t, store.ControllerSnapshot{
+		ControllerEpoch: 2,
+		Nodes:           []store.NodeAdministration{{NodeID: "node-a", State: domain.NodeActive}},
+	}, Config{Nodes: []NodeDefinition{testNodeDefinition("node-a", 1)}})
+	recorder := &recordingSnapshotStore{}
+	consumer, err := NewSnapshotConsumer(recorder, controller)
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := transport.AgentSnapshot{
+		NodeID:             "node-a",
+		OS:                 domain.OSLinux,
+		Arch:               domain.ArchAMD64,
+		NativeRunnerReady:  true,
+		AvailabilityIntent: domain.AvailabilityAccepting,
+		MaxControllerEpoch: 1,
+	}
+	for _, reported := range []bool{true, false} {
+		snapshot := base
+		snapshot.SharedRunnerIdentity = &reported
+		if err := consumer.HandleAgentSnapshot(context.Background(), snapshot); err != nil {
+			t.Fatal(err)
+		}
+		if recorder.snapshot.SharedRunnerIdentity == nil ||
+			*recorder.snapshot.SharedRunnerIdentity != reported {
+			t.Fatalf(
+				"reported isolation mode %t dropped before the snapshot transaction: %#v",
+				reported, recorder.snapshot.SharedRunnerIdentity)
+		}
+		if recorder.snapshot.SharedRunnerIdentity == &reported {
+			t.Fatal("recorded pointer aliases the caller's wire value")
+		}
+	}
+	absent := base
+	absent.SharedRunnerIdentity = nil
+	if err := consumer.HandleAgentSnapshot(context.Background(), absent); err != nil {
+		t.Fatal(err)
+	}
+	if recorder.snapshot.SharedRunnerIdentity != nil {
+		t.Fatalf(
+			"absent isolation mode fabricated a report: %#v",
+			recorder.snapshot.SharedRunnerIdentity)
+	}
+}
+
 func TestSnapshotConsumerStoreFailureLeavesLastKnownProjectionUntouched(t *testing.T) {
 	controller := restoreForTest(t, store.ControllerSnapshot{
 		ControllerEpoch: 2,

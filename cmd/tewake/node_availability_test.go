@@ -39,6 +39,37 @@ func TestWriteAvailabilityTextRendersTargetsSectionWhenPresent(t *testing.T) {
 	}
 }
 
+// TestWriteAvailabilityTextRendersSharedRunnerIdentityOnlyWhenReported pins the
+// asymmetry: the weaker mode must always be named, and the isolated mode must
+// print nothing rather than a line an operator could misread as a guarantee.
+func TestWriteAvailabilityTextRendersSharedRunnerIdentityOnlyWhenReported(t *testing.T) {
+	var shared bytes.Buffer
+	writeAvailabilityText(&shared, nodectl.Status{
+		NodeID:               "node-1",
+		Intent:               domain.AvailabilityAccepting,
+		ControllerConnected:  true,
+		NativeRunnerReady:    true,
+		SharedRunnerIdentity: true,
+	})
+	const line = "Isolation:  shared runner identity " +
+		"(jobs run as the agent user; no UID isolation)"
+	if !strings.Contains(shared.String(), line) {
+		t.Fatalf("rendered output missing the isolation line: %q", shared.String())
+	}
+
+	var isolated bytes.Buffer
+	writeAvailabilityText(&isolated, nodectl.Status{
+		NodeID:               "node-1",
+		Intent:               domain.AvailabilityAccepting,
+		ControllerConnected:  true,
+		NativeRunnerReady:    true,
+		SharedRunnerIdentity: false,
+	})
+	if strings.Contains(isolated.String(), "Isolation:") {
+		t.Fatalf("isolated node rendered an isolation line: %q", isolated.String())
+	}
+}
+
 func TestWriteAvailabilityTextRendersNoneReportedWhenTargetsAreAbsentOrEmpty(t *testing.T) {
 	empty := []nodectl.EligibleTarget{}
 	for _, targets := range []*[]nodectl.EligibleTarget{nil, &empty} {

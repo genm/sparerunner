@@ -137,13 +137,23 @@ type AgentServeOptions struct {
 	// LocalControl serves the node-local availability endpoint for the tray,
 	// launcher, and CLI. It is disabled by default so an unconfigured owner
 	// identity never widens the Agent's local surface implicitly.
-	LocalControl      AgentLocalControlOptions
-	ConnectionTimeout time.Duration
-	ReconnectDelay    time.Duration
-	HeartbeatInterval time.Duration
-	ReadinessTimeout  time.Duration
-	Logger            *slog.Logger
-	CommandRuntime    func(context.Context, *AgentState) (*AgentCommandRuntime, error)
+	LocalControl AgentLocalControlOptions
+	// SharedRunnerIdentity reports that this node's native runner executes jobs
+	// under the Agent's own uid rather than a dedicated per-runner uid, so the
+	// isolation between the Agent and the job it runs is absent. It is a static
+	// process-level fact set once from the serve flag and reported unchanged to
+	// every observer, so nobody mistakes this weaker mode for the isolated one.
+	//
+	// It is observation only. It must never affect capacity or readiness gating:
+	// admission stays the conjunction of native runner readiness and the owner's
+	// availability intent, exactly as it is without this option.
+	SharedRunnerIdentity bool
+	ConnectionTimeout    time.Duration
+	ReconnectDelay       time.Duration
+	HeartbeatInterval    time.Duration
+	ReadinessTimeout     time.Duration
+	Logger               *slog.Logger
+	CommandRuntime       func(context.Context, *AgentState) (*AgentCommandRuntime, error)
 }
 
 func ServeAgent(ctx context.Context, options AgentServeOptions) error {
@@ -159,7 +169,8 @@ func ServeAgent(ctx context.Context, options AgentServeOptions) error {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	availability, err := newAgentAvailability(ctx, state.Store, domain.NodeID(state.NodeID))
+	availability, err := newAgentAvailability(
+		ctx, state.Store, domain.NodeID(state.NodeID), options.SharedRunnerIdentity)
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil
@@ -310,11 +321,18 @@ func runAgentSessionWithOptions(
 	// set — including an empty one, which must replace stale adopted rows. Only
 	// an Agent without the surface omits the field entirely.
 	var excludedTargets *[]domain.TargetID
+	// A nil pointer is "not reported". Whenever the availability surface exists
+	// the Agent knows this static fact for certain, so it always reports it —
+	// including the isolated false — rather than letting an absent field be read
+	// as either answer.
+	var sharedRunnerIdentity *bool
 	if options.availability != nil {
 		options.availability.setNativeReady(nativeReady)
 		intent = options.availability.Intent()
 		set := options.availability.ExcludedTargets()
 		excludedTargets = &set
+		shared := options.availability.SharedRunnerIdentity()
+		sharedRunnerIdentity = &shared
 	}
 	snapshot, err := buildAgentSnapshot(
 		ctx,
@@ -326,6 +344,7 @@ func runAgentSessionWithOptions(
 		nativeReady && intent.Accepts(),
 		intent,
 		excludedTargets,
+		sharedRunnerIdentity,
 	)
 	if err != nil {
 		return ErrAgentRuntimeDegraded
@@ -356,6 +375,7 @@ func buildAgentSnapshot(
 	nativeRunnerReady bool,
 	availabilityIntent domain.AvailabilityIntent,
 	excludedTargets *[]domain.TargetID,
+	sharedRunnerIdentity *bool,
 ) (transport.AgentSnapshot, error) {
 	if state == nil || state.Store == nil || state.NodeID == "" ||
 		runnerVersion == "" {
@@ -373,9 +393,13 @@ func buildAgentSnapshot(
 		// The owner's exclusion set travels on every snapshot so the controller
 		// adopts it in the same transaction that records the snapshot, before
 		// any capacity is advertised after a reconnect.
-		ExcludedTargets:    excludedTargets,
-		MaxControllerEpoch: journal.MaxControllerEpoch,
-		Commands:           journal.Commands,
+		ExcludedTargets: excludedTargets,
+		// The isolation mode travels with the snapshot so the controller adopts
+		// it in the same transaction that accepts the session, before any
+		// capacity from this node is advertised.
+		SharedRunnerIdentity: sharedRunnerIdentity,
+		MaxControllerEpoch:   journal.MaxControllerEpoch,
+		Commands:             journal.Commands,
 	}
 	snapshot.OS, snapshot.Arch, err = agentPlatform(runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -503,11 +527,14 @@ func runAgentSessionActor(
 			)
 			heartbeatIntent := domain.AvailabilityAccepting
 			var heartbeatExcluded *[]domain.TargetID
+			var heartbeatSharedIdentity *bool
 			if options.availability != nil {
 				options.availability.setNativeReady(heartbeatNativeReady)
 				heartbeatIntent = options.availability.Intent()
 				set := options.availability.ExcludedTargets()
 				heartbeatExcluded = &set
+				shared := options.availability.SharedRunnerIdentity()
+				heartbeatSharedIdentity = &shared
 			}
 			payload, err := transport.EncodeAgentHeartbeat(transport.AgentHeartbeat{
 				NodeID:             nodeID,
@@ -516,6 +543,10 @@ func runAgentSessionActor(
 				// An exclusion made while connected reaches the controller at
 				// heartbeat cadence rather than waiting for the next reconnect.
 				ExcludedTargets: heartbeatExcluded,
+				// Static for the life of the process, but re-reported every tick
+				// so a controller that adopted a node before this field existed
+				// converges without waiting for a reconnect.
+				SharedRunnerIdentity: heartbeatSharedIdentity,
 			})
 			if err != nil {
 				return errors.New("agent heartbeat is invalid")

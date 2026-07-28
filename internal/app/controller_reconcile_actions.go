@@ -12,19 +12,24 @@ import (
 )
 
 // driveNodeReconciliationAction advances at most one action derived from the
-// latest authenticated Agent snapshot. DB-only actions use the snapshot digest
-// as their CAS authority. Network actions commit exact command authority inside
-// AgentBroker before the wire write.
+// latest authenticated Agent snapshot for one exact node. DB-only actions use
+// the snapshot digest as their CAS authority. Network actions commit exact
+// command authority inside AgentBroker before the wire write. The node is the
+// one that owns the claim being reconciled, so a Target served by several nodes
+// can never issue a command against the wrong machine.
 func (coordinator *ControllerRunnerCoordinator) driveNodeReconciliationAction(
 	ctx context.Context,
+	nodeID domain.NodeID,
 ) (handled bool, blocked bool, err error) {
-	admission, err := coordinator.config.Reconciler.Admission(
-		coordinator.config.NodeID)
+	if nodeID == "" {
+		return false, true, errors.New("reconciliation action requires a node")
+	}
+	admission, err := coordinator.config.Reconciler.Admission(nodeID)
 	if err != nil {
 		return false, true, err
 	}
 	for _, action := range admission.Actions {
-		if action.NodeID != coordinator.config.NodeID {
+		if action.NodeID != nodeID {
 			return false, true, errors.New("reconciliation action belongs to another node")
 		}
 		switch action.Kind {
