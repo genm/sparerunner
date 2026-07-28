@@ -70,7 +70,7 @@ func TestJoinCodeCanonicalAndSecretDigest(t *testing.T) {
 	if decoded.TokenID() != code.TokenID() || decoded.secret != code.secret || decoded.CAFingerprint() != fingerprint {
 		t.Fatal("join code changed during canonical round-trip")
 	}
-	for _, malformed := range []string{encoded + "=", encoded + "A", "twk_"} {
+	for _, malformed := range []string{encoded + "=", encoded + "A", "spr_"} {
 		if _, err := DecodeJoinCode(malformed); err == nil {
 			t.Fatalf("accepted noncanonical code %q", malformed[:4])
 		}
@@ -402,7 +402,7 @@ func TestPrivatePersistenceNeverClobbersOrFollowsUnsafePaths(t *testing.T) {
 	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink("/tmp/not-tewake", path); err != nil {
+	if err := os.Symlink("/tmp/not-sparerunner", path); err != nil {
 		t.Fatal(err)
 	}
 	if err := service.Identity.Save(path); err == nil {

@@ -16,7 +16,7 @@ func TestApplicationStateAndJoinOptionsRedactSecretMaterial(t *testing.T) {
 	values := []any{
 		ControllerState{Directory: "/controller", AdminSession: admin, Epoch: 4},
 		AgentState{Directory: "/agent", PrivateKey: []byte(canary), NodeID: "node", Endpoint: "wss://controller.example.test"},
-		JoinOptions{StateDirectory: "/agent", JoinCode: "twk_" + canary, Controller: "https://controller.example.test"},
+		JoinOptions{StateDirectory: "/agent", JoinCode: "spr_" + canary, Controller: "https://controller.example.test"},
 	}
 	for _, value := range values {
 		encoded, err := json.Marshal(value)

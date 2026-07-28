@@ -738,7 +738,7 @@ func TestManagementBackendConsumedJoinCodeCannotImplicitlyRevokeNode(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tokenID) != 32 || !strings.HasPrefix(code, "twk_") {
+	if len(tokenID) != 32 || !strings.HasPrefix(code, "spr_") {
 		t.Fatalf("join delivery = token %q code %q", tokenID, code)
 	}
 	csr := managementTestCSR(t)

@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	JoinCodePrefix    = "twk_"
+	JoinCodePrefix    = "spr_"
 	JoinProtocolV1    = byte(1)
 	joinCodeHeaderLen = 3 + 1 + sha256.Size + 2 + 16 + 32
 )
@@ -44,7 +44,7 @@ type JoinCode struct {
 func (code JoinCode) CAFingerprint() [sha256.Size]byte { return code.caFingerprint }
 func (code JoinCode) TokenID() [16]byte                { return code.tokenID }
 func (code JoinCode) EndpointHints() []string          { return append([]string(nil), code.endpointHints...) }
-func (code JoinCode) String() string                   { return "twk_[redacted]" }
+func (code JoinCode) String() string                   { return "spr_[redacted]" }
 func (code JoinCode) GoString() string                 { return code.String() }
 func (code JoinCode) LogValue() slog.Value             { return slog.StringValue(code.String()) }
 
@@ -84,7 +84,7 @@ func (code JoinCode) Encode() (string, error) {
 		length += len(hint)
 	}
 	payload := make([]byte, 0, length)
-	payload = append(payload, 'T', 'W', 'K', code.version)
+	payload = append(payload, 'S', 'P', 'R', code.version)
 	payload = append(payload, code.caFingerprint[:]...)
 	var count [2]byte
 	binary.BigEndian.PutUint16(count[:], uint16(len(code.endpointHints)))
@@ -114,7 +114,7 @@ func DecodeJoinCode(encoded string) (JoinCode, error) {
 	if err != nil || base64.RawURLEncoding.EncodeToString(payload) != body || len(payload) < joinCodeHeaderLen {
 		return JoinCode{}, ErrInvalidJoinCode
 	}
-	if string(payload[:3]) != "TWK" {
+	if string(payload[:3]) != "SPR" {
 		return JoinCode{}, ErrInvalidJoinCode
 	}
 	if payload[3] != JoinProtocolV1 {
@@ -259,7 +259,7 @@ func zeroBytes(value []byte) bool {
 // boundary. key is separate controller-held state and must be exactly 32 bytes.
 func SecretDigest(key [32]byte, tokenID [16]byte, secret [32]byte) [sha256.Size]byte {
 	mac := hmac.New(sha256.New, key[:])
-	_, _ = mac.Write([]byte("tewake/enrollment/v1\x00"))
+	_, _ = mac.Write([]byte("sparerunner/enrollment/v1\x00"))
 	_, _ = mac.Write(tokenID[:])
 	_, _ = mac.Write(secret[:])
 	var digest [sha256.Size]byte

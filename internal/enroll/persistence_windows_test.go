@@ -61,7 +61,7 @@ func TestWindowsDPAPIRoundTripNoClobberAndIdempotentRemoval(t *testing.T) {
 		t.Fatal("no-clobber failure changed existing private material")
 	}
 	clear(reloaded)
-	matches, err := filepath.Glob(filepath.Join(directory, ".tewake-private-*"))
+	matches, err := filepath.Glob(filepath.Join(directory, ".sparerunner-private-*"))
 	if err != nil {
 		t.Fatal(err)
 	}

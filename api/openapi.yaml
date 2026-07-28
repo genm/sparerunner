@@ -1306,7 +1306,7 @@ components:
           pattern: "^[0-9a-f]{32}$"
         code:
           type: string
-          pattern: "^twk_[A-Za-z0-9_-]+$"
+          pattern: "^spr_[A-Za-z0-9_-]+$"
     FieldError:
       type: object
       required: [field, code, message]

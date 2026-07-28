@@ -13,7 +13,7 @@ import (
 	"github.com/hashicorp/mdns"
 )
 
-const DiscoveryService = "_tewake._tcp"
+const DiscoveryService = "_sparerunner._tcp"
 
 type EndpointCandidate struct{ Address string }
 
