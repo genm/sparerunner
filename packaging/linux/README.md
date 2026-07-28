@@ -12,9 +12,9 @@ The native Linux adapter requires:
 - the unified cgroup v2 hierarchy;
 - a kernel that exposes `cgroup.kill` for delegated non-root cgroups (Linux
   5.14 or newer);
-- an unprivileged non-login `tewake-agent` account;
+- an unprivileged non-login `sparerunner-agent` account;
 - a separate root Supervisor service and a non-login account for each concrete
-  runner slot. The initial package declares `tewake-runner-0`.
+  runner slot. The initial package declares `sparerunner-runner-0`.
 
 Unsupported or partially delegated cgroups fail closed: the node may stay
 connected for diagnostics, but it must not advertise or start a native runner.
@@ -24,7 +24,7 @@ set to `root`. systemd changes a delegated service cgroup's ownership to the
 configured service user and group; using the Agent group there would make the
 trusted cgroup boundary writable by that unprivileged group and would correctly
 fail Supervisor startup. The package's tmpfiles rule independently creates
-`/run/tewake-supervisor` as `root:tewake-agent 0750` so the Agent can reach the
+`/run/sparerunner-supervisor` as `root:sparerunner-agent 0750` so the Agent can reach the
 peer-authenticated local socket. The unit must not use `RuntimeDirectory=`:
 systemd reapplies the service's primary `root:root` ownership after
 `ExecStartPre=`, which would make the socket directory fail its exact ownership
@@ -32,7 +32,7 @@ check. The delegated cgroup itself remains `root:root`.
 
 The network-facing Agent parses mTLS and GitHub-derived messages without root
 privileges. The Supervisor accepts a versioned fixed-operation protocol only on
-`/run/tewake-supervisor/supervisor.sock`, verifies the peer UID with
+`/run/sparerunner-supervisor/supervisor.sock`, verifies the peer UID with
 `SO_PEERCRED`, and derives all paths, arguments, and slot credentials from its
 own service configuration. The Agent cannot ask it to execute an arbitrary
 command or select a UID.
@@ -56,11 +56,11 @@ quarantines the Node until reconciliation proves the containment and workspace
 are gone.
 
 For non-secret runtime inspection, let `CG` be
-`systemctl show --property=ControlGroup --value tewake-supervisor.service`.
+`systemctl show --property=ControlGroup --value sparerunner-supervisor.service`.
 Every admitted listener and descendant has the unified `/proc/<pid>/cgroup`
-path `CG/tewake/tewake-<sha256(executionID)>`, where the digest is 64 lowercase
+path `CG/sparerunner/sparerunner-<sha256(executionID)>`, where the digest is 64 lowercase
 hex characters. The listener's real UID is exactly the packaged
-`tewake-runner-0` UID. A matching argv basename alone is not ownership evidence.
+`sparerunner-runner-0` UID. A matching argv basename alone is not ownership evidence.
 `Alive` first validates the exact durable fence and cgroup, then reports true
 only when the journaled listener PID is present in that cgroup's
 `cgroup.procs`. An exact launched cgroup that is empty, or still populated only
@@ -72,13 +72,13 @@ the complete descendant boundary.
 
 | Path | Owner/mode | Purpose |
 |---|---|---|
-| `/run/tewake-supervisor` | `root:tewake-agent 0750` | volatile parent of the peer-authenticated local socket |
-| `/var/lib/tewake-agent` | `tewake-agent 0700` | enrollment state and Agent SQLite |
-| `/var/cache/tewake-agent` | `tewake-agent 0700` | verified official runner package cache |
-| `/var/lib/tewake-supervisor/fences` | `root:root 0700` | durable start/stop fences |
-| `/var/lib/tewake-runtime` | `root:root 0711` | pinned persistent execution-root parent |
-| `/var/lib/tewake-runtime/executions/<digest>` | slot user `0700` | one execution; removed after verified cleanup |
-| `/var/lib/tewake-runner/0` | `tewake-runner-0 0700` | unused non-login account metadata home; jobs receive an execution-local `HOME` |
+| `/run/sparerunner-supervisor` | `root:sparerunner-agent 0750` | volatile parent of the peer-authenticated local socket |
+| `/var/lib/sparerunner-agent` | `sparerunner-agent 0700` | enrollment state and Agent SQLite |
+| `/var/cache/sparerunner-agent` | `sparerunner-agent 0700` | verified official runner package cache |
+| `/var/lib/sparerunner-supervisor/fences` | `root:root 0700` | durable start/stop fences |
+| `/var/lib/sparerunner-runtime` | `root:root 0711` | pinned persistent execution-root parent |
+| `/var/lib/sparerunner-runtime/executions/<digest>` | slot user `0700` | one execution; removed after verified cleanup |
+| `/var/lib/sparerunner-runner/0` | `sparerunner-runner-0 0700` | unused non-login account metadata home; jobs receive an execution-local `HOME` |
 
 The shared package cache is never traversable by a slot user and is not package
 authority for the privileged boundary. The root Supervisor fixes the expected
@@ -95,23 +95,23 @@ or a persistent runner home is never launch authority.
 Distribution packages install:
 
 ```text
-/usr/local/bin/tewake-agent
-/usr/lib/systemd/system/tewake-agent.service
-/usr/lib/systemd/system/tewake-supervisor.service
-/usr/lib/sysusers.d/tewake.conf
-/usr/lib/tmpfiles.d/tewake.conf
+/usr/local/bin/sparerunner-agent
+/usr/lib/systemd/system/sparerunner-agent.service
+/usr/lib/systemd/system/sparerunner-supervisor.service
+/usr/lib/sysusers.d/sparerunner.conf
+/usr/lib/tmpfiles.d/sparerunner.conf
 ```
 
 Then they run:
 
 ```bash
-systemd-sysusers /usr/lib/sysusers.d/tewake.conf
-systemd-tmpfiles --create /usr/lib/tmpfiles.d/tewake.conf
+systemd-sysusers /usr/lib/sysusers.d/sparerunner.conf
+systemd-tmpfiles --create /usr/lib/tmpfiles.d/sparerunner.conf
 systemctl daemon-reload
-systemctl enable --now tewake-supervisor.service tewake-agent.service
+systemctl enable --now sparerunner-supervisor.service sparerunner-agent.service
 ```
 
-Enrollment material must already exist in `/var/lib/tewake-agent`; installation
+Enrollment material must already exist in `/var/lib/sparerunner-agent`; installation
 does not synthesize credentials or copy a private key from another user.
 
 ## Native isolation limitation
@@ -123,12 +123,12 @@ actions, and dependencies.
 `HOME`, XDG cache/config paths, and `TMPDIR` are disposable per execution. The
 systemd `PrivateTmp` namespace belongs to the Supervisor service, not to one job;
 a workflow that ignores `TMPDIR` and writes an absolute `/tmp` path can therefore
-leave data visible to a later trusted job. Tewake does not claim job-level mount
+leave data visible to a later trusted job. SpareRunner does not claim job-level mount
 isolation in native mode.
 
 The initial package provisions one slot and therefore admits one native runner at
 a time. Raising `node.maxRunners` requires provisioning the matching fixed
-`tewake-runner-N` accounts and homes first; the Agent must not advertise a slot
+`sparerunner-runner-N` accounts and homes first; the Agent must not advertise a slot
 whose dedicated identity is absent. Reusing one UID for multiple concurrent slots
 is forbidden because the official runner receives JIT material through its
 transient command line and writes credentials beneath its execution root.

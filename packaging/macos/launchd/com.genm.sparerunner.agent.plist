@@ -4,15 +4,15 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.genm.tewake.agent</string>
+  <string>com.genm.sparerunner.agent</string>
 
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/local/libexec/tewake-agent</string>
+    <string>/usr/local/libexec/sparerunner-agent</string>
     <string>serve</string>
-    <string>--state-dir=/Library/Application Support/Tewake/agent</string>
-    <string>--cache-root=/Library/Caches/com.genm.tewake/runner</string>
-    <string>--runtime-root=/Library/Application Support/Tewake/runtime</string>
+    <string>--state-dir=/Library/Application Support/SpareRunner/agent</string>
+    <string>--cache-root=/Library/Caches/com.genm.sparerunner/runner</string>
+    <string>--runtime-root=/Library/Application Support/SpareRunner/runtime</string>
     <string>--require-native-runner</string>
   </array>
 

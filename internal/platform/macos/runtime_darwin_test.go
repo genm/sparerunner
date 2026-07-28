@@ -300,11 +300,11 @@ func testFileRuntime(t *testing.T, processes processSource) *FileRuntime {
 
 func testContainment(seed, hostEpoch string) runner.ContainmentRef {
 	// Construct canonical lowercase hex without hiding the test's seed.
-	owner := "tewake-" + seed + "000000000000000000000000000000000000000000000000000000000000000"
+	owner := "sparerunner-" + seed + "000000000000000000000000000000000000000000000000000000000000000"
 	return runner.ContainmentRef{
 		Backend:    containmentBackend,
 		OwnerID:    owner,
-		Scope:      "tewake/" + owner,
+		Scope:      "sparerunner/" + owner,
 		HostEpoch:  hostEpoch,
 		FenceToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}

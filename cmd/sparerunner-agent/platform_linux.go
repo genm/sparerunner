@@ -17,7 +17,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-const defaultLinuxRunnerUser = "tewake-runner-0"
+const defaultLinuxRunnerUser = "sparerunner-runner-0"
 
 func runPlatformLauncherHelper(args []string) (bool, error) {
 	return linux.RunExecLauncherHelper(args)
@@ -25,9 +25,9 @@ func runPlatformLauncherHelper(args []string) (bool, error) {
 
 func defaultNativeRunnerOptions() nativeRunnerOptions {
 	return nativeRunnerOptions{
-		CacheRoot:        "/var/cache/tewake-agent",
-		RuntimeRoot:      "/var/lib/tewake-runtime",
-		SupervisorSocket: "/run/tewake-supervisor/supervisor.sock",
+		CacheRoot:        "/var/cache/sparerunner-agent",
+		RuntimeRoot:      "/var/lib/sparerunner-runtime",
+		SupervisorSocket: "/run/sparerunner-supervisor/supervisor.sock",
 	}
 }
 
@@ -253,7 +253,7 @@ func userDataRoot() (string, error) {
 	if err != nil || !filepath.IsAbs(home) {
 		return "", errors.New("resolve user home directory for shared runner identity roots")
 	}
-	return filepath.Join(filepath.Clean(home), ".local", "share", "tewake"), nil
+	return filepath.Join(filepath.Clean(home), ".local", "share", "sparerunner"), nil
 }
 
 type officialPackageCache interface {
@@ -336,12 +336,12 @@ func platformCommands() []*cobra.Command {
 			return server.Serve(command.Context(), listener)
 		},
 	}
-	command.Flags().StringVar(&socketPath, "socket", "/run/tewake-supervisor/supervisor.sock", "root-created local Agent socket")
-	command.Flags().StringVar(&runtimeRoot, "runtime-root", "/var/lib/tewake-runtime", "root-owned runner execution root")
-	command.Flags().StringVar(&cacheRoot, "cache-root", "/var/cache/tewake-agent", "Agent-owned official runner archive cache")
-	command.Flags().StringVar(&fenceRoot, "fence-root", "/var/lib/tewake-supervisor/fences", "root-only durable fence directory")
+	command.Flags().StringVar(&socketPath, "socket", "/run/sparerunner-supervisor/supervisor.sock", "root-created local Agent socket")
+	command.Flags().StringVar(&runtimeRoot, "runtime-root", "/var/lib/sparerunner-runtime", "root-owned runner execution root")
+	command.Flags().StringVar(&cacheRoot, "cache-root", "/var/cache/sparerunner-agent", "Agent-owned official runner archive cache")
+	command.Flags().StringVar(&fenceRoot, "fence-root", "/var/lib/sparerunner-supervisor/fences", "root-only durable fence directory")
 	command.Flags().StringVar(&runnerUser, "runner-user", defaultLinuxRunnerUser, "dedicated native runner slot account")
-	command.Flags().StringVar(&agentUser, "agent-user", "tewake-agent", "unprivileged Agent account")
+	command.Flags().StringVar(&agentUser, "agent-user", "sparerunner-agent", "unprivileged Agent account")
 	return []*cobra.Command{command}
 }
 

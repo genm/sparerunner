@@ -15,7 +15,7 @@ import (
 // weakening that boundary merely to exercise Supervisor shutdown.
 func TestHelperServeShutdownInvokesGlobalRuntimeCleanup(t *testing.T) {
 	server, runtime, policy := directFenceServer(t)
-	socketDirectory, err := os.MkdirTemp("/run", "tewake-shutdown-test-")
+	socketDirectory, err := os.MkdirTemp("/run", "sparerunner-shutdown-test-")
 	if err != nil {
 		t.Fatal(err)
 	}

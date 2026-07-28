@@ -22,8 +22,8 @@ import (
 )
 
 const (
-	BootstrapPipeName    = `\\.\pipe\TewakeEnroll`
-	AgentServiceName     = "TewakeAgent"
+	BootstrapPipeName    = `\\.\pipe\SpareRunnerEnroll`
+	AgentServiceName     = "SpareRunnerAgent"
 	bootstrapProtocolV1  = 1
 	maxBootstrapFrame    = 64 << 10
 	pipeAccessDuplex     = 0x00000003
@@ -43,7 +43,7 @@ var (
 )
 
 func bootstrapIdentityError(reason string) error {
-	if os.Getenv("TEWAKE_WINDOWS_DEBUG") == "1" {
+	if os.Getenv("SPARERUNNER_WINDOWS_DEBUG") == "1" {
 		return fmt.Errorf("%w: %s", ErrBootstrapIdentity, reason)
 	}
 	return ErrBootstrapIdentity
@@ -87,7 +87,7 @@ type BootstrapRequest struct {
 }
 
 // ReceiveBootstrapRequest accepts one local elevated client. Production calls
-// require the receiver to be the LocalSystem TewakeAgent service so an
+// require the receiver to be the LocalSystem SpareRunnerAgent service so an
 // installer or interactive account can never become DPAPI authority.
 func ReceiveBootstrapRequest(ctx context.Context) (*BootstrapRequest, error) {
 	return receiveBootstrapRequest(ctx, true)
@@ -274,7 +274,7 @@ func (request *BootstrapRequest) monitorClient() {
 }
 
 // SubmitBootstrapJoin sends the capability only after verifying that the pipe
-// server PID is the running LocalSystem TewakeAgent SCM service.
+// server PID is the running LocalSystem SpareRunnerAgent SCM service.
 func SubmitBootstrapJoin(
 	ctx context.Context,
 	options BootstrapJoinOptions,

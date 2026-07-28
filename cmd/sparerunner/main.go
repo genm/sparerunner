@@ -235,7 +235,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 }
 
 func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
-	const macOSServiceState = "/Library/Application Support/Tewake/agent"
+	const macOSServiceState = "/Library/Application Support/SpareRunner/agent"
 	switch {
 	case goos == "windows":
 		fmt.Fprintln(output, "SpareRunnerAgent service is enrolled and running.")
@@ -245,7 +245,7 @@ func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
 		// Windows drive-relative path while preserving the Darwin service hint.
 		fmt.Fprintln(
 			output,
-			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent",
 		)
 	default:
 		fmt.Fprintf(output, "Start it with: sparerunner-agent serve --state-dir %s\n", stateDirectory)

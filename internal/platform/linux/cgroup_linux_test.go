@@ -27,7 +27,7 @@ func finalizedFenceTestRuntime(t *testing.T) (*FileRuntime, runner.ContainmentRe
 	if os.Geteuid() != 0 {
 		t.Skip("root-owned finalized fence test requires root")
 	}
-	fenceRoot, err := os.MkdirTemp("/var/lib", "tewake-finalized-fence-test-")
+	fenceRoot, err := os.MkdirTemp("/var/lib", "sparerunner-finalized-fence-test-")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +40,7 @@ func finalizedFenceTestRuntime(t *testing.T) (*FileRuntime, runner.ContainmentRe
 		t.Fatal(err)
 	}
 	cgroupRoot := t.TempDir()
-	if err := os.Mkdir(filepath.Join(cgroupRoot, "tewake"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(cgroupRoot, "sparerunner"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	epoch, err := currentBootEpoch()
@@ -50,7 +50,7 @@ func finalizedFenceTestRuntime(t *testing.T) (*FileRuntime, runner.ContainmentRe
 	containment := runner.ContainmentRef{
 		Backend:    containmentBackend,
 		OwnerID:    containmentOwner("finalized-fence-test"),
-		Scope:      filepath.Join("tewake", containmentOwner("finalized-fence-test")),
+		Scope:      filepath.Join("sparerunner", containmentOwner("finalized-fence-test")),
 		HostEpoch:  epoch,
 		FenceToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -441,13 +441,13 @@ func TestFileFenceFinalizedOwnerMismatchFailsClosed(t *testing.T) {
 
 func TestDelegatedCgroupRootUsesOnlyCanonicalUnifiedMembership(t *testing.T) {
 	root, err := delegatedCgroupRoot(
-		[]byte("0::/system.slice/tewake-agent-supervisor.service\n"),
+		[]byte("0::/system.slice/sparerunner-agent-supervisor.service\n"),
 		[]byte(testCgroup2MountInfo),
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := filepath.Join("/sys/fs/cgroup", "system.slice", "tewake-agent-supervisor.service")
+	expected := filepath.Join("/sys/fs/cgroup", "system.slice", "sparerunner-agent-supervisor.service")
 	if root != expected {
 		t.Fatalf("root=%q want=%q", root, expected)
 	}
@@ -461,17 +461,17 @@ func TestDelegatedCgroupRootRejectsAmbiguousOrUnsafeProcState(t *testing.T) {
 	}{
 		{
 			name:       "multiple memberships",
-			membership: "0::/system.slice/tewake.service\n0::/other\n",
+			membership: "0::/system.slice/sparerunner.service\n0::/other\n",
 			mounts:     testCgroup2MountInfo,
 		},
 		{
 			name:       "v1 membership",
-			membership: "5:cpu:/system.slice/tewake.service\n",
+			membership: "5:cpu:/system.slice/sparerunner.service\n",
 			mounts:     testCgroup2MountInfo,
 		},
 		{
 			name:       "hybrid membership",
-			membership: "0::/system.slice/tewake.service\n5:cpu:/system.slice/tewake.service\n",
+			membership: "0::/system.slice/sparerunner.service\n5:cpu:/system.slice/sparerunner.service\n",
 			mounts:     testCgroup2MountInfo,
 		},
 		{
@@ -486,27 +486,27 @@ func TestDelegatedCgroupRootRejectsAmbiguousOrUnsafeProcState(t *testing.T) {
 		},
 		{
 			name:       "noncanonical path",
-			membership: "0::/system.slice//tewake.service\n",
+			membership: "0::/system.slice//sparerunner.service\n",
 			mounts:     testCgroup2MountInfo,
 		},
 		{
 			name:       "no cgroup2 mount",
-			membership: "0::/system.slice/tewake.service\n",
+			membership: "0::/system.slice/sparerunner.service\n",
 			mounts:     "31 24 0:27 / /sys/fs/cgroup rw - tmpfs tmpfs rw\n",
 		},
 		{
 			name:       "multiple cgroup2 mounts",
-			membership: "0::/system.slice/tewake.service\n",
+			membership: "0::/system.slice/sparerunner.service\n",
 			mounts:     testCgroup2MountInfo + testCgroup2MountInfo,
 		},
 		{
 			name:       "subtree cgroup mount",
-			membership: "0::/system.slice/tewake.service\n",
+			membership: "0::/system.slice/sparerunner.service\n",
 			mounts:     "31 24 0:27 /system.slice /sys/fs/cgroup rw - cgroup2 cgroup2 rw\n",
 		},
 		{
 			name:       "unsupported mount escape",
-			membership: "0::/system.slice/tewake.service\n",
+			membership: "0::/system.slice/sparerunner.service\n",
 			mounts:     "31 24 0:27 / /sys/fs/cgroup\\057evil rw - cgroup2 cgroup2 rw\n",
 		},
 	}
@@ -536,8 +536,8 @@ func TestCgroupEventsRequireUnambiguousPopulationData(t *testing.T) {
 
 func TestSlotAdmissionTreatsOtherEmptyCgroupAsCleanupResidue(t *testing.T) {
 	root := t.TempDir()
-	tewakeRoot := filepath.Join(root, "tewake")
-	if err := os.Mkdir(tewakeRoot, 0o755); err != nil {
+	sparerunnerRoot := filepath.Join(root, "sparerunner")
+	if err := os.Mkdir(sparerunnerRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	candidateOwner := containmentOwner("candidate")
@@ -558,7 +558,7 @@ func TestSlotAdmissionTreatsOtherEmptyCgroupAsCleanupResidue(t *testing.T) {
 
 func TestSlotAdmissionRejectsPopulatedCandidate(t *testing.T) {
 	root := t.TempDir()
-	if err := os.Mkdir(filepath.Join(root, "tewake"), 0o755); err != nil {
+	if err := os.Mkdir(filepath.Join(root, "sparerunner"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	candidate := testSlotCgroup(t, root, containmentOwner("candidate"), true)
@@ -575,7 +575,7 @@ func testSlotCgroup(t *testing.T, root, owner string, populated bool) runner.Con
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory := filepath.Join(root, "tewake", owner)
+	directory := filepath.Join(root, "sparerunner", owner)
 	if err := os.Mkdir(directory, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -596,7 +596,7 @@ func testSlotCgroup(t *testing.T, root, owner string, populated bool) runner.Con
 	return runner.ContainmentRef{
 		Backend:   containmentBackend,
 		OwnerID:   owner,
-		Scope:     filepath.Join("tewake", owner),
+		Scope:     filepath.Join("sparerunner", owner),
 		HostEpoch: epoch,
 	}
 }
@@ -624,7 +624,7 @@ func TestLauncherReaperWaitsAndRemovesExitedChild(t *testing.T) {
 }
 
 func TestExecLauncherRejectsAgentWritableHelperBinary(t *testing.T) {
-	helper := filepath.Join(t.TempDir(), "tewake-agent")
+	helper := filepath.Join(t.TempDir(), "sparerunner-agent")
 	if err := os.WriteFile(helper, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -657,10 +657,10 @@ func TestRunnerEnvironmentScopesHomeAndTemporaryStateToPinnedExecution(t *testin
 	}
 	joined := strings.Join(environment, "\n")
 	for _, required := range []string{
-		"HOME=/proc/self/fd/4/.tewake-home",
-		"XDG_CACHE_HOME=/proc/self/fd/4/.tewake-home/.cache",
-		"XDG_CONFIG_HOME=/proc/self/fd/4/.tewake-home/.config",
-		"TMPDIR=/proc/self/fd/4/.tewake-home/.tmp",
+		"HOME=/proc/self/fd/4/.sparerunner-home",
+		"XDG_CACHE_HOME=/proc/self/fd/4/.sparerunner-home/.cache",
+		"XDG_CONFIG_HOME=/proc/self/fd/4/.sparerunner-home/.config",
+		"TMPDIR=/proc/self/fd/4/.sparerunner-home/.tmp",
 	} {
 		if !strings.Contains(joined, required) {
 			t.Fatalf("execution-scoped environment missing %q: %s", required, joined)
@@ -673,7 +673,7 @@ func TestRunnerEnvironmentScopesHomeAndTemporaryStateToPinnedExecution(t *testin
 }
 
 func TestPinnedLauncherHelperProcess(t *testing.T) {
-	if os.Getenv("TEWAKE_PINNED_HELPER_PROCESS") != "1" {
+	if os.Getenv("SPARERUNNER_PINNED_HELPER_PROCESS") != "1" {
 		return
 	}
 	handled, err := RunExecLauncherHelper([]string{
@@ -693,7 +693,7 @@ func TestPinnedLauncherIgnoresNameSwapAndSeparatesJobHome(t *testing.T) {
 	if err := os.Rename(first.root, original); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.MkdirAll(filepath.Join(first.root, ".tewake-home", ".tmp"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Join(first.root, ".sparerunner-home", ".tmp"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(first.root, "run.sh"), []byte("#!/bin/sh\nexit 91\n"), 0o700); err != nil {
@@ -705,7 +705,7 @@ func TestPinnedLauncherIgnoresNameSwapAndSeparatesJobHome(t *testing.T) {
 	second := newLauncherExecution(t, false)
 	runPinnedLauncherHelper(t, second)
 	assertLauncherResult(t, second.root, "clean")
-	if _, err := os.Lstat(filepath.Join(second.root, ".tewake-home", "canary")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Lstat(filepath.Join(second.root, ".sparerunner-home", "canary")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("first job HOME canary crossed into second execution: %v", err)
 	}
 }
@@ -720,17 +720,17 @@ func newLauncherExecution(t *testing.T, canary bool) launcherExecution {
 	t.Helper()
 	root := t.TempDir()
 	for _, name := range []string{
-		".tewake-home",
-		".tewake-home/.config",
-		".tewake-home/.cache",
-		".tewake-home/.tmp",
+		".sparerunner-home",
+		".sparerunner-home/.config",
+		".sparerunner-home/.cache",
+		".sparerunner-home/.tmp",
 	} {
 		if err := os.MkdirAll(filepath.Join(root, name), 0o700); err != nil {
 			t.Fatal(err)
 		}
 	}
 	if canary {
-		if err := os.WriteFile(filepath.Join(root, ".tewake-home", "canary"), []byte("first job"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(root, ".sparerunner-home", "canary"), []byte("first job"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -789,7 +789,7 @@ func runPinnedLauncherHelper(t *testing.T, execution launcherExecution) {
 		t.Fatal(err)
 	}
 	command := exec.Command(os.Args[0], "-test.run=^TestPinnedLauncherHelperProcess$")
-	command.Env = append(environment, "TEWAKE_PINNED_HELPER_PROCESS=1")
+	command.Env = append(environment, "SPARERUNNER_PINNED_HELPER_PROCESS=1")
 	command.Stdin = strings.NewReader("one-job-jit")
 	command.ExtraFiles = []*os.File{statusWriter, execution.directory, execution.executable}
 	if err := command.Start(); err != nil {
@@ -806,11 +806,11 @@ func runPinnedLauncherHelper(t *testing.T, execution launcherExecution) {
 
 func assertLauncherResult(t *testing.T, root, state string) {
 	t.Helper()
-	result, err := os.ReadFile(filepath.Join(root, ".tewake-home", "result"))
+	result, err := os.ReadFile(filepath.Join(root, ".sparerunner-home", "result"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected := state + "|/proc/self/fd/4/.tewake-home|/proc/self/fd/4/.tewake-home/.tmp\n"
+	expected := state + "|/proc/self/fd/4/.sparerunner-home|/proc/self/fd/4/.sparerunner-home/.tmp\n"
 	if string(result) != expected {
 		t.Fatalf("launcher result=%q want=%q", result, expected)
 	}

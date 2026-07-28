@@ -228,8 +228,8 @@ func TestRootlessAdapterRejectsUnfencedContainment(t *testing.T) {
 	adapter := newRootlessAdapter(t, newTestRuntime(), newSharedTestWorkspace())
 	unfenced := runner.ContainmentRef{
 		Backend:   containmentBackend,
-		OwnerID:   "tewake-x",
-		Scope:     "tewake/tewake-x",
+		OwnerID:   "sparerunner-x",
+		Scope:     "sparerunner/sparerunner-x",
 		HostEpoch: "boot-test",
 	}
 	if _, err := adapter.Start(context.Background(), runner.StartRequest{Containment: unfenced}); !errors.Is(err, runner.ErrStrongOwnershipUnavailable) {

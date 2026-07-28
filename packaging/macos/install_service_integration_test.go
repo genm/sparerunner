@@ -42,29 +42,29 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 
 		stateMarker := filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake/.tewake-install-ownership-v1",
+			"Library/Application Support/SpareRunner/.sparerunner-install-ownership-v1",
 		)
 		cacheMarker := filepath.Join(
 			harness.root,
-			"Library/Caches/com.genm.tewake/.tewake-install-ownership-v1",
+			"Library/Caches/com.genm.sparerunner/.sparerunner-install-ownership-v1",
 		)
 		requireFileContents(t, stateMarker, markerFixture(
 			installerTestID,
 			"agent-state",
-			"/Library/Application Support/Tewake",
+			"/Library/Application Support/SpareRunner",
 		))
 		requireFileContents(t, cacheMarker, markerFixture(
 			installerTestID,
 			"agent-cache",
-			"/Library/Caches/com.genm.tewake",
+			"/Library/Caches/com.genm.sparerunner",
 		))
 		requireFileContents(t, filepath.Join(
 			harness.helper,
-			"dscl/Groups/tewake-runner-0/RealName",
-		), "Tewake native runner slot 0 ["+installerTestID+"]")
+			"dscl/Groups/sparerunner-runner-0/RealName",
+		), "SpareRunner native runner slot 0 ["+installerTestID+"]")
 		requireFileContents(t, filepath.Join(
 			harness.helper,
-			"dscl/Users/tewake-runner-0/UserShell",
+			"dscl/Users/sparerunner-runner-0/UserShell",
 		), "/usr/bin/false")
 
 		mutations := harness.mutationLines(t)
@@ -93,14 +93,14 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 	t.Run("Directory Services read failure is not absence", func(t *testing.T) {
 		t.Parallel()
 		harness := newInstallerHarness(t)
-		writeDSCLRecord(t, harness.helper, "Groups", "tewake-runner-0", map[string]string{
+		writeDSCLRecord(t, harness.helper, "Groups", "sparerunner-runner-0", map[string]string{
 			"PrimaryGroupID": "500",
 			"RealName":       "Foreign local group",
 			"Password":       "*",
 		})
 		if err := os.WriteFile(
 			filepath.Join(harness.helper, "dscl-read-fail"),
-			[]byte("/Groups/tewake-runner-0\n"),
+			[]byte("/Groups/sparerunner-runner-0\n"),
 			0o600,
 		); err != nil {
 			t.Fatal(err)
@@ -110,7 +110,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness.requireNoMutations(t)
 		requireFileContents(
 			t,
-			filepath.Join(harness.helper, "dscl/Groups/tewake-runner-0/RealName"),
+			filepath.Join(harness.helper, "dscl/Groups/sparerunner-runner-0/RealName"),
 			"Foreign local group",
 		)
 	})
@@ -124,7 +124,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 			prefix: func(h installerHarness) string {
 				return "mkdir -m 0700 " + filepath.Join(
 					h.root,
-					"Library/Application Support/Tewake/agent",
+					"Library/Application Support/SpareRunner/agent",
 				)
 			},
 		},
@@ -133,7 +133,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 			prefix: func(h installerHarness) string {
 				marker := filepath.Join(
 					h.root,
-					"Library/Application Support/Tewake/.tewake-install-ownership-v1",
+					"Library/Application Support/SpareRunner/.sparerunner-install-ownership-v1",
 				)
 				return "ln " + marker + ".tmp-" + installerTestID + " " + marker
 			},
@@ -141,7 +141,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		{
 			name: "Directory Services attribute",
 			prefix: func(installerHarness) string {
-				return "dscl-create /Groups/tewake-runner-0 PrimaryGroupID"
+				return "dscl-create /Groups/sparerunner-runner-0 PrimaryGroupID"
 			},
 		},
 		{
@@ -155,7 +155,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 			prefix: func(h installerHarness) string {
 				target := filepath.Join(
 					h.root,
-					"Library/LaunchDaemons/com.genm.tewake.agent.plist",
+					"Library/LaunchDaemons/com.genm.sparerunner.agent.plist",
 				)
 				return "ln " + target + ".tmp-" + installerTestID + " " + target
 			},
@@ -182,12 +182,12 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 				t,
 				filepath.Join(
 					harness.root,
-					"Library/Application Support/Tewake/.tewake-install-ownership-v1",
+					"Library/Application Support/SpareRunner/.sparerunner-install-ownership-v1",
 				),
 				markerFixture(
 					installerTestID,
 					"agent-state",
-					"/Library/Application Support/Tewake",
+					"/Library/Application Support/SpareRunner",
 				),
 			)
 		})
@@ -198,16 +198,16 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness := newInstallerHarness(t)
 		makeDirectory(t, filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake",
+			"Library/Application Support/SpareRunner",
 		), 0o711)
 		makeDirectory(t, filepath.Join(
 			harness.root,
-			"Library/Caches/com.genm.tewake",
+			"Library/Caches/com.genm.sparerunner",
 		), 0o700)
 		if err := os.WriteFile(filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake/foreign.txt",
-		), []byte("not Tewake state"), 0o600); err != nil {
+			"Library/Application Support/SpareRunner/foreign.txt",
+		), []byte("not SpareRunner state"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 
@@ -220,7 +220,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness := newInstallerHarness(t)
 		makeDirectory(t, filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake",
+			"Library/Application Support/SpareRunner",
 		), 0o711)
 
 		harness.run(t, false)
@@ -232,7 +232,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness := newInstallerHarness(t)
 		if err := os.WriteFile(filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake",
+			"Library/Application Support/SpareRunner",
 		), []byte("foreign leaf"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -277,12 +277,12 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness.prepareRetry(t)
 		marker := filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake/.tewake-install-ownership-v1",
+			"Library/Application Support/SpareRunner/.sparerunner-install-ownership-v1",
 		)
 		if err := os.WriteFile(marker, []byte(markerFixture(
 			installerTestID,
 			"controller-state",
-			"/Library/Application Support/Tewake",
+			"/Library/Application Support/SpareRunner",
 		)), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +298,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness.prepareRetry(t)
 		if err := os.Chmod(filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake/agent",
+			"Library/Application Support/SpareRunner/agent",
 		), 0o755); err != nil {
 			t.Fatal(err)
 		}
@@ -314,7 +314,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness.prepareRetry(t)
 		setStatOverride(t, harness.helper, filepath.Join(
 			harness.root,
-			"Library/Application Support/Tewake/agent",
+			"Library/Application Support/SpareRunner/agent",
 		), "501:20:40700")
 
 		harness.run(t, false)
@@ -324,12 +324,12 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 	t.Run("foreign account and group", func(t *testing.T) {
 		t.Parallel()
 		harness := newInstallerHarness(t)
-		writeDSCLRecord(t, harness.helper, "Groups", "tewake-runner-0", map[string]string{
+		writeDSCLRecord(t, harness.helper, "Groups", "sparerunner-runner-0", map[string]string{
 			"PrimaryGroupID": "500",
 			"RealName":       "Existing local group",
 			"Password":       "*",
 		})
-		writeDSCLRecord(t, harness.helper, "Users", "tewake-runner-0", map[string]string{
+		writeDSCLRecord(t, harness.helper, "Users", "sparerunner-runner-0", map[string]string{
 			"UniqueID":                "501",
 			"PrimaryGroupID":          "500",
 			"RealName":                "Existing local user",
@@ -349,7 +349,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness := newInstallerHarness(t)
 		target := filepath.Join(
 			harness.root,
-			"Library/LaunchDaemons/com.genm.tewake.agent.plist",
+			"Library/LaunchDaemons/com.genm.sparerunner.agent.plist",
 		)
 		if err := os.WriteFile(target, []byte("foreign plist"), 0o600); err != nil {
 			t.Fatal(err)
@@ -395,7 +395,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 		harness.prepareRetry(t)
 		realName := filepath.Join(
 			harness.helper,
-			"dscl/Groups/tewake-runner-0/RealName",
+			"dscl/Groups/sparerunner-runner-0/RealName",
 		)
 		if err := os.WriteFile(realName, []byte("Foreign group"), 0o600); err != nil {
 			t.Fatal(err)
@@ -434,13 +434,13 @@ func newInstallerHarness(t *testing.T) installerHarness {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(root, ".tewake-installer-test-root"),
+		filepath.Join(root, ".sparerunner-installer-test-root"),
 		[]byte("test-only\n"),
 		0o600,
 	); err != nil {
 		t.Fatal(err)
 	}
-	binary := filepath.Join(root, "usr/local/libexec/tewake-agent")
+	binary := filepath.Join(root, "usr/local/libexec/sparerunner-agent")
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -459,12 +459,12 @@ func newInstallerHarness(t *testing.T) installerHarness {
 		"PrimaryGroupID": "2147483647",
 	})
 	wrapper := []byte(`#!/bin/sh
-export TEWAKE_INSTALL_HELPER_PROCESS=1
-export TEWAKE_INSTALL_HELPER_TOOL="${0##*/}"
+export SPARERUNNER_INSTALL_HELPER_PROCESS=1
+export SPARERUNNER_INSTALL_HELPER_TOOL="${0##*/}"
 # Each command is a short-lived child of the race-instrumented test binary;
 # omit the detector's default one-second exit delay for these helpers.
 export GORACE="atexit_sleep_ms=0"
-exec "$TEWAKE_INSTALL_TEST_BINARY" -test.run=TestMacOSInstallerHelperProcess -- "$@"
+exec "$SPARERUNNER_INSTALL_TEST_BINARY" -test.run=TestMacOSInstallerHelperProcess -- "$@"
 `)
 	for _, tool := range []string{
 		"cmp",
@@ -492,7 +492,7 @@ exec "$TEWAKE_INSTALL_TEST_BINARY" -test.run=TestMacOSInstallerHelperProcess -- 
 	if err != nil {
 		t.Fatal(err)
 	}
-	plist, err := filepath.Abs("launchd/com.genm.tewake.agent.plist")
+	plist, err := filepath.Abs("launchd/com.genm.sparerunner.agent.plist")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -548,14 +548,14 @@ func (harness installerHarness) injectMutationFailureAfter(t *testing.T, prefix 
 func (harness installerHarness) requireInitialTargetsAbsent(t *testing.T) {
 	t.Helper()
 	for _, path := range []string{
-		filepath.Join(harness.root, "Library/Application Support/Tewake"),
-		filepath.Join(harness.root, "Library/Caches/com.genm.tewake"),
+		filepath.Join(harness.root, "Library/Application Support/SpareRunner"),
+		filepath.Join(harness.root, "Library/Caches/com.genm.sparerunner"),
 		filepath.Join(
 			harness.root,
-			"Library/LaunchDaemons/com.genm.tewake.agent.plist",
+			"Library/LaunchDaemons/com.genm.sparerunner.agent.plist",
 		),
-		filepath.Join(harness.helper, "dscl/Groups/tewake-runner-0"),
-		filepath.Join(harness.helper, "dscl/Users/tewake-runner-0"),
+		filepath.Join(harness.helper, "dscl/Groups/sparerunner-runner-0"),
+		filepath.Join(harness.helper, "dscl/Users/sparerunner-runner-0"),
 		filepath.Join(harness.helper, "launchd-loaded"),
 	} {
 		if _, err := os.Lstat(path); !os.IsNotExist(err) {
@@ -589,9 +589,9 @@ func (harness installerHarness) requireNoMutations(t *testing.T) {
 
 func installerEnvironment(harness installerHarness) []string {
 	prefixes := []string{
-		"TEWAKE_MACOS_INSTALL_TEST_",
-		"TEWAKE_INSTALL_HELPER_",
-		"TEWAKE_INSTALL_TEST_BINARY=",
+		"SPARERUNNER_MACOS_INSTALL_TEST_",
+		"SPARERUNNER_INSTALL_HELPER_",
+		"SPARERUNNER_INSTALL_TEST_BINARY=",
 	}
 	environment := make([]string, 0, len(os.Environ())+7)
 	for _, entry := range os.Environ() {
@@ -608,12 +608,12 @@ func installerEnvironment(harness installerHarness) []string {
 	}
 	return append(
 		environment,
-		"TEWAKE_MACOS_INSTALL_TESTING=1",
-		"TEWAKE_MACOS_INSTALL_TEST_ROOT="+harness.root,
-		"TEWAKE_MACOS_INSTALL_TEST_TOOLS="+harness.tools,
-		"TEWAKE_INSTALL_TEST_BINARY="+os.Args[0],
-		"TEWAKE_INSTALL_HELPER_STATE="+harness.helper,
-		"TEWAKE_INSTALL_HELPER_UUID="+installerTestID,
+		"SPARERUNNER_MACOS_INSTALL_TESTING=1",
+		"SPARERUNNER_MACOS_INSTALL_TEST_ROOT="+harness.root,
+		"SPARERUNNER_MACOS_INSTALL_TEST_TOOLS="+harness.tools,
+		"SPARERUNNER_INSTALL_TEST_BINARY="+os.Args[0],
+		"SPARERUNNER_INSTALL_HELPER_STATE="+harness.helper,
+		"SPARERUNNER_INSTALL_HELPER_UUID="+installerTestID,
 	)
 }
 
@@ -702,11 +702,11 @@ func setStatOverride(t *testing.T, helperRoot, path, contract string) {
 // TestMacOSInstallerHelperProcess implements the fixed macOS command surface
 // used by install-service.sh. It runs only in subprocesses spawned above.
 func TestMacOSInstallerHelperProcess(t *testing.T) {
-	if os.Getenv("TEWAKE_INSTALL_HELPER_PROCESS") != "1" {
+	if os.Getenv("SPARERUNNER_INSTALL_HELPER_PROCESS") != "1" {
 		return
 	}
-	tool := os.Getenv("TEWAKE_INSTALL_HELPER_TOOL")
-	state := os.Getenv("TEWAKE_INSTALL_HELPER_STATE")
+	tool := os.Getenv("SPARERUNNER_INSTALL_HELPER_TOOL")
+	state := os.Getenv("SPARERUNNER_INSTALL_HELPER_STATE")
 	args := helperArguments(os.Args)
 	exitCode := runInstallerHelper(tool, state, args, os.Stdout, os.Stderr)
 	os.Exit(exitCode)
@@ -733,7 +733,7 @@ func runInstallerHelper(
 		fmt.Fprintln(stdout, "0")
 		return 0
 	case "uuidgen":
-		fmt.Fprintln(stdout, os.Getenv("TEWAKE_INSTALL_HELPER_UUID"))
+		fmt.Fprintln(stdout, os.Getenv("SPARERUNNER_INSTALL_HELPER_UUID"))
 		return 0
 	case "stat":
 		return fakeStat(state, args, stdout, stderr)

@@ -1,24 +1,24 @@
 #!/bin/bash
 set -euo pipefail
 
-readonly label="com.genm.tewake.agent"
-readonly runner_account="tewake-runner-0"
-readonly runner_group="tewake-runner-0"
-readonly marker_name=".tewake-install-ownership-v1"
+readonly label="com.genm.sparerunner.agent"
+readonly runner_account="sparerunner-runner-0"
+readonly runner_group="sparerunner-runner-0"
+readonly marker_name=".sparerunner-install-ownership-v1"
 readonly marker_version="1"
-readonly binary_path="/usr/local/libexec/tewake-agent"
+readonly binary_path="/usr/local/libexec/sparerunner-agent"
 readonly plist_target_path="/Library/LaunchDaemons/${label}.plist"
-readonly state_root_path="/Library/Application Support/Tewake"
-readonly cache_parent_path="/Library/Caches/com.genm.tewake"
+readonly state_root_path="/Library/Application Support/SpareRunner"
+readonly cache_parent_path="/Library/Caches/com.genm.sparerunner"
 readonly cache_root_path="${cache_parent_path}/runner"
 readonly plist_source_arg="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/launchd/${label}.plist}"
 
 # The test indirection is accepted only with an explicit marker under a
 # canonical alternate root. Production calls use fixed absolute tools and
 # paths; no environment variable can redirect one path independently.
-readonly test_root="${TEWAKE_MACOS_INSTALL_TEST_ROOT:-}"
-readonly test_tools="${TEWAKE_MACOS_INSTALL_TEST_TOOLS:-}"
-readonly test_enabled="${TEWAKE_MACOS_INSTALL_TESTING:-}"
+readonly test_root="${SPARERUNNER_MACOS_INSTALL_TEST_ROOT:-}"
+readonly test_tools="${SPARERUNNER_MACOS_INSTALL_TEST_TOOLS:-}"
+readonly test_enabled="${SPARERUNNER_MACOS_INSTALL_TESTING:-}"
 if [[ -n "$test_root" || -n "$test_tools" || -n "$test_enabled" ]]; then
   if [[ "$test_enabled" != "1" ||
         "$EUID" -eq 0 ||
@@ -29,7 +29,7 @@ if [[ -n "$test_root" || -n "$test_tools" || -n "$test_enabled" ]]; then
         "$test_root" == *"/./"* ||
         ! -d "$test_root" ||
         -L "$test_root" ||
-        ! -f "${test_root}/.tewake-installer-test-root" ||
+        ! -f "${test_root}/.sparerunner-installer-test-root" ||
         "$test_tools" != /* ||
         ! -d "$test_tools" ||
         -L "$test_tools" ]]; then
@@ -462,7 +462,7 @@ next_directory_ids() {
 
 validate_group() {
   local install_id="$1"
-  local expected_real_name="Tewake native runner slot 0 [${install_id}]"
+  local expected_real_name="SpareRunner native runner slot 0 [${install_id}]"
   local runner_gid group_real_name group_password
   runner_gid="$(read_attribute "/Groups/${runner_group}" PrimaryGroupID)" ||
     fail "runner group has no PrimaryGroupID"
@@ -487,7 +487,7 @@ validate_group() {
 validate_user() {
   local install_id="$1"
   local runner_gid="$2"
-  local expected_real_name="Tewake native runner slot 0 [${install_id}]"
+  local expected_real_name="SpareRunner native runner slot 0 [${install_id}]"
   local runner_uid configured_gid configured_real_name configured_shell
   local configured_hidden configured_home configured_auth configured_password
   runner_uid="$(read_attribute "/Users/${runner_account}" UniqueID)" ||
@@ -527,7 +527,7 @@ validate_user() {
 create_group() {
   local install_id="$1"
   local runner_gid="$2"
-  local real_name="Tewake native runner slot 0 [${install_id}]"
+  local real_name="SpareRunner native runner slot 0 [${install_id}]"
   # Create the record and its random ownership identity in one dscl operation.
   # Rollback never deletes a record unless this exact identity remains present.
   created_group=1
@@ -540,7 +540,7 @@ create_user() {
   local install_id="$1"
   local runner_uid="$2"
   local runner_gid="$3"
-  local real_name="Tewake native runner slot 0 [${install_id}]"
+  local real_name="SpareRunner native runner slot 0 [${install_id}]"
   created_user=1
   run_tool dscl . -create "/Users/${runner_account}" RealName "$real_name"
   run_tool dscl . -create "/Users/${runner_account}" UniqueID "$runner_uid"
@@ -649,7 +649,7 @@ rollback_install() {
   local rollback_failed=0
   local state_temporary="${state_marker}.tmp-${install_id:-unknown}"
   local cache_temporary="${cache_marker}.tmp-${install_id:-unknown}"
-  local expected_real_name="Tewake native runner slot 0 [${install_id:-unknown}]"
+  local expected_real_name="SpareRunner native runner slot 0 [${install_id:-unknown}]"
   trap - EXIT
   if [[ "$install_committed" -eq 1 || "$transaction_active" -eq 0 ]]; then
     return "$original_exit"
@@ -772,14 +772,14 @@ elif [[ -d "$state_root" && ! -L "$state_root" &&
   validate_owned_layout
   install_id="$(
     read_marker_install_id "$state_marker" "agent-state" "$state_root_path"
-  )" || fail "state root has no valid Tewake ownership marker"
+  )" || fail "state root has no valid SpareRunner ownership marker"
   cache_install_id="$(
     read_marker_install_id "$cache_marker" "agent-cache" "$cache_parent_path"
-  )" || fail "cache root has no valid Tewake ownership marker"
+  )" || fail "cache root has no valid SpareRunner ownership marker"
   [[ "$cache_install_id" == "$install_id" ]] ||
-    fail "Tewake ownership markers do not share one install identity"
+    fail "SpareRunner ownership markers do not share one install identity"
 else
-  fail "refusing foreign or partial Tewake service roots"
+  fail "refusing foreign or partial SpareRunner service roots"
 fi
 
 group_present=0

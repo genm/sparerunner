@@ -4,10 +4,10 @@
 [CmdletBinding(SupportsShouldProcess = $true, ConfirmImpact = "High")]
 param(
     [ValidateNotNullOrEmpty()]
-    [string] $InstallRoot = (Join-Path $env:ProgramFiles "Tewake"),
+    [string] $InstallRoot = (Join-Path $env:ProgramFiles "SpareRunner"),
 
     [ValidateNotNullOrEmpty()]
-    [string] $DataRoot = (Join-Path $env:ProgramData "Tewake"),
+    [string] $DataRoot = (Join-Path $env:ProgramData "SpareRunner"),
 
     [switch] $PurgeData
 )
@@ -18,8 +18,8 @@ $ErrorActionPreference = "Stop"
 . (Join-Path $PSScriptRoot "safe-tree.ps1")
 . (Join-Path $PSScriptRoot "ownership.ps1")
 
-$AgentService = "TewakeAgent"
-$RunnerService = "TewakeRunnerIdentity"
+$AgentService = "SpareRunnerAgent"
+$RunnerService = "SpareRunnerRunnerIdentity"
 $SystemSid = [System.Security.Principal.SecurityIdentifier]::new("S-1-5-18")
 
 function Get-CanonicalScopedPath {
@@ -31,7 +31,7 @@ function Get-CanonicalScopedPath {
     )
 
     if (-not [System.IO.Path]::IsPathRooted($Path)) {
-        throw "A Tewake uninstall path must be absolute."
+        throw "A SpareRunner uninstall path must be absolute."
     }
     $Canonical = [System.IO.Path]::GetFullPath($Path).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
@@ -46,7 +46,7 @@ function Get-CanonicalScopedPath {
             $Parent + [System.IO.Path]::DirectorySeparatorChar,
             [System.StringComparison]::OrdinalIgnoreCase
         )) {
-        throw "A Tewake uninstall path escaped its owning Windows directory."
+        throw "A SpareRunner uninstall path escaped its owning Windows directory."
     }
     return $Canonical
 }
@@ -69,7 +69,7 @@ function Invoke-ServiceControlIfPresent {
     }
     & (Join-Path $env:SystemRoot "System32\sc.exe") $Operation $Name | Out-Null
     if ($LASTEXITCODE -ne 0) {
-        throw "Windows Service Control Manager rejected Tewake removal."
+        throw "Windows Service Control Manager rejected SpareRunner removal."
     }
     if ($Operation -eq "stop") {
         $Service.WaitForStatus(
@@ -87,7 +87,7 @@ $AgentPresent = $null -ne (
 $RunnerPresent = $null -ne (
     Get-Service -Name $RunnerService -ErrorAction SilentlyContinue
 )
-$Authority = Get-TewakeUninstallAuthority `
+$Authority = Get-SpareRunnerUninstallAuthority `
     -InstallRoot $InstallRoot `
     -DataRoot $DataRoot `
     -ServicesPresent ($AgentPresent -or $RunnerPresent) `
@@ -95,15 +95,15 @@ $Authority = Get-TewakeUninstallAuthority `
     -OwnerSid $SystemSid
 $InstallRoot = $Authority.InstallRoot
 $DataRoot = $Authority.DataRoot
-Assert-TewakeNoReparsePath -Path $InstallRoot
-Assert-TewakeNoReparsePath -Path $DataRoot
+Assert-SpareRunnerNoReparsePath -Path $InstallRoot
+Assert-SpareRunnerNoReparsePath -Path $DataRoot
 if (Test-Path -LiteralPath $InstallRoot) {
-    Assert-TewakeNoReparseTree -Root $InstallRoot
+    Assert-SpareRunnerNoReparseTree -Root $InstallRoot
 }
 if ($PurgeData -and (Test-Path -LiteralPath $DataRoot)) {
     # Validate every descendant before changing SCM state. A nested junction
     # must not turn an uninstall request into a partial uninstall.
-    Assert-TewakeNoReparseTree -Root $DataRoot
+    Assert-SpareRunnerNoReparseTree -Root $DataRoot
 }
 
 $PrimaryTargets = [System.Collections.Generic.List[string]]::new()
@@ -131,7 +131,7 @@ if ($PurgeData -and $Authority.DataExists -and -not $PSCmdlet.ShouldProcess(
     $DataRoot,
     "Permanently remove enrollment state, journal, cache, and quarantined workspaces"
 )) {
-    throw "Tewake data purge was not confirmed."
+    throw "SpareRunner data purge was not confirmed."
 }
 
 Invoke-ServiceControlIfPresent -Name $AgentService -Operation "stop"
@@ -140,14 +140,14 @@ Invoke-ServiceControlIfPresent -Name $AgentService -Operation "delete"
 Invoke-ServiceControlIfPresent -Name $RunnerService -Operation "delete"
 
 if (Test-Path -LiteralPath $InstallRoot) {
-    Remove-TewakeTreeNoReparse -Root $InstallRoot
+    Remove-SpareRunnerTreeNoReparse -Root $InstallRoot
 }
 
 if ($PurgeData) {
     if (Test-Path -LiteralPath $DataRoot) {
-        Remove-TewakeTreeNoReparse -Root $DataRoot
+        Remove-SpareRunnerTreeNoReparse -Root $DataRoot
     }
 }
 else {
-    Write-Output "Tewake data was preserved at $DataRoot."
+    Write-Output "SpareRunner data was preserved at $DataRoot."
 }

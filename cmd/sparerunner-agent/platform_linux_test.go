@@ -115,7 +115,7 @@ func TestSharedRunnerIdentityRejectsPrivilegedOptions(t *testing.T) {
 func TestUserDataRootPrefersXDGDataHome(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/home/example/.local/share")
 	root, err := userDataRoot()
-	if err != nil || root != "/home/example/.local/share/tewake" {
+	if err != nil || root != "/home/example/.local/share/sparerunner" {
 		t.Fatalf("userDataRoot = %q, %v", root, err)
 	}
 	t.Setenv("XDG_DATA_HOME", "relative/share")
@@ -126,7 +126,7 @@ func TestUserDataRootPrefersXDGDataHome(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	root, err = userDataRoot()
-	if err != nil || root != filepath.Join(home, ".local", "share", "tewake") {
+	if err != nil || root != filepath.Join(home, ".local", "share", "sparerunner") {
 		t.Fatalf("userDataRoot = %q, %v", root, err)
 	}
 }

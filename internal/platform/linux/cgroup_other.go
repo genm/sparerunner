@@ -28,7 +28,7 @@ func (ExecLauncher) Launch(context.Context, LaunchSpec, io.Reader, *os.File) (in
 	return 0, runner.ErrStrongOwnershipUnavailable
 }
 
-const helperModeArgument = "--tewake-linux-launcher-helper"
+const helperModeArgument = "--sparerunner-linux-launcher-helper"
 
 func RunExecLauncherHelper(args []string) (bool, error) {
 	if len(args) == 0 || args[0] != helperModeArgument {

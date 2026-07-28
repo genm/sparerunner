@@ -1,21 +1,21 @@
 [Unit]
-Description=Tewake GitHub Actions runner agent
-Documentation=https://github.com/genm/tewake
+Description=SpareRunner GitHub Actions runner agent
+Documentation=https://github.com/genm/sparerunner
 Wants=network-online.target
 After=network-online.target
-Wants=tewake-supervisor.service
-After=tewake-supervisor.service
+Wants=sparerunner-supervisor.service
+After=sparerunner-supervisor.service
 ConditionPathIsDirectory=/sys/fs/cgroup
 
 [Service]
 Type=simple
-User=tewake-agent
-Group=tewake-agent
-ExecStart=/usr/local/bin/tewake-agent serve \
-    --state-dir=/var/lib/tewake-agent \
-    --cache-root=/var/cache/tewake-agent \
-    --runtime-root=/var/lib/tewake-runtime \
-    --supervisor-socket=/run/tewake-supervisor/supervisor.sock \
+User=sparerunner-agent
+Group=sparerunner-agent
+ExecStart=/usr/local/bin/sparerunner-agent serve \
+    --state-dir=/var/lib/sparerunner-agent \
+    --cache-root=/var/cache/sparerunner-agent \
+    --runtime-root=/var/lib/sparerunner-runtime \
+    --supervisor-socket=/run/sparerunner-supervisor/supervisor.sock \
     --require-native-runner
 Restart=on-failure
 RestartSec=5s
@@ -40,7 +40,7 @@ ProtectClock=yes
 ProtectControlGroups=yes
 ProtectProc=invisible
 ProcSubset=all
-ReadWritePaths=/var/lib/tewake-agent /var/cache/tewake-agent /var/lib/tewake-runtime
+ReadWritePaths=/var/lib/sparerunner-agent /var/cache/sparerunner-agent /var/lib/sparerunner-runtime
 UMask=0077
 
 [Install]

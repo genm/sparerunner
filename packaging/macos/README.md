@@ -6,14 +6,14 @@ inspection, and private GitHub job remain live acceptance gates.
 
 ## Ownership boundary
 
-The packaged `com.genm.tewake.agent` job is a system LaunchDaemon. The macOS
-adapter needs root only to enter the fixed `tewake-runner-0` identity, inspect
+The packaged `com.genm.sparerunner.agent` job is a system LaunchDaemon. The macOS
+adapter needs root only to enter the fixed `sparerunner-runner-0` identity, inspect
 the Darwin process table, and remove the runner-owned workspace. The official
 runner itself is always launched as the dedicated non-login
-`tewake-runner-0` account.
+`sparerunner-runner-0` account.
 
 macOS does not provide Linux cgroup v2 or a Windows Job Object. A bare process
-group is insufficient because a child can create a new session. Tewake combines:
+group is insufficient because a child can create a new session. SpareRunner combines:
 
 1. a fresh process group for the official listener;
 2. a dedicated real/effective UID for slot 0;
@@ -21,7 +21,7 @@ group is insufficient because a child can create a new session. Tewake combines:
 4. cleanup that kills the recorded group and every remaining process with the
    slot UID, then verifies both are empty.
 
-The UID is one-slot authority. Do not log in as `tewake-runner-0`, run another
+The UID is one-slot authority. Do not log in as `sparerunner-runner-0`, run another
 service under it, or reuse it for a second concurrent slot.
 
 The first macOS release therefore has a hard capability of `maxRunners: 1`.
@@ -29,7 +29,7 @@ The current Agent readiness observation maps to that one concrete slot 0; a
 Controller rejects the node configuration before its slot ledger can create a
 second macOS slot. Supporting `maxRunners > 1` requires a separate non-login
 identity and durable process authority for every slot (for example,
-`tewake-runner-1`) plus an explicit capacity contract. Reusing this UID is not a
+`sparerunner-runner-1`) plus an explicit capacity contract. Reusing this UID is not a
 supported concurrency mechanism.
 
 The current Controller configuration validator is the capacity SSOT because the
@@ -47,15 +47,15 @@ fence; it cannot start a second listener to regain liveness.
 
 | Path | Owner/mode | Purpose |
 |---|---|---|
-| `/usr/local/libexec/tewake-agent` | `root:wheel 0755` | Agent and fixed launcher helper |
-| `/Library/LaunchDaemons/com.genm.tewake.agent.plist` | `root:wheel 0600` | boot/restart policy |
-| `/Library/Application Support/Tewake/.tewake-install-ownership-v1` | `root:wheel 0600` | Versioned, non-secret Agent-state ownership marker |
-| `/Library/Application Support/Tewake/agent` | `root:wheel 0700` | non-secret locators, certificates, and Agent SQLite |
-| `/Library/Application Support/Tewake/fences` | `root:wheel 0700` | durable start/stop fences |
-| `/Library/Application Support/Tewake/runtime` | `root:wheel 0711` | execution-root parent |
-| `/Library/Application Support/Tewake/runtime/executions/<digest>` | runner UID `0700` | one disposable runner tree |
-| `/Library/Caches/com.genm.tewake/.tewake-install-ownership-v1` | `root:wheel 0600` | Matching cache ownership marker |
-| `/Library/Caches/com.genm.tewake/runner` | `root:wheel 0700` | verified official runner packages |
+| `/usr/local/libexec/sparerunner-agent` | `root:wheel 0755` | Agent and fixed launcher helper |
+| `/Library/LaunchDaemons/com.genm.sparerunner.agent.plist` | `root:wheel 0600` | boot/restart policy |
+| `/Library/Application Support/SpareRunner/.sparerunner-install-ownership-v1` | `root:wheel 0600` | Versioned, non-secret Agent-state ownership marker |
+| `/Library/Application Support/SpareRunner/agent` | `root:wheel 0700` | non-secret locators, certificates, and Agent SQLite |
+| `/Library/Application Support/SpareRunner/fences` | `root:wheel 0700` | durable start/stop fences |
+| `/Library/Application Support/SpareRunner/runtime` | `root:wheel 0711` | execution-root parent |
+| `/Library/Application Support/SpareRunner/runtime/executions/<digest>` | runner UID `0700` | one disposable runner tree |
+| `/Library/Caches/com.genm.sparerunner/.sparerunner-install-ownership-v1` | `root:wheel 0600` | Matching cache ownership marker |
+| `/Library/Caches/com.genm.sparerunner/runner` | `root:wheel 0700` | verified official runner packages |
 
 The initial installer validates every fixed ancestor and destination before its
 first mutation. Existing roots are accepted only when both markers have the
@@ -94,7 +94,7 @@ The adapter calls Security.framework directly and never passes a secret through
 `/usr/bin/security` or a process argument. It deliberately creates the item with
 the Keychain `TrustAll` access mode: any process running in the same root service
 user context can read it without a prompt. Code signing does not narrow this
-mode to the Tewake executable. The security boundary is therefore the root
+mode to the SpareRunner executable. The security boundary is therefore the root
 service context plus its root-only locator directory versus the dedicated
 runner UID; compromise of another root process is outside native mode's trusted
 workflow threat model.
@@ -115,22 +115,22 @@ The release installer in `twk-015` invokes the checked
 
 ```bash
 sudo install -o root -g wheel -m 0755 \
-  ./tewake /usr/local/bin/tewake
+  ./sparerunner /usr/local/bin/sparerunner
 sudo install -o root -g wheel -m 0755 \
-  ./tewake-agent /usr/local/libexec/tewake-agent
+  ./sparerunner-agent /usr/local/libexec/sparerunner-agent
 sudo ./packaging/macos/install-service.sh
-sudo /usr/local/bin/tewake join twk_... \
-  --state-dir "/Library/Application Support/Tewake/agent"
-sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent
+sudo /usr/local/bin/sparerunner join twk_... \
+  --state-dir "/Library/Application Support/SpareRunner/agent"
+sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent
 ```
 
 Installation intentionally precedes enrollment. The LaunchDaemon may restart
-with an explicit not-initialized error until the root-context `tewake join`
+with an explicit not-initialized error until the root-context `sparerunner join`
 creates the Agent state above; it must not synthesize empty state. Enrollment
 must complete before creating a private runner target. Do not copy a node
 private key into the state directory or pass it through an environment
 variable. This packaged join path prints the launchd activation command above;
-it does not tell the operator to start a second `tewake-agent serve` process.
+it does not tell the operator to start a second `sparerunner-agent serve` process.
 
 This is an initial-install contract, not an upgrade or uninstall mechanism. If
 preflight reports foreign, partial, or changed state, inspect it and use the
@@ -140,7 +140,7 @@ manually rewrite the ownership marker.
 Inspect the non-secret service state with:
 
 ```bash
-sudo launchctl print system/com.genm.tewake.agent
+sudo launchctl print system/com.genm.sparerunner.agent
 ```
 
 ## Sleep and reboot
@@ -156,7 +156,7 @@ returns.
 ## Native isolation limitation
 
 This is not a hostile-code sandbox. A trusted workflow can deliberately invoke
-privileged host services or a set-user-ID executable. Tewake's UID/process-group
+privileged host services or a set-user-ID executable. SpareRunner's UID/process-group
 boundary is cleanup ownership for trusted private workflows, not proof that the
 host is pristine.
 

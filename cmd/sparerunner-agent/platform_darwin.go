@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	defaultMacOSRunnerUser = "tewake-runner-0"
-	defaultMacOSFenceRoot  = "/Library/Application Support/Tewake/fences"
+	defaultMacOSRunnerUser = "sparerunner-runner-0"
+	defaultMacOSFenceRoot  = "/Library/Application Support/SpareRunner/fences"
 )
 
 func runPlatformLauncherHelper(args []string) (bool, error) {
@@ -27,8 +27,8 @@ func runPlatformLauncherHelper(args []string) (bool, error) {
 
 func defaultNativeRunnerOptions() nativeRunnerOptions {
 	return nativeRunnerOptions{
-		CacheRoot:   "/Library/Caches/com.genm.tewake/runner",
-		RuntimeRoot: "/Library/Application Support/Tewake/runtime",
+		CacheRoot:   "/Library/Caches/com.genm.sparerunner/runner",
+		RuntimeRoot: "/Library/Application Support/SpareRunner/runtime",
 	}
 }
 

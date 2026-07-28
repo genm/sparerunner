@@ -17,8 +17,8 @@ import (
 )
 
 const (
-	defaultWindowsAgentService          = "TewakeAgent"
-	defaultWindowsRunnerIdentityService = "TewakeRunnerIdentity"
+	defaultWindowsAgentService          = "SpareRunnerAgent"
+	defaultWindowsRunnerIdentityService = "SpareRunnerRunnerIdentity"
 )
 
 func runPlatformLauncherHelper([]string) (bool, error) {
@@ -30,7 +30,7 @@ func defaultNativeRunnerOptions() nativeRunnerOptions {
 	if !filepath.IsAbs(programData) {
 		programData = `C:\ProgramData`
 	}
-	root := filepath.Join(programData, "Tewake")
+	root := filepath.Join(programData, "SpareRunner")
 	return nativeRunnerOptions{
 		CacheRoot:             filepath.Join(root, "cache"),
 		RuntimeRoot:           filepath.Join(root, "runtime"),

@@ -1,6 +1,6 @@
 [Unit]
-Description=Tewake privileged native runner supervisor
-Documentation=https://github.com/genm/tewake
+Description=SpareRunner privileged native runner supervisor
+Documentation=https://github.com/genm/sparerunner
 ConditionPathIsDirectory=/sys/fs/cgroup
 After=systemd-tmpfiles-setup.service
 
@@ -11,13 +11,13 @@ User=root
 # Keep both root-owned so the Supervisor can reject a replaced cgroup boundary;
 # tmpfiles owns the separate local socket directory for the Agent group.
 Group=root
-ExecStart=/usr/local/bin/tewake-agent supervisor \
-    --socket=/run/tewake-supervisor/supervisor.sock \
-    --runtime-root=/var/lib/tewake-runtime \
-    --cache-root=/var/cache/tewake-agent \
-    --fence-root=/var/lib/tewake-supervisor/fences \
-    --runner-user=tewake-runner-0 \
-    --agent-user=tewake-agent
+ExecStart=/usr/local/bin/sparerunner-agent supervisor \
+    --socket=/run/sparerunner-supervisor/supervisor.sock \
+    --runtime-root=/var/lib/sparerunner-runtime \
+    --cache-root=/var/cache/sparerunner-agent \
+    --fence-root=/var/lib/sparerunner-supervisor/fences \
+    --runner-user=sparerunner-runner-0 \
+    --agent-user=sparerunner-agent
 Restart=on-failure
 RestartSec=5s
 KillMode=control-group
@@ -27,7 +27,7 @@ TimeoutStopSec=30s
 Delegate=yes
 
 # The Supervisor has no remote listener and accepts only the fixed local
-# protocol from the kernel-authenticated tewake-agent UID. These are the
+# protocol from the kernel-authenticated sparerunner-agent UID. These are the
 # capabilities needed for slot ownership and complete cgroup cleanup.
 CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER CAP_KILL CAP_SETGID CAP_SETUID
 NoNewPrivileges=yes
@@ -48,7 +48,7 @@ ProtectClock=yes
 ProtectControlGroups=no
 ProtectProc=invisible
 ProcSubset=all
-ReadWritePaths=/var/lib/tewake-supervisor /var/lib/tewake-runtime
+ReadWritePaths=/var/lib/sparerunner-supervisor /var/lib/sparerunner-runtime
 UMask=0077
 
 [Install]

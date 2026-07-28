@@ -154,7 +154,7 @@ func sharedRunnerEnvironment(uid int) ([]string, error) {
 	if err != nil {
 		return nil, runner.ErrStrongOwnershipUnavailable
 	}
-	const executionHome = "/proc/self/fd/4/.tewake-home"
+	const executionHome = "/proc/self/fd/4/.sparerunner-home"
 	return []string{
 		"HOME=" + executionHome,
 		"XDG_CACHE_HOME=" + executionHome + "/.cache",
@@ -247,7 +247,7 @@ func NewRootlessRuntime(
 // create children, and cgroup.kill on a cgroup that can hold no descendants
 // would be an empty containment promise.
 func proveCgroupDelegation(cgroupRoot string) error {
-	probe := filepath.Join(cgroupRoot, "tewake", ".delegation-probe")
+	probe := filepath.Join(cgroupRoot, "sparerunner", ".delegation-probe")
 	if err := os.MkdirAll(probe, 0o755); err != nil {
 		return runner.ErrStrongOwnershipUnavailable
 	}
@@ -514,10 +514,10 @@ func (workspace *RootlessWorkspace) Prepare(ctx context.Context, root *os.Root, 
 	}
 	defer workspaceRoot.Close()
 	for _, directory := range []string{
-		".tewake-home",
-		".tewake-home/.config",
-		".tewake-home/.cache",
-		".tewake-home/.tmp",
+		".sparerunner-home",
+		".sparerunner-home/.config",
+		".sparerunner-home/.cache",
+		".sparerunner-home/.tmp",
 	} {
 		if err := workspaceRoot.MkdirAll(directory, 0o700); err != nil {
 			return runner.WorkspaceRef{}, err

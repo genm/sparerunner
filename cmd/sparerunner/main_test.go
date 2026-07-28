@@ -39,7 +39,7 @@ func TestJoinRejectsInvalidCodeBeforeCreatingState(t *testing.T) {
 
 func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.T) {
 	var stdout, stderr bytes.Buffer
-	const stateDirectory = "/Library/Application Support/Tewake/agent"
+	const stateDirectory = "/Library/Application Support/SpareRunner/agent"
 	command := newJoinCommandForPlatform(
 		"darwin",
 		func(_ context.Context, options app.JoinOptions) (string, error) {
@@ -63,7 +63,7 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 	if !strings.Contains(output, "Node node-macos joined successfully") ||
 		!strings.Contains(
 			output,
-			"sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
+			"sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent",
 		) {
 		t.Fatalf("packaged macOS join output = %q", output)
 	}
