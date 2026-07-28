@@ -1199,7 +1199,7 @@ func (server *server) requireRevision(
 	if !strings.HasPrefix(raw, `"cfg-`) || !strings.HasSuffix(raw, `"`) {
 		server.writeProblem(writer, request, requestID, http.StatusBadRequest,
 			"invalid_precondition", "Invalid configuration precondition",
-			"If-Match must contain one canonical Tewake configuration ETag.", nil)
+			"If-Match must contain one canonical SpareRunner configuration ETag.", nil)
 		return 0, false
 	}
 	digits := strings.TrimSuffix(strings.TrimPrefix(raw, `"cfg-`), `"`)
@@ -1207,7 +1207,7 @@ func (server *server) requireRevision(
 	if err != nil || strconv.FormatUint(revision, 10) != digits {
 		server.writeProblem(writer, request, requestID, http.StatusBadRequest,
 			"invalid_precondition", "Invalid configuration precondition",
-			"If-Match must contain one canonical Tewake configuration ETag.", nil)
+			"If-Match must contain one canonical SpareRunner configuration ETag.", nil)
 		return 0, false
 	}
 	return revision, true
@@ -1373,12 +1373,12 @@ func (server *server) writeProblem(
 	current *gen.Revision,
 ) {
 	problem := gen.Problem{
-		Type:      "https://tewake.dev/problems/" + strings.ReplaceAll(code, "_", "-"),
+		Type:      "https://sparerunner.dev/problems/" + strings.ReplaceAll(code, "_", "-"),
 		Title:     title,
 		Status:    status,
 		Code:      code,
 		Detail:    detail,
-		Instance:  "urn:tewake:request:" + requestID,
+		Instance:  "urn:sparerunner:request:" + requestID,
 		RequestId: requestID,
 	}
 	if current != nil {
@@ -1398,12 +1398,12 @@ func (server *server) writeProblemWithFields(
 	fields []gen.FieldError,
 ) {
 	problem := gen.Problem{
-		Type:      "https://tewake.dev/problems/" + strings.ReplaceAll(code, "_", "-"),
+		Type:      "https://sparerunner.dev/problems/" + strings.ReplaceAll(code, "_", "-"),
 		Title:     title,
 		Status:    status,
 		Code:      code,
 		Detail:    detail,
-		Instance:  "urn:tewake:request:" + requestID,
+		Instance:  "urn:sparerunner:request:" + requestID,
 		RequestId: requestID,
 		Errors:    &fields,
 	}

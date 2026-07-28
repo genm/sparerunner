@@ -35,14 +35,14 @@ const (
 	browserHandoffVersion    = "twh1"
 	sessionWireSize          = 1 + sessionNonceSize + sessionMACSize
 	csrfWireSize             = sha256.Size
-	SessionCookieName        = "tewake_admin_session"
-	CSRFHeaderName           = "X-Tewake-CSRF"
-	BootstrapHeaderName      = "X-Tewake-Admin-Bootstrap"
+	SessionCookieName        = "sparerunner_admin_session"
+	CSRFHeaderName           = "X-SpareRunner-CSRF"
+	BootstrapHeaderName      = "X-SpareRunner-Admin-Bootstrap"
 
-	sessionMACDomain        = "tewake/admin-session/v1\x00"
-	csrfMACDomain           = "tewake/admin-csrf/v1\x00"
-	bootstrapMACDomain      = "tewake/admin-bootstrap/v1\x00"
-	browserHandoffMACDomain = "tewake/browser-handoff/v1\x00"
+	sessionMACDomain        = "sparerunner/admin-session/v1\x00"
+	csrfMACDomain           = "sparerunner/admin-csrf/v1\x00"
+	bootstrapMACDomain      = "sparerunner/admin-bootstrap/v1\x00"
+	browserHandoffMACDomain = "sparerunner/browser-handoff/v1\x00"
 
 	// DefaultSessionTTL bounds a stolen browser credential. Sessions are also
 	// process-local and are therefore invalidated by Controller restart.

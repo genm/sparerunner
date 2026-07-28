@@ -1785,7 +1785,7 @@ func assertSecretFreeProblem(
 		t.Fatal(err)
 	}
 	requestID := response.Header().Get("X-Request-ID")
-	if problem.Instance != "urn:tewake:request:"+requestID {
+	if problem.Instance != "urn:sparerunner:request:"+requestID {
 		t.Fatalf("problem instance = %q, request ID = %q", problem.Instance, requestID)
 	}
 }

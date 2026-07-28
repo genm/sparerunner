@@ -51,7 +51,7 @@ describe("createManagementClient", () => {
   it("keeps GitHub setup mutations on the authenticated API contract", async () => {
     server.use(
       http.post("http://tewake.test/api/v1/github/app/manifest", async ({ request }) => {
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf");
         expect(await request.json()).toEqual({ registrationAccount: "acme" });
         return HttpResponse.json({
           actionUrl: "https://github.com/settings/apps/new",
@@ -74,7 +74,7 @@ describe("createManagementClient", () => {
       ),
       http.post("http://tewake.test/api/v1/github/targets", async ({ request }) => {
         expect(request.headers.get("If-Match")).toBe('"cfg-0"');
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf");
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf");
         expect(await request.json()).toMatchObject({
           installationId: "42",
           scopeKind: "repository",
@@ -172,7 +172,7 @@ describe("createManagementClient", () => {
     server.use(
       http.get("http://tewake.test/api/v1/events", ({ request }) => {
         expect(request.credentials).toBe("same-origin");
-        expect(request.headers.get("X-Tewake-CSRF")).toBe("csrf-for-stream");
+        expect(request.headers.get("X-SpareRunner-CSRF")).toBe("csrf-for-stream");
         return new HttpResponse(
           [
             "id: 3:7:1",

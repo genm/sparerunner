@@ -127,7 +127,7 @@ export function createManagementClient(basePath = "/api/v1"): ManagementClient {
     startGitHubAppManifest: (registrationAccount, csrfToken) =>
       request<Schema["GitHubManifestStart"]>("/github/app/manifest", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Tewake-CSRF": csrfToken },
+        headers: { "Content-Type": "application/json", "X-SpareRunner-CSRF": csrfToken },
         body: JSON.stringify({ registrationAccount }),
       }),
     listGitHubInstallations: () =>
@@ -138,7 +138,7 @@ export function createManagementClient(basePath = "/api/v1"): ManagementClient {
         headers: {
           "Content-Type": "application/json",
           "If-Match": `"cfg-${revision}"`,
-          "X-Tewake-CSRF": csrfToken,
+          "X-SpareRunner-CSRF": csrfToken,
         },
         body: JSON.stringify(input),
       }),
@@ -168,27 +168,27 @@ export function createManagementClient(basePath = "/api/v1"): ManagementClient {
         headers: {
           "Content-Type": "application/json",
           "If-Match": `"cfg-${configuration.revision}"`,
-          "X-Tewake-CSRF": csrfToken,
+          "X-SpareRunner-CSRF": csrfToken,
         },
         body: JSON.stringify(configuration),
       }),
     createJoinCode: (endpointHints, csrfToken) =>
       request<Schema["JoinCodeDelivery"]>("/join-codes", {
         method: "POST",
-        headers: { "Content-Type": "application/json", "X-Tewake-CSRF": csrfToken },
+        headers: { "Content-Type": "application/json", "X-SpareRunner-CSRF": csrfToken },
         body: JSON.stringify({ endpointHints }),
       }),
     cancelJoinCode: (tokenId, csrfToken) =>
       request<void>(`/join-codes/${encodeURIComponent(tokenId)}`, {
         method: "DELETE",
-        headers: { "X-Tewake-CSRF": csrfToken },
+        headers: { "X-SpareRunner-CSRF": csrfToken },
       }),
     setNodeState: (nodeId, action, revision, csrfToken) =>
       request<{ node: Schema["Node"]; configurationRevision: string }>(
         `/nodes/${encodeURIComponent(nodeId)}/${action}`,
         {
           method: "POST",
-          headers: { "If-Match": `"cfg-${revision}"`, "X-Tewake-CSRF": csrfToken },
+          headers: { "If-Match": `"cfg-${revision}"`, "X-SpareRunner-CSRF": csrfToken },
         },
       ),
     subscribe: (csrfToken, cursor, handlers) => {
@@ -219,7 +219,7 @@ async function streamInvalidations(
           credentials: "same-origin",
           headers: {
             Accept: "text/event-stream",
-            "X-Tewake-CSRF": csrfToken,
+            "X-SpareRunner-CSRF": csrfToken,
           },
           signal,
         },

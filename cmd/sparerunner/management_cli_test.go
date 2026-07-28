@@ -107,8 +107,8 @@ func TestNodeAddUsesManagementAPISessionCookieOriginAndCSRF(t *testing.T) {
 		if request.Header.Get("Origin") != serverOrigin(request) {
 			t.Fatalf("operation Origin = %q", request.Header.Get("Origin"))
 		}
-		if request.Header.Get("X-Tewake-CSRF") != testCSRFToken {
-			t.Fatalf("operation CSRF = %q", request.Header.Get("X-Tewake-CSRF"))
+		if request.Header.Get("X-SpareRunner-CSRF") != testCSRFToken {
+			t.Fatalf("operation CSRF = %q", request.Header.Get("X-SpareRunner-CSRF"))
 		}
 		if _, err := request.Cookie(auth.SessionCookieName); err != nil {
 			t.Fatalf("operation session cookie: %v", err)
@@ -756,8 +756,8 @@ func assertApplyRequest(
 	if request.Header.Get("If-Match") != wantIfMatch {
 		t.Fatalf("If-Match = %q, want %q", request.Header.Get("If-Match"), wantIfMatch)
 	}
-	if request.Header.Get("X-Tewake-CSRF") != testCSRFToken {
-		t.Fatalf("CSRF = %q", request.Header.Get("X-Tewake-CSRF"))
+	if request.Header.Get("X-SpareRunner-CSRF") != testCSRFToken {
+		t.Fatalf("CSRF = %q", request.Header.Get("X-SpareRunner-CSRF"))
 	}
 	if _, err := request.Cookie(auth.SessionCookieName); err != nil {
 		t.Fatalf("session cookie: %v", err)

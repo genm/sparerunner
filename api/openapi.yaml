@@ -721,14 +721,14 @@ components:
     adminSession:
       type: apiKey
       in: cookie
-      name: tewake_admin_session
+      name: sparerunner_admin_session
     adminBootstrap:
       type: apiKey
       in: header
-      name: X-Tewake-Admin-Bootstrap
+      name: X-SpareRunner-Admin-Bootstrap
   parameters:
     AdminBootstrap:
-      name: X-Tewake-Admin-Bootstrap
+      name: X-SpareRunner-Admin-Bootstrap
       in: header
       required: true
       description: Short-lived, one-use owner proof derived from the Controller credential boundary.
@@ -750,7 +750,7 @@ components:
         type: string
         pattern: '^"cfg-[0-9]+"$'
     CSRFToken:
-      name: X-Tewake-CSRF
+      name: X-SpareRunner-CSRF
       in: header
       required: true
       schema:

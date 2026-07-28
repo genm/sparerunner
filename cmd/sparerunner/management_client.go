@@ -173,7 +173,7 @@ func (client *managementAPIClient) bootstrap(ctx context.Context) error {
 	proof := client.bootstrapProof
 	client.bootstrapProof = ""
 	response, err := client.client.CreateSession(ctx, &gen.CreateSessionParams{
-		XTewakeAdminBootstrap: gen.AdminBootstrap(proof),
+		XSpareRunnerAdminBootstrap: gen.AdminBootstrap(proof),
 	})
 	if err != nil {
 		return errors.New("management API session request failed")
@@ -239,7 +239,7 @@ func (client *managementAPIClient) logout(ctx context.Context) error {
 	csrf := client.csrf
 	client.csrf = ""
 	response, err := client.client.DeleteSession(ctx, &gen.DeleteSessionParams{
-		XTewakeCSRF: csrf,
+		XSpareRunnerCSRF: csrf,
 	})
 	if err != nil {
 		return errors.New("management API logout request failed")
@@ -270,7 +270,7 @@ func (client *managementAPIClient) createJoinCode(
 ) (string, error) {
 	response, err := client.client.CreateJoinCode(
 		ctx,
-		&gen.CreateJoinCodeParams{XTewakeCSRF: client.csrf},
+		&gen.CreateJoinCodeParams{XSpareRunnerCSRF: client.csrf},
 		gen.CreateJoinCodeRequest{EndpointHints: append([]string(nil), hints...)},
 	)
 	if err != nil {
@@ -315,7 +315,7 @@ func (client *managementAPIClient) authorizeBrowserHandoff(
 	}
 	response, err := client.client.AuthorizeBrowserHandoff(
 		ctx,
-		&gen.AuthorizeBrowserHandoffParams{XTewakeCSRF: client.csrf},
+		&gen.AuthorizeBrowserHandoffParams{XSpareRunnerCSRF: client.csrf},
 		gen.AuthorizeBrowserHandoffRequest{Code: code},
 	)
 	if err != nil {
@@ -372,8 +372,8 @@ func (client *managementAPIClient) applyConfiguration(
 	response, err := client.client.ApplyConfigurationWithBody(
 		ctx,
 		&gen.ApplyConfigurationParams{
-			IfMatch:     fmt.Sprintf(`"cfg-%d"`, revision),
-			XTewakeCSRF: client.csrf,
+			IfMatch:          fmt.Sprintf(`"cfg-%d"`, revision),
+			XSpareRunnerCSRF: client.csrf,
 		},
 		mediaType,
 		bytes.NewReader(payload),
