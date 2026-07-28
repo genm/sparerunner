@@ -19,6 +19,8 @@ import (
 	syswindows "golang.org/x/sys/windows"
 )
 
+var procIsProcessInJob = kernel32.NewProc("IsProcessInJob")
+
 type currentTokenSource struct{}
 
 func (currentTokenSource) Token(context.Context) (syswindows.Token, string, error) {
@@ -207,9 +209,27 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 	descendantPID := waitForPIDFile(t, pidFile)
 	descendant, err := waitForProcessHandle(t, uint32(descendantPID))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("descendant pid %d never opened: %v", descendantPID, err)
 	}
 	defer syswindows.CloseHandle(descendant)
+	// The descendant must be inside the containment boundary, otherwise the
+	// termination below would prove nothing about the tree. Process count is not
+	// the instrument: a console-allocating parent also carries conhost.exe into
+	// the job, so only this exact pid answers the question.
+	contained, err := processInJob(descendant, job)
+	if err != nil || !contained {
+		t.Fatalf("descendant pid %d is outside the Job Object: %v", descendantPID, err)
+	}
+	// A descendant that already exited would satisfy the wait below without
+	// TerminateAndWait doing anything, so require it alive at this instant.
+	if result, err := syswindows.WaitForSingleObject(descendant, 0); err != nil ||
+		result != uint32(syswindows.WAIT_TIMEOUT) {
+		t.Fatalf(
+			"descendant exited before containment termination: result=%#x err=%v",
+			result,
+			err,
+		)
+	}
 	if err := runtime.TerminateAndWait(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +270,13 @@ func TestWindowsJobHelperProcess(t *testing.T) {
 			os.Exit(72)
 		}
 	}
-	select {}
+	// This binary is executed directly rather than through `go test`, so it
+	// receives no -test.timeout and has no pending runtime timer. Parking in
+	// select{} would make every goroutine asleep, and the runtime deadlock
+	// detector would kill the helper milliseconds after start, before the test
+	// can open the descendant. Sleeping keeps a timer pending; the Job Object
+	// remains the real owner of this process tree's lifetime.
+	time.Sleep(time.Hour)
 }
 
 func TestLockedWorkspaceProducesCleanupFailureUntilLockIsReleased(t *testing.T) {
@@ -396,6 +422,22 @@ func waitForPIDFile(t *testing.T, path string) int {
 	}
 	t.Fatal("descendant pid was not published")
 	return 0
+}
+
+// processInJob answers whether one exact process belongs to a Job Object.
+// Windows assigns a process to its creator's job at creation, so no polling
+// window is needed once the process handle is open.
+func processInJob(process, job syswindows.Handle) (bool, error) {
+	var member int32
+	result, _, err := procIsProcessInJob.Call(
+		uintptr(process),
+		uintptr(job),
+		uintptr(unsafe.Pointer(&member)),
+	)
+	if result == 0 {
+		return false, err
+	}
+	return member != 0, nil
 }
 
 func waitForProcessHandle(t *testing.T, pid uint32) (syswindows.Handle, error) {
