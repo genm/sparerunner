@@ -9,7 +9,10 @@ These instructions supplement the user-scope rules. The closest specification un
   commit messages, `spec/tewake/` documents, other Markdown docs, and GitHub-facing
   content such as issue titles/bodies, pull request titles/descriptions, and review
   comments.
-- This applies regardless of the contributor's or reviewer's working language.
+- This applies regardless of the contributor's or reviewer's working language, and
+  regardless of the language a request or conversation is conducted in. A pull
+  request description is repository content, not a reply. Write it in English the
+  first time rather than translating it afterwards.
 
 ## Product boundary
 
