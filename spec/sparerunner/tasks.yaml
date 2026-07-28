@@ -782,3 +782,30 @@ tasks:
       - The runner label, scale-set name, configuration directory, containment scope, mDNS service, and launchd label are unchanged, so an enrolled node and a configured Target keep working across the rename.
       - The Raycast extension finds the renamed binary in the standard install locations.
       - The repository agent skill documents only commands that exist, and its examples run against the real CLI.
+
+  - id: spr-024
+    title: Implement the sprun doctor diagnosis command
+    type: backend
+    description: >
+      Add a read-only `sprun doctor` command that composes the existing
+      management, health, and nodectl read surfaces into one fail-closed report
+      with explicit pass, fail, and unavailable findings, a versioned `--json`
+      document, and machine-readable error classes. The command introduces no
+      new API surface and no new privilege.
+    depends_on: [spr-012, spr-016, spr-020]
+    paths:
+      - spec/sparerunner
+      - cmd/sprun
+      - .claude/skills
+    ci_targets: [lint, test, build]
+    pr_order: 24
+    status: in_progress
+    notes:
+      - "Promoted from Future Direction: the original product definition proposed a doctor command, and spr-023 recorded that it was raised and deliberately deferred rather than rejected."
+      - "2026-07-29: `sprun doctor` composes controller-state presence, one owner session proving the loopback listener and the overview read, the setup read model for GitHub authority with condition codes, and the nodectl status contract. Deterministic tests cover healthy, disconnected-GitHub, degraded/conditioned, unreachable-listener, uninitialized-controller, and dead-agent-endpoint paths. A pass-path run against a live enrolled agent remains open before the task is done."
+    acceptance:
+      - The command performs no mutation and changes no admission, availability, capacity, or configuration state.
+      - Controller state presence, listener liveness and readiness, owner-session bootstrap, GitHub App authority with per-Target runtime freshness, and the local agent control endpoint each produce an explicit pass, fail, or unavailable finding.
+      - A computer without an installed agent reports an explicit not-installed finding rather than a failure or silence.
+      - "`sprun doctor --json` emits a versioned non-secret document, and the exit code is non-zero exactly when a required authority fails."
+      - Findings never contain credential, owner-proof, session, join-code, or JIT material.

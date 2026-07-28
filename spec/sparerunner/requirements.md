@@ -103,6 +103,10 @@ fork-originated code.
   uid isolation.
 - As an Administrator, I want a one-job runner identity and disposable workspace so
   that jobs do not leave ordinary runner state behind.
+- As an Administrator, I want one read-only diagnosis command that checks the
+  controller, the management listener, GitHub authority, and this computer's
+  agent in a single report, so that I can locate the broken layer without
+  reading service logs across every surface.
 
 ## Primary Journeys
 
@@ -427,6 +431,23 @@ identical operation against the local agent, so none of them is a privileged pat
 - Every exclusion or inclusion change shall persist an audit event containing the
   node, the requesting surface, the previous and next value, and the result.
 
+### Diagnosis
+
+- `sprun doctor` shall verify controller state presence, management listener
+  liveness and readiness, owner-session bootstrap, GitHub App authority with
+  per-Target runtime freshness, and — when present on this computer — the local
+  agent control endpoint, and shall report each as an explicit pass, fail, or
+  unavailable finding.
+- The command shall be read-only: it shall mutate no configuration, admission,
+  availability, or capacity state.
+- An absent subject, such as no agent installed on this computer, shall be an
+  explicit distinct finding rather than a failure or a healthy default.
+- `--json` shall emit a versioned machine-readable document, and the process
+  shall exit non-zero exactly when a required authority fails, carrying the same
+  machine-readable error classes the underlying surfaces emit.
+- Findings shall contain no credential, owner-proof, session, join-code, or JIT
+  material.
+
 ### Recovery and degraded state
 
 - If the controller stops after desired-state commit and before GitHub message
@@ -618,11 +639,6 @@ as something the specification always intended.
   data rather than a capacity input. A preset layer would change scheduling
   admission and needs its own load-measurement contract, so it is a scope change,
   not a UI relabeling of `maxRunners`.
-- **An environment diagnosis command.** A `sprun doctor`-style command that
-  checks service installation, local control reachability, containment
-  prerequisites, and GitHub connectivity in one report. Today those diagnoses
-  are spread across `sprun node status`, fail-closed startup errors, and the
-  Web UI setup state.
 - **Participation outside one LAN.** The fleet is LAN-first because that is what
   the current transport and discovery guarantee. NAT traversal or a relay would
   let an owner lend a computer from another network without a VPN, an open
