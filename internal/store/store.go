@@ -782,11 +782,11 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"github_session_demand":           {"scale_set_id", "session_id", "total_available_jobs", "total_acquired_jobs", "total_assigned_jobs", "total_running_jobs", "total_registered_runners", "total_busy_runners", "total_idle_runners", "observed_at_unix_nano"},
 		"github_queue_messages":           {"scale_set_id", "message_id", "message_digest", "committed_at_unix_nano"},
 		"github_message_jobs":             {"scale_set_id", "message_id", "event_index", "event_type", "runner_request_id", "runner_id", "runner_name", "result", "repository_name", "owner_name", "job_id", "workflow_run_id"},
-		"github_job_claims":               {"scale_set_id", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
-		"github_jit_attempts":             {"scale_set_id", "runner_request_id", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
-		"github_acquire_attempts":         {"scale_set_id", "runner_request_id", "attempt", "evidence_message_id", "controller_epoch", "state", "created_at_unix_nano", "updated_at_unix_nano"},
-		"github_jit_snapshot_authority":   {"scale_set_id", "runner_request_id", "attempt", "snapshot_digest", "controller_epoch", "decision", "updated_at_unix_nano", "github_session_generation"},
-		"github_unpicked_requeue_intents": {"scale_set_id", "runner_request_id", "jit_attempt", "old_execution_id", "replacement_execution_id", "source_message_id", "source_event_index", "controller_epoch", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_job_claims":               {"scale_set_id", "claim_key", "origin", "runner_request_id", "source_message_id", "execution_id", "state", "current_jit_attempt", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_attempts":             {"scale_set_id", "claim_key", "attempt", "controller_epoch", "runner_name", "state", "runner_id", "jit_digest", "start_command_id", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_acquire_attempts":         {"scale_set_id", "claim_key", "attempt", "evidence_message_id", "controller_epoch", "state", "created_at_unix_nano", "updated_at_unix_nano"},
+		"github_jit_snapshot_authority":   {"scale_set_id", "claim_key", "attempt", "snapshot_digest", "controller_epoch", "decision", "updated_at_unix_nano", "github_session_generation"},
+		"github_unpicked_requeue_intents": {"scale_set_id", "claim_key", "jit_attempt", "old_execution_id", "replacement_execution_id", "source_message_id", "source_event_index", "controller_epoch", "created_at_unix_nano", "updated_at_unix_nano"},
 		"runner_profile_update_policies":  {"profile_id", "version_policy", "runner_version", "revision"},
 		"github_target_runtime_bindings":  {"target_id", "scale_set_id", "profile_id"},
 		"github_runner_release_state":     {"singleton", "latest_version", "latest_released_at_unix_nano", "observed_at_unix_nano", "freshness", "failure_class", "failure_at_unix_nano", "generation"},
@@ -1015,10 +1015,10 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 			FROM github_unpicked_requeue_intents intent
 			JOIN github_job_claims claim
 				ON claim.scale_set_id = intent.scale_set_id
-				AND claim.runner_request_id = intent.runner_request_id
+				AND claim.claim_key = intent.claim_key
 			JOIN github_jit_attempts attempt
 				ON attempt.scale_set_id = intent.scale_set_id
-				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.claim_key = intent.claim_key
 				AND attempt.attempt = intent.jit_attempt
 			JOIN github_message_jobs source
 				ON source.scale_set_id = intent.scale_set_id
@@ -1031,7 +1031,7 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 				OR claim.current_jit_attempt != intent.jit_attempt
 				OR attempt.state NOT IN ('started', 'removal_pending')
 				OR source.event_type != 'JobAvailable'
-				OR source.runner_request_id != intent.runner_request_id
+				OR source.runner_request_id != intent.claim_key
 				OR intent.source_message_id = claim.source_message_id
 				OR old_execution.state NOT IN ('released', 'failed')
 				OR EXISTS (
@@ -1046,8 +1046,8 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 					SELECT acquire.state
 					FROM github_acquire_attempts acquire
 					WHERE acquire.scale_set_id = intent.scale_set_id
-						AND acquire.runner_request_id =
-							intent.runner_request_id
+						AND acquire.claim_key =
+							intent.claim_key
 					ORDER BY acquire.attempt DESC
 					LIMIT 1
 				), '') != 'acquired'
@@ -1071,7 +1071,7 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 			FROM github_unpicked_requeue_intents intent
 			JOIN github_jit_attempts attempt
 				ON attempt.scale_set_id = intent.scale_set_id
-				AND attempt.runner_request_id = intent.runner_request_id
+				AND attempt.claim_key = intent.claim_key
 				AND attempt.attempt = intent.jit_attempt
 			WHERE (
 				attempt.state = 'started'
@@ -1079,8 +1079,8 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 					SELECT 1
 					FROM github_jit_snapshot_authority authority
 					WHERE authority.scale_set_id = intent.scale_set_id
-						AND authority.runner_request_id =
-							intent.runner_request_id
+						AND authority.claim_key =
+							intent.claim_key
 						AND authority.attempt = intent.jit_attempt
 				)
 			) OR (
@@ -1089,8 +1089,8 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 					SELECT 1
 					FROM github_jit_snapshot_authority authority
 					WHERE authority.scale_set_id = intent.scale_set_id
-						AND authority.runner_request_id =
-							intent.runner_request_id
+						AND authority.claim_key =
+							intent.claim_key
 						AND authority.attempt = intent.jit_attempt
 						AND authority.decision IN (
 							'unpicked_requeue_removal_issued',
@@ -1119,7 +1119,7 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 			FROM github_acquire_attempts acquire
 			JOIN github_job_claims claim
 				ON claim.scale_set_id = acquire.scale_set_id
-				AND claim.runner_request_id = acquire.runner_request_id
+				AND claim.claim_key = acquire.claim_key
 			JOIN executions execution
 				ON execution.id = claim.execution_id
 			WHERE acquire.state = 'reconciled_pending'
@@ -1133,15 +1133,15 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 						SELECT max(latest.attempt)
 						FROM github_acquire_attempts latest
 						WHERE latest.scale_set_id = acquire.scale_set_id
-							AND latest.runner_request_id =
-								acquire.runner_request_id
+							AND latest.claim_key =
+								acquire.claim_key
 					)
 					OR NOT EXISTS (
 						SELECT 1
 						FROM github_jit_attempts jit
 						WHERE jit.scale_set_id = claim.scale_set_id
-							AND jit.runner_request_id =
-								claim.runner_request_id
+							AND jit.claim_key =
+								claim.claim_key
 							AND jit.attempt = claim.current_jit_attempt
 							AND jit.state = 'reconciled_absent'
 							AND jit.runner_id IS NULL
@@ -1156,14 +1156,14 @@ func validateDataInvariants(ctx context.Context, db queryer, role string) error 
 								claim.source_message_id
 							AND source.event_type = 'JobAvailable'
 							AND source.runner_request_id =
-								claim.runner_request_id
+								claim.claim_key
 					)
 					OR EXISTS (
 						SELECT 1
 						FROM github_unpicked_requeue_intents intent
 						WHERE intent.scale_set_id = claim.scale_set_id
-							AND intent.runner_request_id =
-								claim.runner_request_id
+							AND intent.claim_key =
+								claim.claim_key
 					)
 				)
 		)`).Scan(&invalid)

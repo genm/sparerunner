@@ -61,10 +61,10 @@ func TestRunnerLifecycleFailsClosedOnMismatchedOrAmbiguousResponse(t *testing.T)
 
 func TestRunnerQueryRequiresExactIDNameAndScaleSetEvidence(t *testing.T) {
 	query := RunnerQuery{
-		ScaleSetID:      7,
-		RunnerRequestID: 7001,
-		Name:            "sparerunner-runner",
-		ExpectedID:      17,
+		ScaleSetID: 7,
+		ClaimKey:   7001,
+		Name:       "sparerunner-runner",
+		ExpectedID: 17,
 	}
 	exact := &Client{
 		getRunner: func(context.Context, int) (*scaleset.RunnerReference, error) {
@@ -100,10 +100,10 @@ func TestRunnerQueryRequiresExactIDNameAndScaleSetEvidence(t *testing.T) {
 
 func TestRunnerQueryReturnsExactNameAbsenceForDurableCallerConfirmation(t *testing.T) {
 	base := RunnerQuery{
-		ScaleSetID:      7,
-		RunnerRequestID: 7001,
-		Name:            "sparerunner-runner",
-		ExpectedID:      17,
+		ScaleSetID: 7,
+		ClaimKey:   7001,
+		Name:       "sparerunner-runner",
+		ExpectedID: 17,
 	}
 	t.Run("generation ambiguity name miss", func(t *testing.T) {
 		calledByID := false
@@ -130,10 +130,10 @@ func TestRunnerQueryReturnsExactNameAbsenceForDurableCallerConfirmation(t *testi
 
 func TestRunnerQueryFailsClosedOnSplitIdentity(t *testing.T) {
 	base := RunnerQuery{
-		ScaleSetID:      7,
-		RunnerRequestID: 7001,
-		Name:            "sparerunner-runner",
-		ExpectedID:      17,
+		ScaleSetID: 7,
+		ClaimKey:   7001,
+		Name:       "sparerunner-runner",
+		ExpectedID: 17,
 	}
 	tests := []struct {
 		name    string
@@ -206,10 +206,10 @@ func TestRunnerLifecycleExposesFinalProviderHTTPStatus(t *testing.T) {
 	vendorError := errors.New(
 		"vendor failure https://api.example.test/runners Bearer secret-token")
 	query := RunnerQuery{
-		ScaleSetID:      7,
-		RunnerRequestID: 7001,
-		Name:            "sparerunner-runner",
-		ExpectedID:      17,
+		ScaleSetID: 7,
+		ClaimKey:   7001,
+		Name:       "sparerunner-runner",
+		ExpectedID: 17,
 	}
 	tests := []struct {
 		name       string

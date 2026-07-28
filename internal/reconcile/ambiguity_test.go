@@ -62,11 +62,11 @@ func TestResolveGitHubJITRequiresRemoveThenFreshAbsence(t *testing.T) {
 		MaxControllerEpoch: 1,
 	}
 	present, err := ResolveGitHubFence(fence, issued, agent, GitHubReconciliationObservation{
-		ObservedAt:      time.Unix(100, 0),
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		RunnerObserved:  true,
-		RunnerName:      "sparerunner-a",
+		ObservedAt:     time.Unix(100, 0),
+		ScaleSetID:     7,
+		ClaimKey:       8,
+		RunnerObserved: true,
+		RunnerName:     "sparerunner-a",
 		Runner: &GitHubRunnerIdentity{
 			ScaleSetID: 7,
 			ID:         9,
@@ -80,11 +80,11 @@ func TestResolveGitHubJITRequiresRemoveThenFreshAbsence(t *testing.T) {
 		t.Fatalf("present resolution = %#v", present)
 	}
 	absent, err := ResolveGitHubFence(fence, issued, agent, GitHubReconciliationObservation{
-		ObservedAt:      time.Unix(101, 0),
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		RunnerObserved:  true,
-		RunnerName:      "sparerunner-a",
+		ObservedAt:     time.Unix(101, 0),
+		ScaleSetID:     7,
+		ClaimKey:       8,
+		RunnerObserved: true,
+		RunnerName:     "sparerunner-a",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -96,10 +96,10 @@ func TestResolveGitHubJITRequiresRemoveThenFreshAbsence(t *testing.T) {
 
 func TestResolveGitHubFenceHoldsOnStaleOrUnobservedState(t *testing.T) {
 	fence := GitHubFence{
-		ExecutionID:     "execution-a",
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		ClaimState:      store.GitHubClaimAcquireAmbiguous,
+		ExecutionID: "execution-a",
+		ScaleSetID:  7,
+		ClaimKey:    8,
+		ClaimState:  store.GitHubClaimAcquireAmbiguous,
 	}
 	agent := transport.AgentSnapshot{
 		NodeID:             "node-a",
@@ -109,12 +109,12 @@ func TestResolveGitHubFenceHoldsOnStaleOrUnobservedState(t *testing.T) {
 	}
 	for _, observation := range []GitHubReconciliationObservation{
 		{
-			ObservedAt:      time.Unix(1, 0),
-			Stale:           true,
-			ScaleSetID:      7,
-			RunnerRequestID: 8,
-			JobObserved:     true,
-			JobState:        GitHubJobAvailable,
+			ObservedAt:  time.Unix(1, 0),
+			Stale:       true,
+			ScaleSetID:  7,
+			ClaimKey:    8,
+			JobObserved: true,
+			JobState:    GitHubJobAvailable,
 		},
 		{},
 	} {
@@ -133,11 +133,11 @@ func TestResolveGitHubFenceHoldsOnStaleOrUnobservedState(t *testing.T) {
 		GitHubJobCompleted,
 	} {
 		fresh, err := ResolveGitHubFence(fence, nil, agent, GitHubReconciliationObservation{
-			ObservedAt:      time.Unix(2, 0),
-			ScaleSetID:      7,
-			RunnerRequestID: 8,
-			JobObserved:     true,
-			JobState:        state,
+			ObservedAt:  time.Unix(2, 0),
+			ScaleSetID:  7,
+			ClaimKey:    8,
+			JobObserved: true,
+			JobState:    state,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -165,11 +165,11 @@ func TestResolveGitHubFenceRejectsDifferentRunnerIdentity(t *testing.T) {
 		MaxControllerEpoch: 1,
 	}
 	if _, err := ResolveGitHubFence(fence, issued, agent, GitHubReconciliationObservation{
-		ObservedAt:      time.Unix(100, 0),
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		RunnerObserved:  true,
-		RunnerName:      "sparerunner-a",
+		ObservedAt:     time.Unix(100, 0),
+		ScaleSetID:     7,
+		ClaimKey:       8,
+		RunnerObserved: true,
+		RunnerName:     "sparerunner-a",
 		Runner: &GitHubRunnerIdentity{
 			ScaleSetID: 7,
 			ID:         10,
@@ -218,13 +218,13 @@ func TestResolveGitHubFenceRejectsReportedStartWithoutExactControllerAuthority(t
 
 func startFenceForTest(command domain.Command) GitHubFence {
 	return GitHubFence{
-		ExecutionID:     command.ExecutionID,
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		ClaimState:      store.GitHubClaimStartAmbiguous,
+		ExecutionID: command.ExecutionID,
+		ScaleSetID:  7,
+		ClaimKey:    8,
+		ClaimState:  store.GitHubClaimStartAmbiguous,
 		Attempt: &store.GitHubJITAttempt{
 			ScaleSetID:      7,
-			RunnerRequestID: 8,
+			ClaimKey:        8,
 			Attempt:         1,
 			ControllerEpoch: command.ControllerEpoch,
 			RunnerName:      "sparerunner-a",
@@ -253,27 +253,27 @@ func TestResolveGitHubFenceRejectsUnboundAbsenceAndWrongClaimObservation(t *test
 	}
 	issued := &IssuedCommand{NodeID: "node-a", Type: domain.CommandStart, Command: command}
 	if _, err := ResolveGitHubFence(fence, issued, agent, GitHubReconciliationObservation{
-		ObservedAt:      time.Unix(100, 0),
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		RunnerObserved:  true,
-		RunnerName:      "another-runner",
+		ObservedAt:     time.Unix(100, 0),
+		ScaleSetID:     7,
+		ClaimKey:       8,
+		RunnerObserved: true,
+		RunnerName:     "another-runner",
 	}); !hasCode(err, "github_runner_query_identity_mismatch") {
 		t.Fatalf("unbound runner absence = %v", err)
 	}
 
 	acquire := GitHubFence{
-		ExecutionID:     "execution-a",
-		ScaleSetID:      7,
-		RunnerRequestID: 8,
-		ClaimState:      store.GitHubClaimAcquireAmbiguous,
+		ExecutionID: "execution-a",
+		ScaleSetID:  7,
+		ClaimKey:    8,
+		ClaimState:  store.GitHubClaimAcquireAmbiguous,
 	}
 	resolution, err := ResolveGitHubFence(acquire, nil, agent, GitHubReconciliationObservation{
-		ObservedAt:      time.Unix(100, 0),
-		ScaleSetID:      9,
-		RunnerRequestID: 8,
-		JobObserved:     true,
-		JobState:        GitHubJobAvailable,
+		ObservedAt:  time.Unix(100, 0),
+		ScaleSetID:  9,
+		ClaimKey:    8,
+		JobObserved: true,
+		JobState:    GitHubJobAvailable,
 	})
 	if err != nil || resolution.Kind != AmbiguityHold {
 		t.Fatalf("inferred claim observation changed durable acquisition = (%#v, %v)", resolution, err)

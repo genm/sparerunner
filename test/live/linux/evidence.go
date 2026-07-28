@@ -54,7 +54,7 @@ type resultEvidence struct {
 	ExecutionState           string   `json:"executionState,omitempty"`
 	NodeState                string   `json:"nodeState,omitempty"`
 	ReservationCount         int      `json:"reservationCount"`
-	RunnerRequestID          int64    `json:"runnerRequestId,omitempty"`
+	ClaimKey                 int64    `json:"runnerRequestId,omitempty"`
 	ObservedEvents           []string `json:"observedEvents,omitempty"`
 	AvailableObservedAt      string   `json:"availableObservedAt,omitempty"`
 	JobStartedObservedAt     string   `json:"startedObservedAt,omitempty"`
@@ -73,7 +73,7 @@ type replayEvidence struct {
 	NodeID                    string `json:"nodeId"`
 	ScaleSetID                int    `json:"scaleSetId"`
 	MessageID                 int    `json:"messageId"`
-	RunnerRequestID           int64  `json:"runnerRequestId"`
+	ClaimKey                  int64  `json:"runnerRequestId"`
 	ExecutionID               string `json:"executionId"`
 	AvailableObservedAt       string `json:"availableObservedAt"`
 	CommitControllerEpoch     uint64 `json:"commitControllerEpoch"`
@@ -85,11 +85,11 @@ type replayEvidence struct {
 }
 
 type restartStartedEvidence struct {
-	Version         int    `json:"version"`
-	ScaleSetID      int    `json:"scaleSetId"`
-	RunnerRequestID int64  `json:"runnerRequestId"`
-	ExecutionID     string `json:"executionId"`
-	ObservedAt      string `json:"observedAt"`
+	Version     int    `json:"version"`
+	ScaleSetID  int    `json:"scaleSetId"`
+	ClaimKey    int64  `json:"runnerRequestId"`
+	ExecutionID string `json:"executionId"`
+	ObservedAt  string `json:"observedAt"`
 }
 
 type evidenceStore struct {
@@ -141,7 +141,7 @@ func (evidence *evidenceStore) writeResult(result resultEvidence) error {
 			result.TargetID == "" || result.PrivateRepository == "" ||
 			result.NodeID == "" || result.ScaleSetID <= 0 ||
 			result.ControllerEpoch == 0 ||
-			result.ExecutionID == "" || result.RunnerRequestID <= 0 ||
+			result.ExecutionID == "" || result.ClaimKey <= 0 ||
 			result.AvailableObservedAt == "" || result.JobStartedObservedAt == "" ||
 			result.JobCompletedObservedAt == "" ||
 			result.AvailableToStartedMillis == nil {
@@ -214,7 +214,7 @@ func validateReplayEvidence(replay replayEvidence) error {
 			replay.Phase != "killed_before_ack" &&
 			replay.Phase != "redelivered_same_execution") ||
 		replay.TargetID == "" || replay.NodeID == "" || replay.ScaleSetID <= 0 ||
-		replay.MessageID <= 0 || replay.RunnerRequestID <= 0 ||
+		replay.MessageID <= 0 || replay.ClaimKey <= 0 ||
 		replay.ExecutionID == "" || replay.CommitControllerEpoch == 0 {
 		return errEvidenceInvalid
 	}
@@ -280,11 +280,11 @@ func (evidence *evidenceStore) recordAckGateKill(observedAt time.Time) error {
 
 func (evidence *evidenceStore) recordRestartStarted(
 	scaleSetID github.ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	executionID domain.ExecutionID,
 	observedAt time.Time,
 ) error {
-	if scaleSetID <= 0 || runnerRequestID <= 0 || executionID == "" || observedAt.IsZero() {
+	if scaleSetID <= 0 || claimKey <= 0 || executionID == "" || observedAt.IsZero() {
 		return errEvidenceInvalid
 	}
 	path := filepath.Join(evidence.directory, restartStartedName)
@@ -292,7 +292,7 @@ func (evidence *evidenceStore) recordRestartStarted(
 	if err := decodeStrictRegularJSONFile(path, maxLiveConfigBytes, &existing, true); err == nil {
 		if existing.Version != evidenceVersion ||
 			existing.ScaleSetID != int(scaleSetID) ||
-			existing.RunnerRequestID != runnerRequestID ||
+			existing.ClaimKey != claimKey ||
 			existing.ExecutionID != string(executionID) ||
 			existing.ObservedAt == "" {
 			return errEvidenceInvalid
@@ -302,17 +302,17 @@ func (evidence *evidenceStore) recordRestartStarted(
 		return errEvidenceInvalid
 	}
 	return evidence.writeJSON(restartStartedName, restartStartedEvidence{
-		Version:         evidenceVersion,
-		ScaleSetID:      int(scaleSetID),
-		RunnerRequestID: runnerRequestID,
-		ExecutionID:     string(executionID),
-		ObservedAt:      observedAt.UTC().Format(time.RFC3339Nano),
+		Version:     evidenceVersion,
+		ScaleSetID:  int(scaleSetID),
+		ClaimKey:    claimKey,
+		ExecutionID: string(executionID),
+		ObservedAt:  observedAt.UTC().Format(time.RFC3339Nano),
 	})
 }
 
-func liveExecutionID(scaleSetID github.ScaleSetID, runnerRequestID int64) domain.ExecutionID {
+func liveExecutionID(scaleSetID github.ScaleSetID, claimKey int64) domain.ExecutionID {
 	value := "execution\x00" + strconv.Itoa(int(scaleSetID)) + "\x00" +
-		strconv.FormatInt(runnerRequestID, 10)
+		strconv.FormatInt(claimKey, 10)
 	digest := sha256.Sum256([]byte(value))
 	token := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])
 	return domain.ExecutionID("spr-exec-" + strings.ToLower(token))
@@ -426,7 +426,7 @@ type ackGateSession struct {
 	controllerEpoch domain.ControllerEpoch
 	mu              sync.Mutex
 	polledMessageID int
-	runnerRequestID int64
+	claimKey        int64
 	availableAt     time.Time
 	now             func() time.Time
 }
@@ -444,12 +444,12 @@ func (gate *ackGateSession) Poll(
 	if err != nil || message == nil {
 		return message, err
 	}
-	var runnerRequestID int64
+	var claimKey int64
 	availableCount := 0
 	for _, job := range message.Jobs {
 		if job.Type == github.MessageTypeJobAvailable {
 			availableCount++
-			runnerRequestID = job.RunnerRequestID
+			claimKey = job.RunnerRequestID
 		}
 	}
 	observedAt := time.Now()
@@ -459,10 +459,10 @@ func (gate *ackGateSession) Poll(
 	gate.mu.Lock()
 	gate.polledMessageID = message.ID
 	if availableCount == 1 && !observedAt.IsZero() {
-		gate.runnerRequestID = runnerRequestID
+		gate.claimKey = claimKey
 		gate.availableAt = observedAt
 	} else {
-		gate.runnerRequestID = 0
+		gate.claimKey = 0
 		gate.availableAt = time.Time{}
 	}
 	gate.mu.Unlock()
@@ -485,10 +485,10 @@ func (gate *ackGateSession) DeleteMessage(ctx context.Context, messageID int) er
 	}
 	gate.mu.Lock()
 	polledMessageID := gate.polledMessageID
-	runnerRequestID := gate.runnerRequestID
+	claimKey := gate.claimKey
 	availableAt := gate.availableAt
 	gate.mu.Unlock()
-	if polledMessageID != messageID || runnerRequestID <= 0 || availableAt.IsZero() {
+	if polledMessageID != messageID || claimKey <= 0 || availableAt.IsZero() {
 		return errAckGateInvalid
 	}
 	snapshot, err := gate.store.Snapshot(ctx)
@@ -521,7 +521,7 @@ func (gate *ackGateSession) DeleteMessage(ctx context.Context, messageID int) er
 		NodeID:                string(gate.nodeID),
 		ScaleSetID:            int(gate.scaleSetID),
 		MessageID:             messageID,
-		RunnerRequestID:       runnerRequestID,
+		ClaimKey:              claimKey,
 		ExecutionID:           string(execution.ID),
 		AvailableObservedAt:   durableAvailableAt,
 		CommitControllerEpoch: uint64(gate.controllerEpoch),
@@ -644,20 +644,20 @@ func (events *observedJobEvents) observe(message *github.Message) error {
 }
 
 func (events *observedJobEvents) seedAvailable(
-	runnerRequestID int64,
+	claimKey int64,
 	availableAt time.Time,
 ) error {
-	if events == nil || runnerRequestID <= 0 || availableAt.IsZero() {
+	if events == nil || claimKey <= 0 || availableAt.IsZero() {
 		return errEvidenceInvalid
 	}
 	events.mu.Lock()
 	defer events.mu.Unlock()
-	if events.byRequest[runnerRequestID] == nil {
-		events.byRequest[runnerRequestID] = make(map[github.MessageType]time.Time)
+	if events.byRequest[claimKey] == nil {
+		events.byRequest[claimKey] = make(map[github.MessageType]time.Time)
 	}
-	existing, found := events.byRequest[runnerRequestID][github.MessageTypeJobAvailable]
+	existing, found := events.byRequest[claimKey][github.MessageTypeJobAvailable]
 	if !found || availableAt.Before(existing) {
-		events.byRequest[runnerRequestID][github.MessageTypeJobAvailable] = availableAt
+		events.byRequest[claimKey][github.MessageTypeJobAvailable] = availableAt
 	}
 	return nil
 }

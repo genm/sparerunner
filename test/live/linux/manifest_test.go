@@ -511,7 +511,7 @@ func writeValidFinalManifest(
 		ExecutionState:           string(domain.ExecutionReleased),
 		NodeState:                string(domain.NodeActive),
 		ReservationCount:         0,
-		RunnerRequestID:          91,
+		ClaimKey:                 91,
 		ObservedEvents:           []string{string(github.MessageTypeJobAvailable), string(github.MessageTypeJobCompleted), string(github.MessageTypeJobStarted)},
 		AvailableObservedAt:      availableAt.Format(time.RFC3339Nano),
 		JobStartedObservedAt:     jobStartedAt.Format(time.RFC3339Nano),
@@ -559,11 +559,11 @@ func writeValidFinalManifest(
 	}
 	if mode == modeAgentRestart {
 		if err := evidence.writeJSON(restartStartedName, restartStartedEvidence{
-			Version:         evidenceVersion,
-			ScaleSetID:      result.ScaleSetID,
-			RunnerRequestID: result.RunnerRequestID,
-			ExecutionID:     result.ExecutionID,
-			ObservedAt:      result.JobStartedObservedAt,
+			Version:     evidenceVersion,
+			ScaleSetID:  result.ScaleSetID,
+			ClaimKey:    result.ClaimKey,
+			ExecutionID: result.ExecutionID,
+			ObservedAt:  result.JobStartedObservedAt,
 		}); err != nil {
 			t.Fatal(err)
 		}
@@ -614,7 +614,7 @@ func writeValidFinalManifest(
 			NodeID:                    result.NodeID,
 			ScaleSetID:                result.ScaleSetID,
 			MessageID:                 71,
-			RunnerRequestID:           result.RunnerRequestID,
+			ClaimKey:                  result.ClaimKey,
 			ExecutionID:               result.ExecutionID,
 			AvailableObservedAt:       result.AvailableObservedAt,
 			CommitControllerEpoch:     result.ControllerEpoch - 1,

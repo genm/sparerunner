@@ -110,7 +110,7 @@ func TestBindProcessEvidenceRejectsFakeRunnerExecutableWithExpectedUIDAndCgroup(
 	}
 	executionID := "execution"
 	if err := evidence.writeJSON(restartStartedName, restartStartedEvidence{
-		Version: evidenceVersion, ScaleSetID: 41, RunnerRequestID: 91,
+		Version: evidenceVersion, ScaleSetID: 41, ClaimKey: 91,
 		ExecutionID: executionID, ObservedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}); err != nil {
 		t.Fatal(err)

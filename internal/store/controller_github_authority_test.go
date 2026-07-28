@@ -282,7 +282,7 @@ func TestGitHubZeroCapacityReplayAcknowledgesExistingDurableClaim(t *testing.T) 
 		t.Fatal(err)
 	}
 	if !replayed.Replayed || replayed.Claim == nil ||
-		replayed.Claim.RunnerRequestID != first.Claim.RunnerRequestID ||
+		replayed.Claim.ClaimKey != first.Claim.ClaimKey ||
 		replayed.UnclaimedAvailable {
 		t.Fatalf("zero-capacity replay = %#v", replayed)
 	}

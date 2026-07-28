@@ -53,7 +53,7 @@ func TestValidateControllerPreflightAcceptsFreshAndExactCrashReplay(t *testing.T
 		NodeID:                    string(nodeID),
 		ScaleSetID:                41,
 		MessageID:                 71,
-		RunnerRequestID:           91,
+		ClaimKey:                  91,
 		ExecutionID:               string(execution.ID),
 		AvailableObservedAt:       observedAt,
 		CommitControllerEpoch:     2,
@@ -236,7 +236,7 @@ func TestReplayTrackerRequiresSameMessageAndExecution(t *testing.T) {
 		NodeID:                    string(nodeID),
 		ScaleSetID:                41,
 		MessageID:                 71,
-		RunnerRequestID:           91,
+		ClaimKey:                  91,
 		ExecutionID:               "execution",
 		AvailableObservedAt:       availableAt.Format(time.RFC3339Nano),
 		CommitControllerEpoch:     2,
@@ -274,7 +274,7 @@ func TestReplayTrackerRequiresSameMessageAndExecution(t *testing.T) {
 	replay, found, err := evidence.loadReplay()
 	if err != nil || !found || replay.Phase != "redelivered_same_execution" ||
 		replay.ExecutionID != expected.ExecutionID ||
-		replay.RunnerRequestID != expected.RunnerRequestID ||
+		replay.ClaimKey != expected.ClaimKey ||
 		replay.AvailableObservedAt != expected.AvailableObservedAt ||
 		replay.CommitControllerEpoch != expected.CommitControllerEpoch ||
 		replay.CommitObservedAt != expected.CommitObservedAt ||
@@ -310,7 +310,7 @@ func TestReplayTrackerPreservesWarmGateAcrossProcessBoundary(t *testing.T) {
 				NodeID:                    string(nodeID),
 				ScaleSetID:                41,
 				MessageID:                 71,
-				RunnerRequestID:           91,
+				ClaimKey:                  91,
 				ExecutionID:               "execution",
 				AvailableObservedAt:       base.Format(time.RFC3339Nano),
 				CommitControllerEpoch:     2,

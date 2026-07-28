@@ -298,11 +298,11 @@ func runLiveAcceptance(
 
 	events := newObservedJobEvents()
 	if mode == modeAgentRestart {
-		events.onStarted = func(runnerRequestID int64, observedAt time.Time) error {
+		events.onStarted = func(claimKey int64, observedAt time.Time) error {
 			return evidence.recordRestartStarted(
 				scaleSet.ID,
-				runnerRequestID,
-				liveExecutionID(scaleSet.ID, runnerRequestID),
+				claimKey,
+				liveExecutionID(scaleSet.ID, claimKey),
 				observedAt,
 			)
 		}
@@ -379,7 +379,7 @@ func runLiveAcceptance(
 			result.ExecutionState = string(completed.value.execution.State)
 			result.NodeState = string(completed.value.nodeState)
 			result.ReservationCount = completed.value.reservationCount
-			result.RunnerRequestID = completed.value.job.requestID
+			result.ClaimKey = completed.value.job.requestID
 			result.ObservedEvents = completed.value.job.events
 			result.AvailableObservedAt = completed.value.job.availableObservedAt.UTC().Format(time.RFC3339Nano)
 			result.JobStartedObservedAt = completed.value.job.startedObservedAt.UTC().Format(time.RFC3339Nano)
@@ -696,11 +696,11 @@ func (tracker *replayTracker) observe(
 	availableMatches := 0
 	for _, job := range message.Jobs {
 		if job.Type == github.MessageTypeJobAvailable &&
-			job.RunnerRequestID == expected.RunnerRequestID {
+			job.RunnerRequestID == expected.ClaimKey {
 			availableMatches++
 		}
 	}
-	if availableMatches != 1 || events.seedAvailable(expected.RunnerRequestID, availableAt) != nil {
+	if availableMatches != 1 || events.seedAvailable(expected.ClaimKey, availableAt) != nil {
 		return errAcceptanceOutcome
 	}
 	snapshot, err := tracker.store.Snapshot(ctx)
@@ -720,7 +720,7 @@ func (tracker *replayTracker) observe(
 		NodeID:                    string(tracker.nodeID),
 		ScaleSetID:                int(tracker.scaleSet),
 		MessageID:                 message.ID,
-		RunnerRequestID:           expected.RunnerRequestID,
+		ClaimKey:                  expected.ClaimKey,
 		ExecutionID:               string(execution.ID),
 		AvailableObservedAt:       expected.AvailableObservedAt,
 		CommitControllerEpoch:     expected.CommitControllerEpoch,

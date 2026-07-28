@@ -174,7 +174,7 @@ func validatePassingResult(
 	}
 	if result.TargetID == "" || result.ScaleSetID <= 0 ||
 		result.ControllerEpoch == 0 || result.ExecutionID == "" ||
-		result.RunnerRequestID <= 0 || result.AvailableToStartedMillis == nil ||
+		result.ClaimKey <= 0 || result.AvailableToStartedMillis == nil ||
 		*result.AvailableToStartedMillis < 0 ||
 		*result.AvailableToStartedMillis > 60_000 {
 		return errEvidenceInvalid
@@ -494,7 +494,7 @@ func validateCompletedReplay(
 		replay.TargetID != result.TargetID ||
 		replay.NodeID != result.NodeID ||
 		replay.ScaleSetID != result.ScaleSetID ||
-		replay.RunnerRequestID != result.RunnerRequestID ||
+		replay.ClaimKey != result.ClaimKey ||
 		replay.ExecutionID != result.ExecutionID ||
 		replay.CommitControllerEpoch >= result.ControllerEpoch ||
 		replay.RedeliveryControllerEpoch != result.ControllerEpoch ||
@@ -526,7 +526,7 @@ func validateAgentRestartEvidence(
 	)
 	if err != nil || marker.Version != evidenceVersion ||
 		marker.ScaleSetID != result.ScaleSetID ||
-		marker.RunnerRequestID != result.RunnerRequestID ||
+		marker.ClaimKey != result.ClaimKey ||
 		marker.ExecutionID != result.ExecutionID ||
 		marker.ObservedAt != result.JobStartedObservedAt {
 		return errEvidenceInvalid

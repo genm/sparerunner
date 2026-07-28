@@ -49,11 +49,11 @@ type IssuedCommand struct {
 // remains owned, but it is suppressed from advertised capacity until a later
 // Agent/GitHub observation is durably reconciled.
 type GitHubFence struct {
-	ExecutionID     domain.ExecutionID
-	ScaleSetID      store.ScaleSetID
-	RunnerRequestID int64
-	ClaimState      store.GitHubClaimState
-	Attempt         *store.GitHubJITAttempt
+	ExecutionID domain.ExecutionID
+	ScaleSetID  store.ScaleSetID
+	ClaimKey    int64
+	ClaimState  store.GitHubClaimState
+	Attempt     *store.GitHubJITAttempt
 }
 
 type Config struct {
@@ -284,11 +284,11 @@ func RestoreRestart(
 	config.GitHubFences = make([]GitHubFence, len(snapshot.GitHubFences))
 	for index, persisted := range snapshot.GitHubFences {
 		config.GitHubFences[index] = GitHubFence{
-			ExecutionID:     persisted.Claim.Execution.ID,
-			ScaleSetID:      persisted.Claim.ScaleSetID,
-			RunnerRequestID: persisted.Claim.RunnerRequestID,
-			ClaimState:      persisted.Claim.State,
-			Attempt:         persisted.Attempt,
+			ExecutionID: persisted.Claim.Execution.ID,
+			ScaleSetID:  persisted.Claim.ScaleSetID,
+			ClaimKey:    persisted.Claim.ClaimKey,
+			ClaimState:  persisted.Claim.State,
+			Attempt:     persisted.Attempt,
 		}
 	}
 	return Restore(
@@ -591,9 +591,11 @@ func (controller *Controller) restoreFences(fences []GitHubFence) error {
 }
 
 func validateGitHubFence(fence GitHubFence) error {
+	// The claim key is SpareRunner-owned and negative for a claim created from
+	// assigned demand, so only zero is a missing identity.
 	if fence.ExecutionID == "" || fence.ScaleSetID == 0 ||
-		fence.RunnerRequestID <= 0 {
-		return invalid("invalid_github_fence", "github_fences.claim_identity", "requires execution, scale-set, and runner-request identity")
+		fence.ClaimKey == 0 {
+		return invalid("invalid_github_fence", "github_fences.claim_identity", "requires execution, scale-set, and claim identity")
 	}
 	switch fence.ClaimState {
 	case store.GitHubClaimAcquireAmbiguous:
@@ -612,7 +614,7 @@ func validateGitHubFence(fence GitHubFence) error {
 			return invalid("invalid_github_fence", "github_fences.attempt", "JIT ambiguity requires durable attempt identity")
 		}
 		if fence.Attempt.ScaleSetID != fence.ScaleSetID ||
-			fence.Attempt.RunnerRequestID != fence.RunnerRequestID {
+			fence.Attempt.ClaimKey != fence.ClaimKey {
 			return invalid("github_fence_claim_mismatch", "github_fences.attempt", "does not belong to the durable claim identity")
 		}
 		if !githubFenceStatesMatch(fence.ClaimState, fence.Attempt.State) {
@@ -1449,8 +1451,11 @@ func (controller *Controller) ApplyGitHubClaim(claim store.GitHubJobClaim) error
 	if controller == nil {
 		return invalid("controller_unavailable", "controller", "is nil")
 	}
-	if claim.ScaleSetID == 0 || claim.RunnerRequestID <= 0 ||
-		claim.SourceMessageID == 0 || claim.State == "" {
+	// An assigned-demand claim carries a negative key and, when an empty long
+	// poll created it, no source message at all.
+	if claim.ScaleSetID == 0 || claim.ClaimKey == 0 ||
+		(claim.Origin == store.GitHubClaimFromJobAvailable &&
+			claim.SourceMessageID == 0) || claim.State == "" {
 		return invalid("invalid_github_claim", "github_claim", "contains incomplete durable identity")
 	}
 	if err := claim.Execution.Validate(); err != nil {
@@ -2099,7 +2104,7 @@ func cloneGitHubFence(fence GitHubFence) GitHubFence {
 func githubFencesEqual(left, right GitHubFence) bool {
 	return left.ExecutionID == right.ExecutionID &&
 		left.ScaleSetID == right.ScaleSetID &&
-		left.RunnerRequestID == right.RunnerRequestID &&
+		left.ClaimKey == right.ClaimKey &&
 		left.ClaimState == right.ClaimState &&
 		githubAttemptsEqual(left.Attempt, right.Attempt)
 }
@@ -2107,7 +2112,7 @@ func githubFencesEqual(left, right GitHubFence) bool {
 func githubFenceCanAdvance(current, next GitHubFence) bool {
 	if current.ExecutionID != next.ExecutionID ||
 		current.ScaleSetID != next.ScaleSetID ||
-		current.RunnerRequestID != next.RunnerRequestID {
+		current.ClaimKey != next.ClaimKey {
 		return false
 	}
 	if current.Attempt == nil || next.Attempt == nil {
