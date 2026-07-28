@@ -34,7 +34,10 @@ permissions:
 
 concurrency:
   group: deep-verification-${{ github.ref }}
-  cancel-in-progress: false
+  # A scheduled run is never superseded, so it always finishes. A pull request
+  # run only proves the definition still works, and the newest push is the only
+  # one whose answer is wanted.
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   fuzz:
@@ -119,10 +122,13 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os:
-          - ubuntu-24.04
-          - macos-15
-          - windows-2025
+        # A pull request run exists to prove the invocation still works, so it
+        # uses one runner rather than holding three for hours on a job that
+        # gates nothing. The other two operating systems run on the schedule.
+        os: >-
+          ${{ fromJSON(github.event_name == 'pull_request'
+          && '["ubuntu-24.04"]'
+          || '["ubuntu-24.04","macos-15","windows-2025"]') }}
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -134,8 +140,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # The second pass is what turns shuffling into an order-dependence check,
+      # so the schedule always runs it. A pull request run drops to one pass for
+      # the same reason it runs on one operating system.
       - name: Test under the race detector with shuffled repetition
         shell: bash
+        env:
+          RACE_COUNT: ${{ github.event_name == 'pull_request' && '1' || '2' }}
         run: |
           mkdir -p output/test-results
           go tool gotestsum \
@@ -143,7 +154,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-deep-race-junit.xml \
             --jsonfile output/test-results/go-deep-race.json \
-            -- -race -shuffle=on -count=2 -timeout=170m ./...
+            -- -race -shuffle=on "-count=${RACE_COUNT}" -timeout=170m ./...
 
       - name: Upload failure evidence
         if: failure()
