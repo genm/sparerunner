@@ -203,7 +203,7 @@ func TestControllerRunnerMessageReplayAfterAckFailureDoesNotDuplicateClaim(t *te
 			stateStore.runtimeFreshness.Session,
 		)
 	}
-	if stateStore.claim.RunnerRequestID != 7001 {
+	if stateStore.claim.ClaimKey != 7001 {
 		t.Fatalf("replayed claim = %#v", stateStore.claim)
 	}
 }
@@ -279,7 +279,7 @@ func TestControllerRunnerStableReplayIdentityIgnoresVolatileStatisticsUnderRace(
 		)
 	}
 	executionID := stateStore.claim.Execution.ID
-	runnerRequestID := stateStore.claim.RunnerRequestID
+	claimKey := stateStore.claim.ClaimKey
 	storedDigest := stateStore.message.Digest
 	stateStore.mu.Unlock()
 	if executionID != deterministicExecutionID(
@@ -287,8 +287,8 @@ func TestControllerRunnerStableReplayIdentityIgnoresVolatileStatisticsUnderRace(
 		first.ID,
 		first.Jobs[0].RunnerRequestID,
 	) ||
-		runnerRequestID != first.Jobs[0].RunnerRequestID {
-		t.Fatalf("stable replay execution/request = %s/%d", executionID, runnerRequestID)
+		claimKey != first.Jobs[0].RunnerRequestID {
+		t.Fatalf("stable replay execution/request = %s/%d", executionID, claimKey)
 	}
 
 	changed := first
@@ -303,7 +303,7 @@ func TestControllerRunnerStableReplayIdentityIgnoresVolatileStatisticsUnderRace(
 		stateStore.events != len(first.Jobs) || len(stateStore.message.Jobs) != len(first.Jobs) ||
 		stateStore.message.Digest != storedDigest || stateStore.claim == nil ||
 		stateStore.claim.Execution.ID != executionID ||
-		stateStore.claim.RunnerRequestID != runnerRequestID {
+		stateStore.claim.ClaimKey != claimKey {
 		t.Fatalf("changed Jobs mutated durable replay state: commits=%d replays=%d events=%d jobs=%d message=%#v claim=%#v",
 			stateStore.commits,
 			stateStore.replays,
@@ -1717,7 +1717,7 @@ func TestControllerRunnerLostJITWaitsForDurableTerminalThenCleansExactProviderRu
 
 			if err := restarted.ReconcileJITAttempt(
 				context.Background(),
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			); !errors.Is(err, ErrGitHubReconciliationRequired) ||
 				!errors.Is(err, store.ErrGitHubJITTerminalPending) {
 				t.Fatalf("snapshot-before-outbox reconciliation = %v", err)
@@ -1737,7 +1737,7 @@ func TestControllerRunnerLostJITWaitsForDurableTerminalThenCleansExactProviderRu
 
 			if err := restarted.ReconcileJITAttempt(
 				context.Background(),
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			); !errors.Is(err, ErrGitHubReconciliationRequired) {
 				t.Fatalf("exact provider deletion reconciliation = %v", err)
 			}
@@ -1748,14 +1748,14 @@ func TestControllerRunnerLostJITWaitsForDurableTerminalThenCleansExactProviderRu
 			lifecycle.observedRunner = nil
 			if err := restarted.ReconcileJITAttempt(
 				context.Background(),
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			); !errors.Is(err, ErrGitHubReconciliationRequired) ||
 				!errors.Is(err, store.ErrGitHubJITAbsencePending) {
 				t.Fatalf("first post-delete absence = %v", err)
 			}
 			if err := restarted.ReconcileJITAttempt(
 				context.Background(),
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			); err != nil {
 				t.Fatalf("confirmed post-delete absence = %v", err)
 			}
@@ -1827,7 +1827,7 @@ func TestControllerRunnerPrunedDurableStartHistoryNeverQueriesOrRemovesProvider(
 	)
 	if err := restarted.ReconcileJITAttempt(
 		context.Background(),
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	); err != nil {
 		t.Fatalf("pruned durable start reconciliation = %v", err)
 	}
@@ -2422,7 +2422,7 @@ func testControllerRunnerPickupMessage(
 		},
 		Jobs: []github.JobMessage{{
 			Type:            github.MessageTypeJobStarted,
-			RunnerRequestID: attempt.RunnerRequestID,
+			RunnerRequestID: attempt.ClaimKey,
 			RunnerID:        attempt.RunnerID,
 			RunnerName:      attempt.RunnerName,
 			RepositoryName:  "tewake",
@@ -2499,7 +2499,7 @@ func TestControllerRunnerPrunedTerminalOnlyHistoryCleansExactProviderRunner(t *t
 	}
 	if err := restarted.ReconcileJITAttempt(
 		context.Background(),
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	); !errors.Is(err, ErrGitHubReconciliationRequired) {
 		t.Fatalf("pruned terminal exact DELETE = %v", err)
 	}
@@ -2510,13 +2510,13 @@ func TestControllerRunnerPrunedTerminalOnlyHistoryCleansExactProviderRunner(t *t
 	lifecycle.observedRunner = nil
 	if err := restarted.ReconcileJITAttempt(
 		context.Background(),
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	); !errors.Is(err, store.ErrGitHubJITAbsencePending) {
 		t.Fatalf("pruned terminal first absence = %v", err)
 	}
 	if err := restarted.ReconcileJITAttempt(
 		context.Background(),
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	); err != nil {
 		t.Fatalf("pruned terminal confirmed absence = %v", err)
 	}
@@ -2561,7 +2561,7 @@ func TestControllerRunnerPersistedQuarantineStillAdvancesSameProviderFence(t *te
 	}
 	attempt := store.GitHubJITAttempt{
 		ScaleSetID:      7,
-		RunnerRequestID: 7001,
+		ClaimKey:        7001,
 		Attempt:         1,
 		ControllerEpoch: epoch - 1,
 		RunnerName:      deterministicRunnerName(7, 7001),
@@ -2572,18 +2572,20 @@ func TestControllerRunnerPersistedQuarantineStillAdvancesSameProviderFence(t *te
 	}
 	claim := store.GitHubJobClaim{
 		ScaleSetID:      attempt.ScaleSetID,
-		RunnerRequestID: attempt.RunnerRequestID,
+		ClaimKey:        attempt.ClaimKey,
+		Origin:          store.GitHubClaimFromJobAvailable,
+		RunnerRequestID: attempt.ClaimKey,
 		SourceMessageID: 41,
 		Execution:       execution,
 		State:           store.GitHubClaimReconciliationRequired,
 		CurrentAttempt:  attempt.Attempt,
 	}
 	fence := reconcile.GitHubFence{
-		ExecutionID:     execution.ID,
-		ScaleSetID:      attempt.ScaleSetID,
-		RunnerRequestID: attempt.RunnerRequestID,
-		ClaimState:      claim.State,
-		Attempt:         &attempt,
+		ExecutionID: execution.ID,
+		ScaleSetID:  attempt.ScaleSetID,
+		ClaimKey:    attempt.ClaimKey,
+		ClaimState:  claim.State,
+		Attempt:     &attempt,
 	}
 	projection, err := reconcile.Restore(
 		epoch,
@@ -3033,6 +3035,8 @@ func TestControllerRunnerRestartDispatchesReconciledReplacementBeforeLongPoll(
 	}
 	stateStore.claim = &store.GitHubJobClaim{
 		ScaleSetID:      7,
+		ClaimKey:        7001,
+		Origin:          store.GitHubClaimFromJobAvailable,
 		RunnerRequestID: 7001,
 		SourceMessageID: 91,
 		Execution:       execution,
@@ -3041,14 +3045,14 @@ func TestControllerRunnerRestartDispatchesReconciledReplacementBeforeLongPoll(
 	}
 	stateStore.acquireAttempt = store.GitHubAcquireAttempt{
 		ScaleSetID:      7,
-		RunnerRequestID: 7001,
+		ClaimKey:        7001,
 		Attempt:         2,
 		EvidenceMessage: 91,
 		ControllerEpoch: 3,
 	}
 	stateStore.attempt = store.GitHubJITAttempt{
 		ScaleSetID:      7,
-		RunnerRequestID: 7001,
+		ClaimKey:        7001,
 		Attempt:         1,
 		ControllerEpoch: 3,
 		RunnerName:      "tewake-reconciled-old",
@@ -3713,6 +3717,8 @@ type runnerCoordinatorFakeStore struct {
 	commits            int
 	replays            int
 	events             int
+	assignedDemand     store.GitHubAssignedDemandResult
+	demandBindings     []store.SingleSlotBinding
 }
 
 func newRunnerCoordinatorFakeStore() *runnerCoordinatorFakeStore {
@@ -3933,6 +3939,27 @@ func (state *runnerCoordinatorFakeStore) RecordGitHubSessionDemand(_ context.Con
 	return nil
 }
 
+// ReconcileGitHubAssignedDemand records the binding each poll reconciles with
+// and returns whatever the test staged. The default zero value reports no
+// durable statistics, which keeps every pre-existing JobAvailable scenario
+// unchanged.
+func (state *runnerCoordinatorFakeStore) ReconcileGitHubAssignedDemand(
+	_ context.Context,
+	_ store.ScaleSetID,
+	binding store.SingleSlotBinding,
+) (store.GitHubAssignedDemandResult, error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	state.demandBindings = append(state.demandBindings, binding)
+	return state.assignedDemand, nil
+}
+
+func (state *runnerCoordinatorFakeStore) assignedDemandBindings() []store.SingleSlotBinding {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return append([]store.SingleSlotBinding(nil), state.demandBindings...)
+}
+
 func (state *runnerCoordinatorFakeStore) CommitGitHubQueueMessage(
 	_ context.Context,
 	message store.GitHubQueueMessage,
@@ -3963,7 +3990,7 @@ func (state *runnerCoordinatorFakeStore) CommitGitHubQueueMessage(
 	pickupProven := false
 	for _, event := range message.Jobs {
 		if runnerCoordinatorFakePickupProof(event) &&
-			(event.RunnerRequestID == state.attempt.RunnerRequestID ||
+			(event.RunnerRequestID == state.attempt.ClaimKey ||
 				event.RunnerRequestID == 0) &&
 			event.RunnerID == state.attempt.RunnerID &&
 			event.RunnerName == state.attempt.RunnerName {
@@ -3994,7 +4021,7 @@ func (state *runnerCoordinatorFakeStore) CommitGitHubQueueMessage(
 		}
 		seenAvailable[event.RunnerRequestID] = struct{}{}
 		hasAvailable = true
-		if state.claim != nil && state.claim.RunnerRequestID == event.RunnerRequestID {
+		if state.claim != nil && state.claim.ClaimKey == event.RunnerRequestID {
 			if state.requeueIntent != nil {
 				resolved = state.claim
 				intent := *state.requeueIntent
@@ -4081,6 +4108,8 @@ func (state *runnerCoordinatorFakeStore) CommitGitHubQueueMessage(
 		}
 		state.claim = &store.GitHubJobClaim{
 			ScaleSetID:      message.ScaleSetID,
+			ClaimKey:        event.RunnerRequestID,
+			Origin:          store.GitHubClaimFromJobAvailable,
 			RunnerRequestID: event.RunnerRequestID,
 			SourceMessageID: message.MessageID,
 			Execution: domain.ExecutionSnapshot{
@@ -4094,7 +4123,7 @@ func (state *runnerCoordinatorFakeStore) CommitGitHubQueueMessage(
 		state.capacity = 0
 		state.acquireAttempt = store.GitHubAcquireAttempt{
 			ScaleSetID:      message.ScaleSetID,
-			RunnerRequestID: event.RunnerRequestID,
+			ClaimKey:        event.RunnerRequestID,
 			Attempt:         1,
 			EvidenceMessage: message.MessageID,
 			ControllerEpoch: state.controllerEpoch,
@@ -4182,13 +4211,13 @@ func (state *runnerCoordinatorFakeStore) GitHubUnpickedRequeueIntent(
 func (state *runnerCoordinatorFakeStore) BeginGitHubAcquire(
 	_ context.Context,
 	scaleSetID store.ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (store.GitHubAcquireAttempt, error) {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	if state.claim == nil ||
 		state.claim.ScaleSetID != scaleSetID ||
-		state.claim.RunnerRequestID != runnerRequestID ||
+		state.claim.ClaimKey != claimKey ||
 		state.claim.State != store.GitHubClaimPending ||
 		state.acquireDispatching ||
 		state.acquireDone {
@@ -4246,7 +4275,7 @@ func (state *runnerCoordinatorFakeStore) MarkGitHubPrepareFailed(context.Context
 func (state *runnerCoordinatorFakeStore) BeginGitHubJITAttempt(
 	_ context.Context,
 	scaleSetID store.ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	controllerEpoch domain.ControllerEpoch,
 	name string,
 ) (store.GitHubJITAttempt, bool, error) {
@@ -4259,7 +4288,7 @@ func (state *runnerCoordinatorFakeStore) BeginGitHubJITAttempt(
 		return store.GitHubJITAttempt{}, false, store.ErrGitHubClaimState
 	}
 	state.attempt = store.GitHubJITAttempt{
-		ScaleSetID: scaleSetID, RunnerRequestID: runnerRequestID,
+		ScaleSetID: scaleSetID, ClaimKey: claimKey,
 		Attempt: state.attempt.Attempt + 1, ControllerEpoch: controllerEpoch,
 		RunnerName: name, State: store.GitHubJITIntent,
 	}

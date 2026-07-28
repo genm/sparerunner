@@ -206,7 +206,7 @@ func TestUnpickedRequeueIntentDataInvariantFailsClosedOnOpen(t *testing.T) {
 	fresh := githubQueueMessageForTest(
 		fixture.current.ScaleSetID,
 		1602,
-		fixture.current.RunnerRequestID,
+		fixture.current.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "execution-intent-proposed"
 	commit, err := controller.CommitGitHubQueueMessage(
@@ -232,9 +232,9 @@ func TestUnpickedRequeueIntentDataInvariantFailsClosedOnOpen(t *testing.T) {
 	if _, err := controller.db.ExecContext(ctx, `UPDATE
 			github_unpicked_requeue_intents
 		SET old_execution_id = 'execution-unrelated-terminal'
-		WHERE scale_set_id = ? AND runner_request_id = ?`,
+		WHERE scale_set_id = ? AND claim_key = ?`,
 		fixture.current.ScaleSetID,
-		fixture.current.RunnerRequestID,
+		fixture.current.ClaimKey,
 	); err != nil {
 		_ = controller.Close()
 		t.Fatal(err)
@@ -740,13 +740,13 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 	const (
 		scaleSetID      ScaleSetID = 93
 		messageID       MessageID  = 1221
-		runnerRequestID int64      = 2321
+		claimKey        int64      = 2321
 		executionID                = "execution-v8-migration"
 		controllerEpoch            = domain.ControllerEpoch(1)
 	)
 	attempt := GitHubJITAttempt{
 		ScaleSetID:      scaleSetID,
-		RunnerRequestID: runnerRequestID,
+		ClaimKey:        claimKey,
 		Attempt:         1,
 		ControllerEpoch: controllerEpoch,
 		RunnerName:      "tewake-v8-migration",
@@ -786,7 +786,7 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 			updated_at_unix_nano
 		) VALUES (?, ?, ?, ?, 'reconciliation_required', 1, ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		messageID,
 		executionID,
 		time.Unix(101, 0).UnixNano(),
@@ -802,7 +802,7 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 			created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, 1, ?, ?, 'generation_ambiguous', NULL, NULL, '', ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		controllerEpoch,
 		attempt.RunnerName,
 		time.Unix(101, 0).UnixNano(),
@@ -823,7 +823,7 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 			github_session_generation
 		) VALUES (?, ?, ?, ?, ?, 'generation_absence_pending', ?, 7)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		attempt.Attempt,
 		snapshotDigest,
 		controllerEpoch,
@@ -847,9 +847,9 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 	if err := upgraded.db.QueryRowContext(ctx, `SELECT snapshot_digest,
 			controller_epoch, decision, github_session_generation
 		FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		attempt.Attempt,
 	).Scan(
 		&gotDigest,
@@ -880,18 +880,18 @@ func TestUnpickedRequeueMigrationUpgradesVersionEightAuthority(t *testing.T) {
 	)
 	if _, err := upgraded.db.ExecContext(ctx, `UPDATE github_jit_snapshot_authority
 		SET decision = 'unpicked_requeue_removal_issued'
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		attempt.Attempt,
 	); err != nil {
 		t.Fatalf("new v9 authority decision rejected = %v", err)
 	}
 	if _, err := upgraded.db.ExecContext(ctx, `UPDATE github_jit_snapshot_authority
 		SET decision = 'unknown'
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		attempt.Attempt,
 	); err == nil {
 		t.Fatal("v9 authority CHECK accepted unknown decision")
@@ -951,13 +951,13 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 	}
 
 	const (
-		scaleSetID      ScaleSetID = 109
-		runnerRequestID int64      = 4109
-		oldMessageID    MessageID  = 2101
-		freshMessageID  MessageID  = 2102
-		oldExecutionID             = "v9-lifecycle-old-execution"
-		replacementID              = "v9-lifecycle-replacement"
-		runnerName                 = "tewake-v9-lifecycle-runner"
+		scaleSetID     ScaleSetID = 109
+		claimKey       int64      = 4109
+		oldMessageID   MessageID  = 2101
+		freshMessageID MessageID  = 2102
+		oldExecutionID            = "v9-lifecycle-old-execution"
+		replacementID             = "v9-lifecycle-replacement"
+		runnerName                = "tewake-v9-lifecycle-runner"
 	)
 	now := time.Unix(101, 0).UnixNano()
 	for _, message := range []struct {
@@ -986,7 +986,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 		) VALUES (?, ?, 0, 'JobAvailable', ?, 0, '', '', '', '', '', 0)`,
 		scaleSetID,
 		freshMessageID,
-		runnerRequestID,
+		claimKey,
 	); err != nil {
 		_ = db.Close()
 		t.Fatal(err)
@@ -1006,7 +1006,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 			updated_at_unix_nano
 		) VALUES (?, ?, ?, ?, 'reconciliation_required', 1, ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		oldMessageID,
 		oldExecutionID,
 		now,
@@ -1021,7 +1021,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 			created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, 1, 1, ?, 'started', 91, ?, 'v9-start', ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		runnerName,
 		digestForTest("v9-lifecycle-jit"),
 		now,
@@ -1036,7 +1036,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 			updated_at_unix_nano
 		) VALUES (?, ?, 1, ?, 1, 'acquired', ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		oldMessageID,
 		now,
 		now,
@@ -1050,7 +1050,7 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 			controller_epoch, created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, 1, ?, ?, ?, 0, 1, ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		oldExecutionID,
 		replacementID,
 		freshMessageID,
@@ -1128,13 +1128,13 @@ func TestLifecycleRequestMigrationPreservesVersionNineIntentAndForeignKeys(
 		t.Fatal("v10 lifecycle schema accepted zero-request JobAvailable")
 	}
 	if _, err := upgraded.db.ExecContext(ctx, `INSERT INTO github_jit_attempts(
-			scale_set_id, runner_request_id, attempt, controller_epoch,
+			scale_set_id, claim_key, attempt, controller_epoch,
 			runner_name, state, runner_id, jit_digest, start_command_id,
 			created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, 2, 1, 'duplicate-runner-name', 'generated', 91, ?,
 			'duplicate-start', ?, ?)`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		digestForTest("v10-duplicate-runner"),
 		now,
 		now,

@@ -198,13 +198,13 @@ func TestAgentKillReplaysAcceptedStartWithoutCreatingAnotherRuntime(t *testing.T
 			Command: command,
 		}},
 		GitHubFences: []reconcile.GitHubFence{{
-			ExecutionID:     execution.ID,
-			ScaleSetID:      7,
-			RunnerRequestID: 8,
-			ClaimState:      store.GitHubClaimStartAmbiguous,
+			ExecutionID: execution.ID,
+			ScaleSetID:  7,
+			ClaimKey:    8,
+			ClaimState:  store.GitHubClaimStartAmbiguous,
 			Attempt: &store.GitHubJITAttempt{
 				ScaleSetID:      7,
-				RunnerRequestID: 8,
+				ClaimKey:        8,
 				Attempt:         1,
 				ControllerEpoch: 1,
 				RunnerName:      "tewake-fault-a",

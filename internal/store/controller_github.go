@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/base32"
 	"errors"
 	"fmt"
 	"strings"
@@ -39,7 +41,9 @@ type GitHubSessionDemand struct {
 }
 
 type GitHubJobEvent struct {
-	Type            GitHubJobEventType
+	Type GitHubJobEventType
+	// RunnerRequestID is provider identity carried by the message itself, never a
+	// claim key. JobAssigned legitimately arrives with it unset.
 	RunnerRequestID int64
 	RunnerID        int
 	RunnerName      string
@@ -121,8 +125,34 @@ const (
 	GitHubClaimReconciliationRequired GitHubClaimState = "reconciliation_required"
 )
 
+// GitHubClaimOrigin records which half of the scale-set protocol created a
+// claim. It is durable because the two halves have genuinely different
+// identity: an offered job carries a provider request ID that AcquireJobs must
+// be called with, while an assigned job carries none at all and is only ever
+// counted.
+type GitHubClaimOrigin string
+
+const (
+	// GitHubClaimFromJobAvailable is the claim-this-offered-job handshake.
+	GitHubClaimFromJobAvailable GitHubClaimOrigin = "job_available"
+	// GitHubClaimFromAssignedDemand is a runner created because
+	// Statistics.TotalAssignedJobs exceeded the durable active count. GitHub
+	// matches an already-assigned job to the ephemeral runner once it registers,
+	// so no job identity is needed to start one.
+	GitHubClaimFromAssignedDemand GitHubClaimOrigin = "assigned_demand"
+)
+
+// GitHubJobClaim is one runner lifecycle. ClaimKey is its Tewake-owned durable
+// identity and the key every child table references; it equals RunnerRequestID
+// for an offered job and is negative for assigned demand, so the two namespaces
+// can never collide. RunnerRequestID is provider correlation only and is zero
+// when GitHub never issued one — it must never be synthesized, because
+// AcquireJobs is keyed on it. SourceMessageID is likewise zero for a claim
+// created by an empty long poll, which carries no queue message at all.
 type GitHubJobClaim struct {
 	ScaleSetID      ScaleSetID
+	ClaimKey        int64
+	Origin          GitHubClaimOrigin
 	RunnerRequestID int64
 	SourceMessageID MessageID
 	Execution       domain.ExecutionSnapshot
@@ -130,9 +160,29 @@ type GitHubJobClaim struct {
 	CurrentAttempt  int
 }
 
+// validateGitHubClaimIdentity mirrors the durable CHECK constraint in Go so a
+// claim can never be handed to the lifecycle with an identity the database
+// would have refused.
+func validateGitHubClaimIdentity(claim GitHubJobClaim) error {
+	switch claim.Origin {
+	case GitHubClaimFromJobAvailable:
+		if claim.ClaimKey <= 0 || claim.RunnerRequestID != claim.ClaimKey ||
+			claim.SourceMessageID == 0 {
+			return ErrGitHubClaimState
+		}
+	case GitHubClaimFromAssignedDemand:
+		if claim.ClaimKey >= 0 || claim.RunnerRequestID != 0 {
+			return ErrGitHubClaimState
+		}
+	default:
+		return ErrGitHubClaimState
+	}
+	return nil
+}
+
 type GitHubAcquireAttempt struct {
 	ScaleSetID      ScaleSetID
-	RunnerRequestID int64
+	ClaimKey        int64
 	Attempt         int
 	EvidenceMessage MessageID
 	ControllerEpoch domain.ControllerEpoch
@@ -161,6 +211,10 @@ type GitHubMessageCommit struct {
 	Claim              *GitHubJobClaim
 	RequeueIntent      *GitHubUnpickedRequeueIntent
 	UnclaimedAvailable bool
+	// AssignedDemand reports the assigned-job reconciliation performed inside
+	// this same transaction. Its Created claim, when present, is already durable
+	// by the time the caller may acknowledge the message.
+	AssignedDemand GitHubAssignedDemandResult
 }
 
 // GitHubUnpickedRequeueIntent binds one fresh JobAvailable event to the exact
@@ -195,7 +249,7 @@ const (
 
 type GitHubJITAttempt struct {
 	ScaleSetID      ScaleSetID
-	RunnerRequestID int64
+	ClaimKey        int64
 	Attempt         int
 	ControllerEpoch domain.ControllerEpoch
 	RunnerName      string
@@ -562,6 +616,18 @@ func (s *ControllerStore) CommitGitHubQueueMessage(
 	if err != nil {
 		return GitHubMessageCommit{}, err
 	}
+	// Assigned demand is reconciled inside the transaction that commits this
+	// message, so any execution it creates is durable before the message can be
+	// acknowledged. A crash between the two redelivers the message and reaches
+	// the same count instead of losing the work.
+	demand := GitHubAssignedDemandResult{}
+	if claimed == nil {
+		demand, err = reconcileGitHubAssignedDemand(
+			ctx, tx, message.ScaleSetID, binding, committedAt)
+		if err != nil {
+			return GitHubMessageCommit{}, err
+		}
+	}
 	// Take the audit gate only after all SQLite work is complete. Taking it
 	// before BeginTx would invert the single-connection DB/audit lock order when
 	// another transaction is degrading audit authority. A completed degradation
@@ -582,6 +648,7 @@ func (s *ControllerStore) CommitGitHubQueueMessage(
 		Claim:              claimed,
 		RequeueIntent:      requeueIntent,
 		UnclaimedAvailable: unclaimedAvailable,
+		AssignedDemand:     demand,
 	}, nil
 }
 
@@ -623,7 +690,7 @@ func resolveGitHubAvailableClaim(
 			ctx,
 			tx,
 			existing.ScaleSetID,
-			existing.RunnerRequestID,
+			existing.ClaimKey,
 		)
 		if err != nil {
 			return nil, nil, true, err
@@ -760,37 +827,25 @@ func resolveGitHubAvailableClaim(
 		return resolved, resolvedRequeue, true, err
 	}
 	job := unclaimed[0]
-	execution := domain.ExecutionSnapshot{
-		ID:       job.ExecutionID,
-		TargetID: binding.TargetID,
-		Slot:     domain.SlotKey{NodeID: binding.NodeID, Index: binding.Slot},
-		State:    domain.ExecutionReserved,
-	}
-	if err := execution.Validate(); err != nil {
+	claim, err := insertGitHubSlotClaim(ctx, tx, githubSlotClaimRequest{
+		ScaleSetID:      message.ScaleSetID,
+		Origin:          GitHubClaimFromJobAvailable,
+		ClaimKey:        job.RunnerRequestID,
+		RunnerRequestID: job.RunnerRequestID,
+		SourceMessageID: message.MessageID,
+		ExecutionID:     job.ExecutionID,
+		State:           GitHubClaimPending,
+		Binding:         binding,
+		CommittedAt:     committedAt,
+	})
+	if err != nil {
 		return nil, nil, true, err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(
-			id, target_id, node_id, slot_index, state, created_at_unix_nano
-		) VALUES (?, ?, ?, ?, ?, ?)`, execution.ID, binding.TargetID,
-		binding.NodeID, binding.Slot, execution.State, committedAt); err != nil {
-		return nil, nil, true, mapAssignmentError(err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(
-			node_id, slot_index, target_id, execution_id
-		) VALUES (?, ?, ?, ?)`, binding.NodeID, binding.Slot,
-		binding.TargetID, execution.ID); err != nil {
-		return nil, nil, true, mapAssignmentError(err)
-	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO github_job_claims(
-			scale_set_id, runner_request_id, source_message_id, execution_id,
-			state, current_jit_attempt, created_at_unix_nano, updated_at_unix_nano
-		) VALUES (?, ?, ?, ?, ?, 0, ?, ?)`, message.ScaleSetID,
-		job.RunnerRequestID, message.MessageID, execution.ID,
-		GitHubClaimPending, committedAt, committedAt); err != nil {
-		return nil, nil, true, err
-	}
+	// An offered job still needs the acquire handshake before it may run; the
+	// assigned-demand path deliberately has no equivalent row because there is
+	// nothing to acquire.
 	if _, err := tx.ExecContext(ctx, `INSERT INTO github_acquire_attempts(
-		scale_set_id, runner_request_id, attempt, evidence_message_id,
+		scale_set_id, claim_key, attempt, evidence_message_id,
 		controller_epoch, state, created_at_unix_nano, updated_at_unix_nano
 	) VALUES (?, ?, 1, ?, ?, 'pending', ?, ?)`,
 		message.ScaleSetID,
@@ -802,13 +857,311 @@ func resolveGitHubAvailableClaim(
 	); err != nil {
 		return nil, nil, true, err
 	}
-	return &GitHubJobClaim{
-		ScaleSetID:      message.ScaleSetID,
-		RunnerRequestID: job.RunnerRequestID,
-		SourceMessageID: message.MessageID,
+	return &claim, resolvedRequeue, false, nil
+}
+
+// githubSlotClaimRequest is the complete input needed to reserve the single
+// slot and create one durable claim. Both protocol halves go through it so the
+// reservation, execution, and claim rows can never drift apart.
+type githubSlotClaimRequest struct {
+	ScaleSetID      ScaleSetID
+	Origin          GitHubClaimOrigin
+	ClaimKey        int64
+	RunnerRequestID int64
+	SourceMessageID MessageID
+	ExecutionID     domain.ExecutionID
+	State           GitHubClaimState
+	Binding         SingleSlotBinding
+	CommittedAt     int64
+}
+
+func insertGitHubSlotClaim(
+	ctx context.Context,
+	tx *sql.Tx,
+	request githubSlotClaimRequest,
+) (GitHubJobClaim, error) {
+	binding := request.Binding
+	execution := domain.ExecutionSnapshot{
+		ID:       request.ExecutionID,
+		TargetID: binding.TargetID,
+		Slot:     domain.SlotKey{NodeID: binding.NodeID, Index: binding.Slot},
+		State:    domain.ExecutionReserved,
+	}
+	if err := execution.Validate(); err != nil {
+		return GitHubJobClaim{}, err
+	}
+	claim := GitHubJobClaim{
+		ScaleSetID:      request.ScaleSetID,
+		ClaimKey:        request.ClaimKey,
+		Origin:          request.Origin,
+		RunnerRequestID: request.RunnerRequestID,
+		SourceMessageID: request.SourceMessageID,
 		Execution:       execution,
-		State:           GitHubClaimPending,
-	}, resolvedRequeue, false, nil
+		State:           request.State,
+	}
+	if err := validateGitHubClaimIdentity(claim); err != nil {
+		return GitHubJobClaim{}, err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO executions(
+			id, target_id, node_id, slot_index, state, created_at_unix_nano
+		) VALUES (?, ?, ?, ?, ?, ?)`, execution.ID, binding.TargetID,
+		binding.NodeID, binding.Slot, execution.State,
+		request.CommittedAt); err != nil {
+		return GitHubJobClaim{}, mapAssignmentError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO slot_reservations(
+			node_id, slot_index, target_id, execution_id
+		) VALUES (?, ?, ?, ?)`, binding.NodeID, binding.Slot,
+		binding.TargetID, execution.ID); err != nil {
+		return GitHubJobClaim{}, mapAssignmentError(err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO github_job_claims(
+			scale_set_id, claim_key, origin, runner_request_id, source_message_id,
+			execution_id, state, current_jit_attempt, created_at_unix_nano,
+			updated_at_unix_nano
+		) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)`,
+		request.ScaleSetID,
+		request.ClaimKey,
+		request.Origin,
+		nullableGitHubInt64(request.RunnerRequestID),
+		nullableGitHubInt64(int64(request.SourceMessageID)),
+		execution.ID,
+		request.State,
+		request.CommittedAt,
+		request.CommittedAt,
+	); err != nil {
+		return GitHubJobClaim{}, err
+	}
+	return claim, nil
+}
+
+// GitHubAssignedDemandResult reports one reconciliation of durable active
+// executions against GitHub's assigned-job statistic. Observed is false when no
+// statistics have ever been recorded for the scale set: demand is never
+// invented, so that case creates nothing and is not a shortfall. Unserved is
+// demand that every gate refused this round; it is returned rather than
+// swallowed so the caller can log it.
+type GitHubAssignedDemandResult struct {
+	Observed bool
+	Desired  int
+	Active   int
+	Created  *GitHubJobClaim
+	Unserved int
+}
+
+// ReconcileGitHubAssignedDemand raises durable executions toward the assigned
+// job count recorded for this scale set. It exists because GitHub's scale-set
+// protocol drives runner creation from Statistics.TotalAssignedJobs, not from
+// JobAvailable: an assigned job is never offered, so waiting for an offer left
+// the workflow queued forever. The reference listener re-evaluates desired
+// count even when a long poll returns no message, which is exactly what this
+// entry point serves.
+func (s *ControllerStore) ReconcileGitHubAssignedDemand(
+	ctx context.Context,
+	scaleSetID ScaleSetID,
+	binding SingleSlotBinding,
+) (GitHubAssignedDemandResult, error) {
+	if err := s.requireReady(); err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	if !s.ManagementAuditHealthy() {
+		return GitHubAssignedDemandResult{}, ErrManagementAuditPersistence
+	}
+	if scaleSetID == 0 || uint64(scaleSetID) > maxSQLiteInteger {
+		return GitHubAssignedDemandResult{}, errors.New("GitHub scale set ID is invalid")
+	}
+	if binding.TargetID == "" || binding.NodeID == "" || binding.Slot != 0 {
+		return GitHubAssignedDemandResult{}, errors.New(
+			"single-slot GitHub binding must name target, node, and slot zero")
+	}
+	observedAt, err := storeUnixNano(s.now())
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	tx, err := s.db.BeginTx(ctx, &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	defer tx.Rollback()
+	result, err := reconcileGitHubAssignedDemand(
+		ctx, tx, scaleSetID, binding, observedAt)
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	if result.Created == nil {
+		// Nothing durable changed; do not take the audit gate or commit a
+		// write transaction for a pure read.
+		return result, nil
+	}
+	s.auditGate.RLock()
+	defer s.auditGate.RUnlock()
+	if !s.ManagementAuditHealthy() {
+		return GitHubAssignedDemandResult{}, ErrManagementAuditPersistence
+	}
+	if err := tx.Commit(); err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	return result, nil
+}
+
+// reconcileGitHubAssignedDemand converges durable state to a count rather than
+// creating one execution per message seen. That is what makes it safe under
+// redelivery and restart: the same statistic reached twice reads the same
+// durable active count inside the same transaction and creates nothing the
+// second time.
+func reconcileGitHubAssignedDemand(
+	ctx context.Context,
+	tx *sql.Tx,
+	scaleSetID ScaleSetID,
+	binding SingleSlotBinding,
+	committedAt int64,
+) (GitHubAssignedDemandResult, error) {
+	desired, observed, err := githubAssignedDemand(ctx, tx, scaleSetID)
+	if err != nil || !observed {
+		return GitHubAssignedDemandResult{}, err
+	}
+	active, err := githubActiveClaimCount(ctx, tx, scaleSetID)
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	result := GitHubAssignedDemandResult{
+		Observed: true,
+		Desired:  desired,
+		Active:   active,
+	}
+	missing := desired - active
+	if missing <= 0 {
+		return result, nil
+	}
+	result.Unserved = missing
+	// Assigned demand raises the desired count; it may never bypass a gate. All
+	// three below are the same predicates the JobAvailable claim boundary uses,
+	// called here rather than duplicated, so node capacity, target exclusions,
+	// availability intent, admission, and runner-update policy stay identical
+	// for both halves of the protocol.
+	if !binding.ClaimEnabled {
+		return result, nil
+	}
+	slotFree, err := githubSlotAvailable(ctx, tx, binding)
+	if err != nil || !slotFree {
+		return result, err
+	}
+	authorityCurrent, err := githubPollClaimAuthorityCurrent(
+		ctx, tx, binding, committedAt)
+	if err != nil || !authorityCurrent {
+		return result, err
+	}
+	claimKey, err := allocateGitHubDemandClaimKey(ctx, tx, scaleSetID)
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	claim, err := insertGitHubSlotClaim(ctx, tx, githubSlotClaimRequest{
+		ScaleSetID:  scaleSetID,
+		Origin:      GitHubClaimFromAssignedDemand,
+		ClaimKey:    claimKey,
+		ExecutionID: githubDemandExecutionID(scaleSetID, claimKey),
+		// There is nothing to acquire: GitHub already assigned the job and will
+		// match it to whichever ephemeral runner registers. The claim therefore
+		// enters the shared lifecycle at the state the acquire handshake would
+		// have left it in, and reuses prepare -> JIT -> start unchanged.
+		State:       GitHubClaimAcquired,
+		Binding:     binding,
+		CommittedAt: committedAt,
+	})
+	if err != nil {
+		return GitHubAssignedDemandResult{}, err
+	}
+	result.Created = &claim
+	result.Unserved = missing - 1
+	return result, nil
+}
+
+func githubAssignedDemand(
+	ctx context.Context,
+	tx *sql.Tx,
+	scaleSetID ScaleSetID,
+) (int, bool, error) {
+	var assigned int
+	err := tx.QueryRowContext(ctx, `SELECT total_assigned_jobs
+		FROM github_session_demand WHERE scale_set_id = ?`,
+		scaleSetID).Scan(&assigned)
+	if errors.Is(err, sql.ErrNoRows) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	return assigned, true, nil
+}
+
+// githubActiveClaimCount counts the runner lifecycles that are still consuming
+// assigned demand. A claim whose execution reached a terminal state has
+// released its slot and no longer serves a job, except while an unpicked
+// requeue intent still owns a replacement for it.
+func githubActiveClaimCount(
+	ctx context.Context,
+	tx *sql.Tx,
+	scaleSetID ScaleSetID,
+) (int, error) {
+	var active int
+	err := tx.QueryRowContext(ctx, `SELECT count(*)
+		FROM github_job_claims c
+		JOIN executions e ON e.id = c.execution_id
+		WHERE c.scale_set_id = ?
+			AND (
+				e.state NOT IN ('released', 'failed', 'quarantined')
+				OR EXISTS (
+					SELECT 1 FROM github_unpicked_requeue_intents intent
+					WHERE intent.scale_set_id = c.scale_set_id
+						AND intent.claim_key = c.claim_key
+				)
+			)`, scaleSetID).Scan(&active)
+	return active, err
+}
+
+// allocateGitHubDemandClaimKey hands out the next key below every key this
+// scale set has ever used. Claim rows are never deleted, so the minimum is
+// monotonic and needs no separate allocator. Keys stay negative so they can
+// never be mistaken for, or collide with, a GitHub runner request ID.
+func allocateGitHubDemandClaimKey(
+	ctx context.Context,
+	tx *sql.Tx,
+	scaleSetID ScaleSetID,
+) (int64, error) {
+	var lowest int64
+	if err := tx.QueryRowContext(ctx, `SELECT COALESCE(min(claim_key), 0)
+		FROM github_job_claims WHERE scale_set_id = ?`,
+		scaleSetID).Scan(&lowest); err != nil {
+		return 0, err
+	}
+	if lowest > 0 {
+		lowest = 0
+	}
+	key := lowest - 1
+	if key >= 0 {
+		return 0, errors.New("GitHub demand claim key allocation overflowed")
+	}
+	return key, nil
+}
+
+func githubDemandExecutionID(
+	scaleSetID ScaleSetID,
+	claimKey int64,
+) domain.ExecutionID {
+	digest := sha256.Sum256(fmt.Appendf(
+		nil, "execution\x00assigned_demand\x00%d\x00%d", scaleSetID, claimKey))
+	return domain.ExecutionID("twk-exec-" + strings.ToLower(
+		base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
+}
+
+// nullableGitHubInt64 keeps "GitHub never issued one" out of the value domain.
+// Zero is not a valid request or message ID, so it is stored as SQL NULL rather
+// than as a number the schema would have to carve an exception for.
+func nullableGitHubInt64(value int64) any {
+	if value == 0 {
+		return nil
+	}
+	return value
 }
 
 // requireGitHubFreshRecoveryAdmission protects fresh-only recovery transitions.
@@ -867,7 +1220,7 @@ func unpickedRunnerRequeueReadiness(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.CurrentAttempt,
 	)
 	if err != nil || !found {
@@ -921,12 +1274,12 @@ func githubJITAttemptPickupProven(
 	queryer controllerAgentQueryer,
 	attempt GitHubJITAttempt,
 ) (bool, error) {
-	if attempt.ScaleSetID == 0 || attempt.RunnerRequestID <= 0 ||
+	if attempt.ScaleSetID == 0 || attempt.ClaimKey == 0 ||
 		attempt.Attempt < 1 || attempt.RunnerID <= 0 ||
 		strings.TrimSpace(attempt.RunnerName) == "" {
 		return false, ErrGitHubJITState
 	}
-	// GitHub may omit RunnerRequestID from lifecycle messages. Runner ID is
+	// GitHub may omit ClaimKey from lifecycle messages. Runner ID is
 	// provider-owned and unique within a scale set; validate that durable
 	// identity first so a zero-request fallback can never authorize two
 	// attempts or silently choose one.
@@ -954,7 +1307,7 @@ func githubJITAttemptPickupProven(
 		attempt.RunnerID,
 		attempt.RunnerName,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.RunnerID,
 		attempt.RunnerName,
 	).Scan(&identityCount, &pickedUp); err != nil {
@@ -990,7 +1343,7 @@ func createGitHubUnpickedRequeueIntent(
 		return GitHubUnpickedRequeueIntent{}, err
 	}
 	if job.Type != GitHubJobAvailable ||
-		job.RunnerRequestID != claim.RunnerRequestID ||
+		job.RunnerRequestID != claim.ClaimKey ||
 		job.ExecutionID == "" ||
 		job.ExecutionID == claim.Execution.ID ||
 		sourceMessageID == 0 ||
@@ -1002,7 +1355,7 @@ func createGitHubUnpickedRequeueIntent(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil || !found || currentAcquire.State != githubAcquireAcquired {
 		if err == nil {
@@ -1034,12 +1387,12 @@ func createGitHubUnpickedRequeueIntent(
 		)
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO github_unpicked_requeue_intents(
-			scale_set_id, runner_request_id, jit_attempt, old_execution_id,
+			scale_set_id, claim_key, jit_attempt, old_execution_id,
 			replacement_execution_id, source_message_id, source_event_index,
 			controller_epoch, created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		attempt.Attempt,
 		claim.Execution.ID,
 		replacement.ID,
@@ -1054,13 +1407,13 @@ func createGitHubUnpickedRequeueIntent(
 	result, err := tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 			AND execution_id = ? AND current_jit_attempt = ? AND state = ?`,
 		GitHubClaimReconciliationRequired,
 		now,
 		now,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.Execution.ID,
 		claim.CurrentAttempt,
 		claim.State,
@@ -1091,7 +1444,7 @@ func requireCompatibleGitHubRequeueEvent(
 	job GitHubJobEvent,
 ) error {
 	if job.Type != GitHubJobAvailable ||
-		job.RunnerRequestID != intent.Claim.RunnerRequestID {
+		job.RunnerRequestID != intent.Claim.ClaimKey {
 		return ErrGitHubClaimState
 	}
 	var event GitHubJobEvent
@@ -1134,7 +1487,7 @@ func loadGitHubUnpickedRequeueIntent(
 	ctx context.Context,
 	queryer controllerAgentQueryer,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (GitHubUnpickedRequeueIntent, bool, error) {
 	var result GitHubUnpickedRequeueIntent
 	var attemptNumber int
@@ -1144,9 +1497,9 @@ func loadGitHubUnpickedRequeueIntent(
 			replacement_execution_id, source_message_id, source_event_index,
 			controller_epoch, created_at_unix_nano, updated_at_unix_nano
 		FROM github_unpicked_requeue_intents
-		WHERE scale_set_id = ? AND runner_request_id = ?`,
+		WHERE scale_set_id = ? AND claim_key = ?`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	).Scan(
 		&attemptNumber,
 		&oldExecutionID,
@@ -1167,7 +1520,7 @@ func loadGitHubUnpickedRequeueIntent(
 		ctx,
 		queryer,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1179,7 +1532,7 @@ func loadGitHubUnpickedRequeueIntent(
 		ctx,
 		queryer,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		attemptNumber,
 	)
 	if err != nil || !found {
@@ -1201,7 +1554,7 @@ func loadGitHubUnpickedRequeueIntent(
 		claim.State != GitHubClaimReconciliationRequired ||
 		claim.CurrentAttempt != attemptNumber ||
 		attempt.ScaleSetID != scaleSetID ||
-		attempt.RunnerRequestID != runnerRequestID ||
+		attempt.ClaimKey != claimKey ||
 		(attempt.State != GitHubJITStarted &&
 			attempt.State != GitHubJITRemovalPending) ||
 		result.SourceMessageID == 0 ||
@@ -1228,14 +1581,14 @@ func loadGitHubUnpickedRequeueIntent(
 func (s *ControllerStore) GitHubUnpickedRequeueIntent(
 	ctx context.Context,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (GitHubUnpickedRequeueIntent, bool, error) {
 	if err := s.requireReady(); err != nil {
 		return GitHubUnpickedRequeueIntent{}, false, err
 	}
 	if scaleSetID == 0 || uint64(scaleSetID) > maxSQLiteInteger ||
-		runnerRequestID <= 0 ||
-		uint64(runnerRequestID) > maxSQLiteInteger {
+		claimKey <= 0 ||
+		uint64(claimKey) > maxSQLiteInteger {
 		return GitHubUnpickedRequeueIntent{}, false, errors.New(
 			"GitHub unpicked requeue identity is invalid",
 		)
@@ -1244,7 +1597,7 @@ func (s *ControllerStore) GitHubUnpickedRequeueIntent(
 		ctx,
 		s.db,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)
 }
 
@@ -1263,7 +1616,7 @@ func lostJITClaimAwaitingAvailability(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.CurrentAttempt,
 	)
 	if err != nil || !found {
@@ -1295,7 +1648,7 @@ func rearmLostJITFromMessage(
 		(claim.Execution.State != domain.ExecutionReleased &&
 			claim.Execution.State != domain.ExecutionFailed) ||
 		job.Type != GitHubJobAvailable ||
-		job.RunnerRequestID != claim.RunnerRequestID ||
+		job.RunnerRequestID != claim.ClaimKey ||
 		job.ExecutionID == "" ||
 		job.ExecutionID == claim.Execution.ID {
 		return GitHubJobClaim{}, ErrGitHubClaimState
@@ -1304,7 +1657,7 @@ func rearmLostJITFromMessage(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.CurrentAttempt,
 	)
 	if err != nil || !found {
@@ -1367,7 +1720,7 @@ func rearmLostJITFromMessage(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1380,11 +1733,11 @@ func rearmLostJITFromMessage(
 	}
 	nextAcquire := currentAcquire.Attempt + 1
 	if _, err := tx.ExecContext(ctx, `INSERT INTO github_acquire_attempts(
-		scale_set_id, runner_request_id, attempt, evidence_message_id,
+		scale_set_id, claim_key, attempt, evidence_message_id,
 		controller_epoch, state, created_at_unix_nano, updated_at_unix_nano
 	) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		nextAcquire,
 		evidenceMessageID,
 		controllerEpoch,
@@ -1397,7 +1750,7 @@ func rearmLostJITFromMessage(
 		source_message_id = ?, execution_id = ?, state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 			AND execution_id = ? AND current_jit_attempt = ? AND state = ?`,
 		evidenceMessageID,
 		nextExecution.ID,
@@ -1405,7 +1758,7 @@ func rearmLostJITFromMessage(
 		now,
 		now,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.Execution.ID,
 		claim.CurrentAttempt,
 		GitHubClaimReconciliationRequired,
@@ -1491,7 +1844,7 @@ func rearmGitHubAcquireFromMessage(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1504,11 +1857,11 @@ func rearmGitHubAcquireFromMessage(
 	}
 	nextAttempt := current.Attempt + 1
 	if _, err := tx.ExecContext(ctx, `INSERT INTO github_acquire_attempts(
-		scale_set_id, runner_request_id, attempt, evidence_message_id,
+		scale_set_id, claim_key, attempt, evidence_message_id,
 		controller_epoch, state, created_at_unix_nano, updated_at_unix_nano
 	) VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)`,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		nextAttempt,
 		evidenceMessageID,
 		controllerEpoch,
@@ -1520,12 +1873,12 @@ func rearmGitHubAcquireFromMessage(
 	result, err := tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND state = ?`,
 		GitHubClaimPending,
 		now,
 		now,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		GitHubClaimAcquireAmbiguous,
 	)
 	if err != nil {
@@ -1541,8 +1894,8 @@ func rearmGitHubAcquireFromMessage(
 func validateGitHubAcquireAttempt(attempt GitHubAcquireAttempt) error {
 	if attempt.ScaleSetID == 0 ||
 		uint64(attempt.ScaleSetID) > maxSQLiteInteger ||
-		attempt.RunnerRequestID <= 0 ||
-		uint64(attempt.RunnerRequestID) > maxSQLiteInteger ||
+		attempt.ClaimKey <= 0 ||
+		uint64(attempt.ClaimKey) > maxSQLiteInteger ||
 		attempt.Attempt <= 0 ||
 		attempt.EvidenceMessage == 0 ||
 		uint64(attempt.EvidenceMessage) > maxSQLiteInteger ||
@@ -1558,19 +1911,19 @@ func loadCurrentGitHubAcquireAttempt(
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	},
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (githubAcquireAttemptRecord, bool, error) {
 	var record githubAcquireAttemptRecord
-	err := queryer.QueryRowContext(ctx, `SELECT scale_set_id, runner_request_id,
+	err := queryer.QueryRowContext(ctx, `SELECT scale_set_id, claim_key,
 		attempt, evidence_message_id, controller_epoch, state
 		FROM github_acquire_attempts
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 		ORDER BY attempt DESC LIMIT 1`,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	).Scan(
 		&record.ScaleSetID,
-		&record.RunnerRequestID,
+		&record.ClaimKey,
 		&record.Attempt,
 		&record.EvidenceMessage,
 		&record.ControllerEpoch,
@@ -1614,7 +1967,7 @@ func validateGitHubQueueMessage(message GitHubQueueMessage) error {
 				return errors.New("available GitHub job event is invalid")
 			}
 		case GitHubJobAssigned:
-			// Live GitHub omits RunnerRequestID on JobAssigned, and no durable
+			// Live GitHub omits ClaimKey on JobAssigned, and no durable
 			// decision reads it: assignment is stored as evidence, while claims
 			// key off JobAvailable and pickup off runner identity. Requiring one
 			// made the store reject the same messages the adapter did.
@@ -1747,7 +2100,7 @@ func (s *ControllerStore) NextActionableGitHubClaim(ctx context.Context, scaleSe
 	}
 	row := s.db.QueryRowContext(ctx, githubClaimSelect+`
 		WHERE c.scale_set_id = ? AND c.state IN ('pending', 'acquired', 'preparing')
-		ORDER BY c.created_at_unix_nano, c.runner_request_id LIMIT 1`, scaleSetID)
+		ORDER BY c.created_at_unix_nano, c.claim_key LIMIT 1`, scaleSetID)
 	claim, err := scanGitHubClaim(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GitHubJobClaim{}, false, nil
@@ -1769,8 +2122,8 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 	}
 	if claim.ScaleSetID == 0 ||
 		uint64(claim.ScaleSetID) > maxSQLiteInteger ||
-		claim.RunnerRequestID <= 0 ||
-		uint64(claim.RunnerRequestID) > maxSQLiteInteger ||
+		claim.ClaimKey <= 0 ||
+		uint64(claim.ClaimKey) > maxSQLiteInteger ||
 		claim.SourceMessageID == 0 ||
 		claim.State != GitHubClaimPending ||
 		claim.Execution.State != domain.ExecutionReserved ||
@@ -1789,7 +2142,7 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1804,7 +2157,7 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1835,7 +2188,7 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 		claim.CurrentAttempt,
 	)
 	if err != nil || !found {
@@ -1858,7 +2211,7 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 		)`,
 		claim.ScaleSetID,
 		claim.SourceMessageID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	).Scan(&sourceAvailable); err != nil {
 		return false, err
 	}
@@ -1871,17 +2224,17 @@ func (s *ControllerStore) GitHubPendingClaimDispatchReady(
 	return true, nil
 }
 
-func (s *ControllerStore) GitHubClaim(ctx context.Context, scaleSetID ScaleSetID, runnerRequestID int64) (GitHubJobClaim, bool, error) {
+func (s *ControllerStore) GitHubClaim(ctx context.Context, scaleSetID ScaleSetID, claimKey int64) (GitHubJobClaim, bool, error) {
 	if err := s.requireReady(); err != nil {
 		return GitHubJobClaim{}, false, err
 	}
-	return loadGitHubClaim(ctx, s.db, scaleSetID, runnerRequestID)
+	return loadGitHubClaim(ctx, s.db, scaleSetID, claimKey)
 }
 
 func (s *ControllerStore) BeginGitHubAcquire(
 	ctx context.Context,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (GitHubAcquireAttempt, error) {
 	if err := s.requireReady(); err != nil {
 		return GitHubAcquireAttempt{}, err
@@ -1891,7 +2244,7 @@ func (s *ControllerStore) BeginGitHubAcquire(
 		return GitHubAcquireAttempt{}, err
 	}
 	defer tx.Rollback()
-	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, runnerRequestID)
+	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubClaimState
@@ -1909,7 +2262,7 @@ func (s *ControllerStore) BeginGitHubAcquire(
 		ctx,
 		tx,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -1935,13 +2288,13 @@ func (s *ControllerStore) BeginGitHubAcquire(
 		state = 'dispatching', controller_epoch = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?
 			AND evidence_message_id = ? AND state = ?`,
 		attempt.ControllerEpoch,
 		now,
 		now,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 		attempt.EvidenceMessage,
 		pendingState,
@@ -1955,12 +2308,12 @@ func (s *ControllerStore) BeginGitHubAcquire(
 	result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND state = ?`,
 		GitHubClaimAcquireAmbiguous,
 		now,
 		now,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		GitHubClaimPending,
 	)
 	if err != nil {
@@ -2001,7 +2354,7 @@ func (s *ControllerStore) MarkGitHubAcquired(
 		ctx,
 		tx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -2016,7 +2369,7 @@ func (s *ControllerStore) MarkGitHubAcquired(
 		ctx,
 		tx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -2040,13 +2393,13 @@ func (s *ControllerStore) MarkGitHubAcquired(
 		state = 'acquired',
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?
 			AND evidence_message_id = ? AND controller_epoch = ?
 			AND state = 'dispatching'`,
 		now,
 		now,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 		attempt.EvidenceMessage,
 		attempt.ControllerEpoch,
@@ -2060,12 +2413,12 @@ func (s *ControllerStore) MarkGitHubAcquired(
 	result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND state = ?`,
 		GitHubClaimAcquired,
 		now,
 		now,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		GitHubClaimAcquireAmbiguous,
 	)
 	if err != nil {
@@ -2077,14 +2430,14 @@ func (s *ControllerStore) MarkGitHubAcquired(
 	return tx.Commit()
 }
 
-func (s *ControllerStore) MarkGitHubPreparing(ctx context.Context, scaleSetID ScaleSetID, runnerRequestID int64) error {
-	return s.transitionGitHubClaimWithExecution(ctx, scaleSetID, runnerRequestID,
+func (s *ControllerStore) MarkGitHubPreparing(ctx context.Context, scaleSetID ScaleSetID, claimKey int64) error {
+	return s.transitionGitHubClaimWithExecution(ctx, scaleSetID, claimKey,
 		[]GitHubClaimState{GitHubClaimAcquired}, GitHubClaimPreparing,
 		domain.ExecutionPreparing)
 }
 
-func (s *ControllerStore) MarkGitHubPrepareFailed(ctx context.Context, scaleSetID ScaleSetID, runnerRequestID int64) error {
-	return s.transitionGitHubClaimWithExecution(ctx, scaleSetID, runnerRequestID,
+func (s *ControllerStore) MarkGitHubPrepareFailed(ctx context.Context, scaleSetID ScaleSetID, claimKey int64) error {
+	return s.transitionGitHubClaimWithExecution(ctx, scaleSetID, claimKey,
 		[]GitHubClaimState{GitHubClaimAcquired}, GitHubClaimPrepareFailed,
 		domain.ExecutionFailed)
 }
@@ -2092,7 +2445,7 @@ func (s *ControllerStore) MarkGitHubPrepareFailed(ctx context.Context, scaleSetI
 func (s *ControllerStore) BeginGitHubJITAttempt(
 	ctx context.Context,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	controllerEpoch domain.ControllerEpoch,
 	runnerName string,
 ) (GitHubJITAttempt, bool, error) {
@@ -2114,7 +2467,7 @@ func (s *ControllerStore) BeginGitHubJITAttempt(
 	if domain.ControllerEpoch(currentEpoch) != controllerEpoch {
 		return GitHubJITAttempt{}, false, ErrStaleControllerEpoch
 	}
-	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, runnerRequestID)
+	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = sql.ErrNoRows
@@ -2123,7 +2476,7 @@ func (s *ControllerStore) BeginGitHubJITAttempt(
 	}
 	if claim.State != GitHubClaimPreparing {
 		if claim.CurrentAttempt > 0 {
-			attempt, attemptFound, attemptErr := loadGitHubJITAttempt(ctx, tx, scaleSetID, runnerRequestID, claim.CurrentAttempt)
+			attempt, attemptFound, attemptErr := loadGitHubJITAttempt(ctx, tx, scaleSetID, claimKey, claim.CurrentAttempt)
 			if attemptErr != nil {
 				return GitHubJITAttempt{}, false, attemptErr
 			}
@@ -2148,17 +2501,17 @@ func (s *ControllerStore) BeginGitHubJITAttempt(
 		return GitHubJITAttempt{}, false, err
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO github_jit_attempts(
-		scale_set_id, runner_request_id, attempt, controller_epoch, runner_name, state, runner_id,
+		scale_set_id, claim_key, attempt, controller_epoch, runner_name, state, runner_id,
 		jit_digest, start_command_id, created_at_unix_nano, updated_at_unix_nano
 	) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, '', ?, ?)`, scaleSetID,
-		runnerRequestID, attemptNumber, controllerEpoch, runnerName, GitHubJITIntent, now, now); err != nil {
+		claimKey, attemptNumber, controllerEpoch, runnerName, GitHubJITIntent, now, now); err != nil {
 		return GitHubJITAttempt{}, false, err
 	}
 	result, err := tx.ExecContext(ctx, `UPDATE github_job_claims SET
 		state = ?, current_jit_attempt = ?, updated_at_unix_nano = ?
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND state = ?`,
 		GitHubClaimJITIntent, attemptNumber, now, scaleSetID,
-		runnerRequestID, GitHubClaimPreparing)
+		claimKey, GitHubClaimPreparing)
 	if err != nil {
 		return GitHubJITAttempt{}, false, err
 	}
@@ -2169,7 +2522,7 @@ func (s *ControllerStore) BeginGitHubJITAttempt(
 		return GitHubJITAttempt{}, false, err
 	}
 	return GitHubJITAttempt{
-		ScaleSetID: scaleSetID, RunnerRequestID: runnerRequestID,
+		ScaleSetID: scaleSetID, ClaimKey: claimKey,
 		Attempt: attemptNumber, ControllerEpoch: controllerEpoch,
 		RunnerName: runnerName, State: GitHubJITIntent,
 	}, false, nil
@@ -2427,9 +2780,9 @@ func (s *ControllerStore) ReconcileGitHubJITPrunedHistory(
 		return GitHubJITPrunedHistoryResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 	); err != nil {
 		return GitHubJITPrunedHistoryResult{}, err
@@ -2635,9 +2988,9 @@ func (s *ControllerStore) MarkGitHubJITObservedStarted(
 		}
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 	); err != nil {
 		return err
@@ -2686,7 +3039,7 @@ func (s *ControllerStore) MarkGitHubJITRemovalPending(
 			ctx,
 			tx,
 			current.ScaleSetID,
-			current.RunnerRequestID,
+			current.ClaimKey,
 		); err != nil {
 			return err
 		} else if !found {
@@ -2729,7 +3082,7 @@ func (s *ControllerStore) MarkGitHubJITRemovalPending(
 			ctx,
 			tx,
 			current.ScaleSetID,
-			current.RunnerRequestID,
+			current.ClaimKey,
 		)
 		if err != nil || !found {
 			if err == nil {
@@ -2844,7 +3197,7 @@ func (s *ControllerStore) MarkGitHubJITReconciledAbsent(
 			ctx,
 			tx,
 			current.ScaleSetID,
-			current.RunnerRequestID,
+			current.ClaimKey,
 		); err != nil {
 			return GitHubJITAbsenceResult{}, err
 		} else if !found {
@@ -2895,9 +3248,9 @@ func (s *ControllerStore) MarkGitHubJITReconciledAbsent(
 	authorityErr := tx.QueryRowContext(ctx, `SELECT decision, snapshot_digest,
 		controller_epoch, github_session_generation, updated_at_unix_nano
 		FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 	).Scan(
 		&decision,
@@ -3218,9 +3571,9 @@ func (s *ControllerStore) MarkGitHubJITReconciledAbsent(
 		return GitHubJITAbsenceResult{}, err
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 	); err != nil {
 		return GitHubJITAbsenceResult{}, err
@@ -3256,7 +3609,7 @@ func finalizeGitHubUnpickedRequeue(
 		ctx,
 		tx,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -3293,14 +3646,14 @@ func finalizeGitHubUnpickedRequeue(
 		state = ?, runner_id = NULL, jit_digest = NULL, start_command_id = '',
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?
 			AND controller_epoch = ? AND runner_name = ? AND state = ?
 			AND runner_id = ? AND jit_digest = ? AND start_command_id = ?`,
 		GitHubJITReconciledAbsent,
 		now,
 		now,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 		current.ControllerEpoch,
 		current.RunnerName,
@@ -3321,13 +3674,13 @@ func finalizeGitHubUnpickedRequeue(
 		result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 			updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 				THEN updated_at_unix_nano + 1 ELSE ? END
-			WHERE scale_set_id = ? AND runner_request_id = ?
+			WHERE scale_set_id = ? AND claim_key = ?
 				AND execution_id = ? AND current_jit_attempt = ? AND state = ?`,
 			GitHubClaimRunning,
 			now,
 			now,
 			claim.ScaleSetID,
-			claim.RunnerRequestID,
+			claim.ClaimKey,
 			claim.Execution.ID,
 			claim.CurrentAttempt,
 			GitHubClaimReconciliationRequired,
@@ -3344,7 +3697,7 @@ func finalizeGitHubUnpickedRequeue(
 			ctx,
 			tx,
 			claim.ScaleSetID,
-			claim.RunnerRequestID,
+			claim.ClaimKey,
 		)
 		if err != nil || !found || currentAcquire.State != githubAcquireAcquired {
 			if err == nil {
@@ -3381,11 +3734,11 @@ func finalizeGitHubUnpickedRequeue(
 		}
 		nextAcquire := currentAcquire.Attempt + 1
 		if _, err := tx.ExecContext(ctx, `INSERT INTO github_acquire_attempts(
-			scale_set_id, runner_request_id, attempt, evidence_message_id,
+			scale_set_id, claim_key, attempt, evidence_message_id,
 			controller_epoch, state, created_at_unix_nano, updated_at_unix_nano
 		) VALUES (?, ?, ?, ?, ?, 'reconciled_pending', ?, ?)`,
 			claim.ScaleSetID,
-			claim.RunnerRequestID,
+			claim.ClaimKey,
 			nextAcquire,
 			intent.SourceMessageID,
 			controllerEpoch,
@@ -3398,7 +3751,7 @@ func finalizeGitHubUnpickedRequeue(
 			source_message_id = ?, execution_id = ?, state = ?,
 			updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 				THEN updated_at_unix_nano + 1 ELSE ? END
-			WHERE scale_set_id = ? AND runner_request_id = ?
+			WHERE scale_set_id = ? AND claim_key = ?
 				AND execution_id = ? AND current_jit_attempt = ? AND state = ?`,
 			intent.SourceMessageID,
 			replacement.ID,
@@ -3406,7 +3759,7 @@ func finalizeGitHubUnpickedRequeue(
 			now,
 			now,
 			claim.ScaleSetID,
-			claim.RunnerRequestID,
+			claim.ClaimKey,
 			claim.Execution.ID,
 			claim.CurrentAttempt,
 			GitHubClaimReconciliationRequired,
@@ -3422,12 +3775,12 @@ func finalizeGitHubUnpickedRequeue(
 		claim.State = GitHubClaimPending
 	}
 	deleteIntent, err := tx.ExecContext(ctx, `DELETE FROM github_unpicked_requeue_intents
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 			AND jit_attempt = ? AND old_execution_id = ?
 			AND replacement_execution_id = ? AND source_message_id = ?
 			AND source_event_index = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 		intent.Claim.Execution.ID,
 		intent.Replacement.ID,
@@ -3441,9 +3794,9 @@ func finalizeGitHubUnpickedRequeue(
 		return GitHubJITAbsenceResult{}, ErrGitHubClaimState
 	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 	); err != nil {
 		return GitHubJITAbsenceResult{}, err
@@ -3482,7 +3835,7 @@ func loadGitHubJITReconciliationContext(
 		ctx,
 		tx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 	)
 	if err != nil || !found {
@@ -3492,7 +3845,7 @@ func loadGitHubJITReconciliationContext(
 		return GitHubJITAttempt{}, GitHubJobClaim{}, err
 	}
 	if current.ScaleSetID != attempt.ScaleSetID ||
-		current.RunnerRequestID != attempt.RunnerRequestID ||
+		current.ClaimKey != attempt.ClaimKey ||
 		current.Attempt != attempt.Attempt ||
 		current.ControllerEpoch != attempt.ControllerEpoch ||
 		current.RunnerName != attempt.RunnerName {
@@ -3509,7 +3862,7 @@ func loadGitHubJITReconciliationContext(
 		ctx,
 		tx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found {
 		if err == nil {
@@ -3526,7 +3879,7 @@ func loadGitHubJITReconciliationContext(
 
 func sameGitHubJITIdentity(left, right GitHubJITAttempt) bool {
 	return left.ScaleSetID == right.ScaleSetID &&
-		left.RunnerRequestID == right.RunnerRequestID &&
+		left.ClaimKey == right.ClaimKey &&
 		left.Attempt == right.Attempt &&
 		left.ControllerEpoch == right.ControllerEpoch &&
 		left.RunnerName == right.RunnerName &&
@@ -3750,7 +4103,7 @@ func classifyGitHubRunnerRemovalAuthority(
 		ctx,
 		tx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil {
 		return "", githubRunnerRemovalAmbiguity, err
@@ -4036,7 +4389,7 @@ func transitionExactGitHubJITAndClaim(
 		state = ?, runner_id = ?, jit_digest = ?, start_command_id = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?
 			AND controller_epoch = ? AND runner_name = ? AND state = ?
 			AND runner_id IS ? AND jit_digest IS ? AND start_command_id = ?`,
 		nextAttemptState,
@@ -4046,7 +4399,7 @@ func transitionExactGitHubJITAndClaim(
 		now,
 		now,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 		current.ControllerEpoch,
 		current.RunnerName,
@@ -4064,13 +4417,13 @@ func transitionExactGitHubJITAndClaim(
 	result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 			AND current_jit_attempt = ? AND state = ?`,
 		nextClaimState,
 		now,
 		now,
 		current.ScaleSetID,
-		current.RunnerRequestID,
+		current.ClaimKey,
 		current.Attempt,
 		claim.State,
 	)
@@ -4094,18 +4447,18 @@ func upsertGitHubJITSnapshotAuthority(
 	now int64,
 ) error {
 	_, err := tx.ExecContext(ctx, `INSERT INTO github_jit_snapshot_authority(
-		scale_set_id, runner_request_id, attempt, snapshot_digest,
+		scale_set_id, claim_key, attempt, snapshot_digest,
 		controller_epoch, decision, updated_at_unix_nano,
 		github_session_generation
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	ON CONFLICT(scale_set_id, runner_request_id, attempt) DO UPDATE SET
+	ON CONFLICT(scale_set_id, claim_key, attempt) DO UPDATE SET
 		snapshot_digest=excluded.snapshot_digest,
 		controller_epoch=excluded.controller_epoch,
 		decision=excluded.decision,
 		updated_at_unix_nano=excluded.updated_at_unix_nano,
 		github_session_generation=excluded.github_session_generation`,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 		snapshotDigest,
 		controllerEpoch,
@@ -4139,14 +4492,14 @@ func requireGitHubSessionTransitionGeneration(
 	return nil
 }
 
-func (s *ControllerStore) CurrentGitHubJITAttempt(ctx context.Context, scaleSetID ScaleSetID, runnerRequestID int64) (GitHubJITAttempt, bool, error) {
+func (s *ControllerStore) CurrentGitHubJITAttempt(ctx context.Context, scaleSetID ScaleSetID, claimKey int64) (GitHubJITAttempt, bool, error) {
 	if err := s.requireReady(); err != nil {
 		return GitHubJITAttempt{}, false, err
 	}
 	var attempt int
 	err := s.db.QueryRowContext(ctx, `SELECT current_jit_attempt FROM github_job_claims
-		WHERE scale_set_id = ? AND runner_request_id = ?`,
-		scaleSetID, runnerRequestID).Scan(&attempt)
+		WHERE scale_set_id = ? AND claim_key = ?`,
+		scaleSetID, claimKey).Scan(&attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GitHubJITAttempt{}, false, nil
 	}
@@ -4156,7 +4509,7 @@ func (s *ControllerStore) CurrentGitHubJITAttempt(ctx context.Context, scaleSetI
 	if attempt == 0 {
 		return GitHubJITAttempt{}, false, nil
 	}
-	return loadGitHubJITAttempt(ctx, s.db, scaleSetID, runnerRequestID, attempt)
+	return loadGitHubJITAttempt(ctx, s.db, scaleSetID, claimKey, attempt)
 }
 
 // NextGitHubReconciliationFence returns the oldest durable provider ambiguity
@@ -4197,7 +4550,7 @@ func (s *ControllerStore) NextGitHubReconciliationFence(
 func (s *ControllerStore) transitionGitHubClaim(
 	ctx context.Context,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	expected []GitHubClaimState,
 	next GitHubClaimState,
 	requireAdmission bool,
@@ -4213,7 +4566,7 @@ func (s *ControllerStore) transitionGitHubClaim(
 		return err
 	}
 	defer tx.Rollback()
-	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, runnerRequestID)
+	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubClaimState
@@ -4242,8 +4595,8 @@ func (s *ControllerStore) transitionGitHubClaim(
 	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(expected)), ",")
 	query := `UPDATE github_job_claims SET state = ?, updated_at_unix_nano =
 		CASE WHEN updated_at_unix_nano >= ? THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state IN (` + placeholders + `)`
-	args := []any{next, now, now, scaleSetID, runnerRequestID}
+		WHERE scale_set_id = ? AND claim_key = ? AND state IN (` + placeholders + `)`
+	args := []any{next, now, now, scaleSetID, claimKey}
 	for _, state := range expected {
 		args = append(args, state)
 	}
@@ -4264,7 +4617,7 @@ func (s *ControllerStore) transitionGitHubClaim(
 func (s *ControllerStore) transitionGitHubClaimWithExecution(
 	ctx context.Context,
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	expected []GitHubClaimState,
 	next GitHubClaimState,
 	executionState domain.ExecutionState,
@@ -4277,7 +4630,7 @@ func (s *ControllerStore) transitionGitHubClaimWithExecution(
 		return err
 	}
 	defer tx.Rollback()
-	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, runnerRequestID)
+	claim, found, err := loadGitHubClaim(ctx, tx, scaleSetID, claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubClaimState
@@ -4298,8 +4651,8 @@ func (s *ControllerStore) transitionGitHubClaimWithExecution(
 	result, err := tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 		THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND state = ?`,
-		next, now, now, scaleSetID, runnerRequestID, claim.State)
+		WHERE scale_set_id = ? AND claim_key = ? AND state = ?`,
+		next, now, now, scaleSetID, claimKey, claim.State)
 	if err != nil {
 		return err
 	}
@@ -4321,7 +4674,7 @@ func (s *ControllerStore) transitionGitHubJIT(
 	requireAdmission bool,
 ) error {
 	return s.transitionGitHubJITAny(ctx, GitHubJITAttempt{
-		ScaleSetID: attempt.ScaleSetID, RunnerRequestID: attempt.RunnerRequestID,
+		ScaleSetID: attempt.ScaleSetID, ClaimKey: attempt.ClaimKey,
 		Attempt: attempt.Attempt, ControllerEpoch: attempt.ControllerEpoch,
 		RunnerName: attempt.RunnerName, RunnerID: runnerID,
 		JITDigest: jitDigest, StartCommandID: startCommandID,
@@ -4350,7 +4703,7 @@ func (s *ControllerStore) markGitHubStarted(
 		return ErrStaleControllerEpoch
 	}
 	current, found, err := loadGitHubJITAttempt(
-		ctx, tx, attempt.ScaleSetID, attempt.RunnerRequestID, attempt.Attempt)
+		ctx, tx, attempt.ScaleSetID, attempt.ClaimKey, attempt.Attempt)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubJITState
@@ -4365,7 +4718,7 @@ func (s *ControllerStore) markGitHubStarted(
 		return ErrGitHubJITState
 	}
 	claim, found, err := loadGitHubClaim(
-		ctx, tx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, tx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubClaimState
@@ -4410,9 +4763,9 @@ func (s *ControllerStore) markGitHubStarted(
 	result, err := tx.ExecContext(ctx, `UPDATE github_jit_attempts SET
 		state = ?, updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?
 			AND state = ?`,
-		GitHubJITStarted, now, now, attempt.ScaleSetID, attempt.RunnerRequestID,
+		GitHubJITStarted, now, now, attempt.ScaleSetID, attempt.ClaimKey,
 		attempt.Attempt, GitHubJITStartDispatching)
 	if err != nil {
 		return err
@@ -4423,9 +4776,9 @@ func (s *ControllerStore) markGitHubStarted(
 	result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ?
+		WHERE scale_set_id = ? AND claim_key = ?
 			AND current_jit_attempt = ? AND state = ?`,
-		claimState, now, now, attempt.ScaleSetID, attempt.RunnerRequestID,
+		claimState, now, now, attempt.ScaleSetID, attempt.ClaimKey,
 		attempt.Attempt, GitHubClaimStartDispatching)
 	if err != nil {
 		return err
@@ -4464,7 +4817,7 @@ func (s *ControllerStore) transitionGitHubJITAny(
 		return ErrStaleControllerEpoch
 	}
 	current, found, err := loadGitHubJITAttempt(ctx, tx, attempt.ScaleSetID,
-		attempt.RunnerRequestID, attempt.Attempt)
+		attempt.ClaimKey, attempt.Attempt)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubJITState
@@ -4480,7 +4833,7 @@ func (s *ControllerStore) transitionGitHubJITAny(
 		return ErrGitHubJITState
 	}
 	claim, found, err := loadGitHubClaim(
-		ctx, tx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, tx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubClaimState
@@ -4531,9 +4884,9 @@ func (s *ControllerStore) transitionGitHubJITAny(
 		state = ?, runner_id = ?, jit_digest = ?, start_command_id = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ? AND state = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ? AND state = ?`,
 		next, nullableRunner, nullableDigest, startCommandID, now, now,
-		attempt.ScaleSetID, attempt.RunnerRequestID, attempt.Attempt, current.State)
+		attempt.ScaleSetID, attempt.ClaimKey, attempt.Attempt, current.State)
 	if err != nil {
 		return err
 	}
@@ -4543,9 +4896,9 @@ func (s *ControllerStore) transitionGitHubJITAny(
 	result, err = tx.ExecContext(ctx, `UPDATE github_job_claims SET state = ?,
 		updated_at_unix_nano = CASE WHEN updated_at_unix_nano >= ?
 			THEN updated_at_unix_nano + 1 ELSE ? END
-			WHERE scale_set_id = ? AND runner_request_id = ?
+			WHERE scale_set_id = ? AND claim_key = ?
 				AND current_jit_attempt = ? AND state = ?`,
-		claimState, now, now, attempt.ScaleSetID, attempt.RunnerRequestID,
+		claimState, now, now, attempt.ScaleSetID, attempt.ClaimKey,
 		attempt.Attempt, claim.State)
 	if err != nil {
 		return err
@@ -4604,12 +4957,12 @@ func readGitHubReconciliationFences(
 			AND EXISTS (
 				SELECT 1 FROM github_jit_attempts current_attempt
 				WHERE current_attempt.scale_set_id = c.scale_set_id
-					AND current_attempt.runner_request_id = c.runner_request_id
+					AND current_attempt.claim_key = c.claim_key
 					AND current_attempt.attempt = c.current_jit_attempt
 					AND current_attempt.state = 'reconciled_absent'
 			)
 		)
-		ORDER BY c.scale_set_id, c.runner_request_id`)
+		ORDER BY c.scale_set_id, c.claim_key`)
 	if err != nil {
 		return nil, err
 	}
@@ -4620,8 +4973,12 @@ func readGitHubReconciliationFences(
 			rows.Close()
 			return nil, err
 		}
-		if claim.ScaleSetID == 0 || claim.RunnerRequestID <= 0 ||
-			claim.SourceMessageID == 0 {
+		// An assigned-demand claim has a negative key and, when it was created by
+		// an empty long poll, no source message at all. scanGitHubClaim has
+		// already proven the identity is one of the two legal shapes.
+		if claim.ScaleSetID == 0 || claim.ClaimKey == 0 ||
+			(claim.Origin == GitHubClaimFromJobAvailable &&
+				claim.SourceMessageID == 0) {
 			rows.Close()
 			return nil, errors.New("stored GitHub reconciliation claim identity is invalid")
 		}
@@ -4652,7 +5009,7 @@ func readGitHubReconciliationFences(
 			ctx,
 			tx,
 			claim.ScaleSetID,
-			claim.RunnerRequestID,
+			claim.ClaimKey,
 			claim.CurrentAttempt,
 		)
 		if err != nil {
@@ -4680,7 +5037,7 @@ func validateRestartGitHubJITAttempt(
 	controllerEpoch domain.ControllerEpoch,
 ) error {
 	if attempt.ScaleSetID == 0 ||
-		attempt.RunnerRequestID <= 0 ||
+		attempt.ClaimKey == 0 ||
 		attempt.Attempt < 1 ||
 		attempt.ControllerEpoch == 0 ||
 		attempt.ControllerEpoch > controllerEpoch ||
@@ -4716,9 +5073,9 @@ func validateRestartGitHubJITAttempt(
 	return nil
 }
 
-const githubClaimSelect = `SELECT c.scale_set_id, c.runner_request_id,
-	c.source_message_id, e.id, e.target_id, e.node_id, e.slot_index, e.state,
-	c.state, c.current_jit_attempt
+const githubClaimSelect = `SELECT c.scale_set_id, c.claim_key, c.origin,
+	c.runner_request_id, c.source_message_id, e.id, e.target_id, e.node_id,
+	e.slot_index, e.state, c.state, c.current_jit_attempt
 	FROM github_job_claims c JOIN executions e ON e.id = c.execution_id`
 
 func loadGitHubClaim(
@@ -4727,11 +5084,11 @@ func loadGitHubClaim(
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	},
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (GitHubJobClaim, bool, error) {
 	row := queryer.QueryRowContext(ctx, githubClaimSelect+`
-		WHERE c.scale_set_id = ? AND c.runner_request_id = ?`,
-		scaleSetID, runnerRequestID)
+		WHERE c.scale_set_id = ? AND c.claim_key = ?`,
+		scaleSetID, claimKey)
 	claim, err := scanGitHubClaim(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return GitHubJobClaim{}, false, nil
@@ -4745,11 +5102,23 @@ type rowScanner interface {
 
 func scanGitHubClaim(row rowScanner) (GitHubJobClaim, error) {
 	var claim GitHubJobClaim
-	err := row.Scan(&claim.ScaleSetID, &claim.RunnerRequestID,
-		&claim.SourceMessageID, &claim.Execution.ID, &claim.Execution.TargetID,
-		&claim.Execution.Slot.NodeID, &claim.Execution.Slot.Index,
-		&claim.Execution.State, &claim.State, &claim.CurrentAttempt)
+	var runnerRequestID sql.NullInt64
+	var sourceMessageID sql.NullInt64
+	err := row.Scan(&claim.ScaleSetID, &claim.ClaimKey, &claim.Origin,
+		&runnerRequestID, &sourceMessageID, &claim.Execution.ID,
+		&claim.Execution.TargetID, &claim.Execution.Slot.NodeID,
+		&claim.Execution.Slot.Index, &claim.Execution.State, &claim.State,
+		&claim.CurrentAttempt)
 	if err != nil {
+		return GitHubJobClaim{}, err
+	}
+	if runnerRequestID.Valid {
+		claim.RunnerRequestID = runnerRequestID.Int64
+	}
+	if sourceMessageID.Valid {
+		claim.SourceMessageID = MessageID(sourceMessageID.Int64)
+	}
+	if err := validateGitHubClaimIdentity(claim); err != nil {
 		return GitHubJobClaim{}, err
 	}
 	if err := claim.Execution.Validate(); err != nil {
@@ -4764,17 +5133,17 @@ func loadGitHubJITAttempt(
 		QueryRowContext(context.Context, string, ...any) *sql.Row
 	},
 	scaleSetID ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 	attempt int,
 ) (GitHubJITAttempt, bool, error) {
 	var result GitHubJITAttempt
 	var runnerID sql.NullInt64
 	var jitDigest sql.NullString
-	err := queryer.QueryRowContext(ctx, `SELECT scale_set_id, runner_request_id,
+	err := queryer.QueryRowContext(ctx, `SELECT scale_set_id, claim_key,
 		attempt, controller_epoch, runner_name, state, runner_id, jit_digest, start_command_id
-		FROM github_jit_attempts WHERE scale_set_id = ? AND runner_request_id = ?
-			AND attempt = ?`, scaleSetID, runnerRequestID, attempt).Scan(
-		&result.ScaleSetID, &result.RunnerRequestID, &result.Attempt,
+		FROM github_jit_attempts WHERE scale_set_id = ? AND claim_key = ?
+			AND attempt = ?`, scaleSetID, claimKey, attempt).Scan(
+		&result.ScaleSetID, &result.ClaimKey, &result.Attempt,
 		&result.ControllerEpoch, &result.RunnerName, &result.State, &runnerID, &jitDigest,
 		&result.StartCommandID)
 	if errors.Is(err, sql.ErrNoRows) {

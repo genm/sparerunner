@@ -25,10 +25,15 @@ UI/API, node-affined scheduling, native runner lifecycle, verified cleanup, node
 availability control, the desktop tray, and the Raycast extension. The
 production controller now starts a per-Target runner-coordinator fleet against
 real GitHub scale sets: each Target with a verified runtime binding gets its own
-message session and dispatch loop, so an enrolled runner-ready node can actually
-receive and run a job instead of leaving it `queued` forever. Those core paths
-have local and fault-injection coverage, but OS service installation, a real
-private GitHub job, and live three-OS sandbox evidence remain release gates; the
+message session and dispatch loop, and runner executions are created from
+GitHub's assigned-job statistic rather than from `JobAvailable` alone, which is
+what the scale-set protocol actually requires. End-to-end job execution is not
+yet proven live: the last verified live run received, committed, and
+acknowledged every message correctly while the workflow still sat `queued`, and
+the fix for that has deterministic coverage but no live confirmation. Those core
+paths have local and fault-injection coverage, but OS service installation, a
+real private GitHub job, and live three-OS sandbox evidence remain release
+gates; the
 Windows local control endpoint fails closed. Restart and disconnect
 reconciliation against live GitHub state (twk-011), node-affined scheduling's
 remaining live multi-Target evidence (twk-010), and macOS/Windows platform

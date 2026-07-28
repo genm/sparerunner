@@ -769,10 +769,10 @@ func runtimeFaultProveControllerLostJITCleanup(
 	}
 	queryHistory, removalHistory := lifecycle.history()
 	wantQuery := github.RunnerQuery{
-		ScaleSetID:      runtimeFaultScaleSetID,
-		RunnerRequestID: runtimeFaultRunnerRequestID,
-		Name:            runnerName,
-		ExpectedID:      runnerID,
+		ScaleSetID: runtimeFaultScaleSetID,
+		ClaimKey:   runtimeFaultRunnerRequestID,
+		Name:       runnerName,
+		ExpectedID: runnerID,
 	}
 	for index, query := range queryHistory {
 		if query != wantQuery {
@@ -849,12 +849,12 @@ func runtimeFaultDigest(value string) string {
 
 func runtimeFaultRunnerName(
 	scaleSetID store.ScaleSetID,
-	runnerRequestID int64,
+	claimKey int64,
 ) string {
 	digest := sha256.Sum256([]byte(fmt.Sprintf(
 		"runner\x00%d\x00%d",
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)))
 	return "tewake-" + strings.ToLower(base32.StdEncoding.WithPadding(
 		base32.NoPadding,

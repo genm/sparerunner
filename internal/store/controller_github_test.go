@@ -34,10 +34,10 @@ func TestControllerRestartSnapshotIsCoherentSecretFreeAndSurvivesReopen(t *testi
 	jitDigest := digestForTest(secretCanary)
 	if _, err := controller.db.ExecContext(ctx, `UPDATE github_jit_attempts
 		SET jit_digest = ?
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		jitDigest,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 	); err != nil {
 		t.Fatal(err)
@@ -50,7 +50,7 @@ func TestControllerRestartSnapshotIsCoherentSecretFreeAndSurvivesReopen(t *testi
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found {
 		t.Fatalf("GitHub claim = (%#v, %t, %v)", claim, found, err)
@@ -138,10 +138,10 @@ func TestControllerRestartSnapshotRejectsInconsistentGitHubFence(t *testing.T) {
 	)
 	if _, err := controller.db.ExecContext(ctx, `UPDATE github_job_claims
 		SET state = ?
-		WHERE scale_set_id = ? AND runner_request_id = ?`,
+		WHERE scale_set_id = ? AND claim_key = ?`,
 		GitHubClaimStartAmbiguous,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 	message := githubQueueMessageForTest(7, 101, 501)
 	message.Jobs = append(message.Jobs,
 		GitHubJobEvent{Type: GitHubJobAssigned, RunnerRequestID: 502},
-		// Live GitHub omits RunnerRequestID on JobAssigned. Rejecting that shape
+		// Live GitHub omits ClaimKey on JobAssigned. Rejecting that shape
 		// made the store refuse every real message, so the queue redelivered a
 		// genuinely runnable job forever instead of starting it.
 		GitHubJobEvent{Type: GitHubJobAssigned, RunnerRequestID: 0},
@@ -176,7 +176,7 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 		t.Fatal(err)
 	}
 	if committed.Replayed || committed.Claim == nil ||
-		committed.Claim.RunnerRequestID != 501 ||
+		committed.Claim.ClaimKey != 501 ||
 		committed.Claim.Execution.State != domain.ExecutionReserved {
 		t.Fatalf("commit = %#v", committed)
 	}
@@ -376,7 +376,7 @@ func TestGitHubSingleSlotRejectsInactiveNodeAndNeverDoubleClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if duplicate.Claim == nil || duplicate.Claim.RunnerRequestID != 602 ||
+	if duplicate.Claim == nil || duplicate.Claim.ClaimKey != 602 ||
 		duplicate.UnclaimedAvailable {
 		t.Fatalf("duplicate availability = %#v", duplicate)
 	}
@@ -459,12 +459,12 @@ func TestGitHubWorkAdmissionRechecksActiveNodeAtEachExternalIntentBoundary(t *te
 		if err := controller.BeginGitHubStartDispatch(ctx, attempt); !errors.Is(err, ErrGitHubClaimState) {
 			t.Fatalf("quarantined start admission error = %v", err)
 		}
-		claim, found, err := controller.GitHubClaim(ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		claim, found, err := controller.GitHubClaim(ctx, attempt.ScaleSetID, attempt.ClaimKey)
 		if err != nil || !found || claim.State != GitHubClaimJITGenerated {
 			t.Fatalf("claim after rejected start = (%#v, %t, %v)", claim, found, err)
 		}
 		current, found, err := controller.CurrentGitHubJITAttempt(
-			ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+			ctx, attempt.ScaleSetID, attempt.ClaimKey)
 		if err != nil || !found || current.State != GitHubJITGenerated {
 			t.Fatalf("attempt after rejected start = (%#v, %t, %v)", current, found, err)
 		}
@@ -498,7 +498,7 @@ func TestGitHubExactMessageReplayCreatesLateClaimWhenNodeBecomesEligible(t *test
 		t.Fatal(err)
 	}
 	if !replayed.Replayed || replayed.UnclaimedAvailable ||
-		replayed.Claim == nil || replayed.Claim.RunnerRequestID != 604 {
+		replayed.Claim == nil || replayed.Claim.ClaimKey != 604 {
 		t.Fatalf("eligible exact replay = %#v", replayed)
 	}
 	assertCount(t, controller.db, "SELECT count(*) FROM github_queue_messages", 1)
@@ -891,13 +891,13 @@ func TestGitHubStartedTransitionMarksRunningAtomically(t *testing.T) {
 	}
 
 	claim, found, err := controller.GitHubClaim(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found || claim.State != GitHubClaimRunning ||
 		claim.Execution.State != domain.ExecutionRunning {
 		t.Fatalf("running claim = (%#v, %t, %v)", claim, found, err)
 	}
 	current, found, err := controller.CurrentGitHubJITAttempt(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found || current.State != GitHubJITStarted {
 		t.Fatalf("started attempt = (%#v, %t, %v)", current, found, err)
 	}
@@ -918,14 +918,14 @@ func TestGitHubStartedTransitionRejectsMissingRunningObservationWithoutPartialWr
 	}
 
 	claim, found, err := controller.GitHubClaim(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found ||
 		claim.State != GitHubClaimStartDispatching ||
 		claim.Execution.State != domain.ExecutionPreparing {
 		t.Fatalf("unchanged claim = (%#v, %t, %v)", claim, found, err)
 	}
 	current, found, err := controller.CurrentGitHubJITAttempt(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found || current.State != GitHubJITStartDispatching {
 		t.Fatalf("unchanged attempt = (%#v, %t, %v)", current, found, err)
 	}
@@ -975,14 +975,14 @@ func TestGitHubAmbiguousStartConvergesOnlyFromExactDurableAgentAuthority(t *test
 		t.Fatal(err)
 	}
 	claim, found, err := controller.GitHubClaim(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found ||
 		claim.State != GitHubClaimRunning ||
 		claim.Execution.State != domain.ExecutionRunning {
 		t.Fatalf("reconciled claim = (%#v, %t, %v)", claim, found, err)
 	}
 	current, found, err := controller.CurrentGitHubJITAttempt(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found || current.State != GitHubJITStarted {
 		t.Fatalf("reconciled attempt = (%#v, %t, %v)", current, found, err)
 	}
@@ -1038,14 +1038,14 @@ func TestGitHubAmbiguousStartRejectsSupersededSnapshotWithoutPartialWrite(t *tes
 		t.Fatal("superseded Agent snapshot authorized JIT start")
 	}
 	claim, found, err := controller.GitHubClaim(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found ||
 		claim.State != GitHubClaimStartAmbiguous ||
 		claim.Execution.State != domain.ExecutionPreparing {
 		t.Fatalf("claim changed after rejection = (%#v, %t, %v)", claim, found, err)
 	}
 	current, found, err := controller.CurrentGitHubJITAttempt(
-		ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+		ctx, attempt.ScaleSetID, attempt.ClaimKey)
 	if err != nil || !found || current.State != GitHubJITStartAmbiguous {
 		t.Fatalf("attempt changed after rejection = (%#v, %t, %v)", current, found, err)
 	}
@@ -1101,7 +1101,7 @@ func TestGitHubAgentAcceptedRequiresCurrentSnapshotAndValidDispatchOrder(t *test
 		current, found, err := controller.CurrentGitHubJITAttempt(
 			ctx,
 			attempt.ScaleSetID,
-			attempt.RunnerRequestID,
+			attempt.ClaimKey,
 		)
 		if err != nil || !found || current.State != GitHubJITAgentAccepted {
 			t.Fatalf("Agent-accepted attempt = (%#v, %t, %v)", current, found, err)
@@ -1184,20 +1184,20 @@ func TestGitHubAgentAcceptedRequiresCurrentSnapshotAndValidDispatchOrder(t *test
 			909,
 		)
 		if _, err := controller.db.ExecContext(ctx, `UPDATE github_jit_attempts
-			SET state = ? WHERE scale_set_id = ? AND runner_request_id = ?
+			SET state = ? WHERE scale_set_id = ? AND claim_key = ?
 				AND attempt = ?`,
 			GitHubJITGenerated,
 			attempt.ScaleSetID,
-			attempt.RunnerRequestID,
+			attempt.ClaimKey,
 			attempt.Attempt,
 		); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := controller.db.ExecContext(ctx, `UPDATE github_job_claims
-			SET state = ? WHERE scale_set_id = ? AND runner_request_id = ?`,
+			SET state = ? WHERE scale_set_id = ? AND claim_key = ?`,
 			GitHubClaimJITGenerated,
 			attempt.ScaleSetID,
-			attempt.RunnerRequestID,
+			attempt.ClaimKey,
 		); err != nil {
 			t.Fatal(err)
 		}
@@ -1348,7 +1348,7 @@ func TestGitHubRunnerRemovalAndAbsenceUseExactIdentityAndCurrentAgentAuthority(t
 	current, found, err := controller.CurrentGitHubJITAttempt(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || current.State != GitHubJITRemovalPending {
 		t.Fatalf("removal fence changed after contradiction = (%#v, %t, %v)", current, found, err)
@@ -1375,7 +1375,7 @@ func TestGitHubRunnerRemovalAndAbsenceUseExactIdentityAndCurrentAgentAuthority(t
 	current, found, err = controller.CurrentGitHubJITAttempt(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found ||
 		current.State != GitHubJITReconciledAbsent ||
@@ -1387,7 +1387,7 @@ func TestGitHubRunnerRemovalAndAbsenceUseExactIdentityAndCurrentAgentAuthority(t
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || claim.State != GitHubClaimPreparing {
 		t.Fatalf("claim after exact absence = (%#v, %t, %v)", claim, found, err)
@@ -1482,9 +1482,9 @@ func TestGitHubRunnerAbsenceRestartsAfterSessionAuthorityTransition(t *testing.T
 	var retainedGeneration uint64
 	if err := controller.db.QueryRow(`SELECT github_session_generation
 		FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 	).Scan(&retainedGeneration); err != nil {
 		t.Fatal(err)
@@ -1506,9 +1506,9 @@ func TestGitHubRunnerAbsenceRestartsAfterSessionAuthorityTransition(t *testing.T
 	if err := controller.db.QueryRow(`SELECT github_session_generation,
 		updated_at_unix_nano
 		FROM github_jit_snapshot_authority
-		WHERE scale_set_id = ? AND runner_request_id = ? AND attempt = ?`,
+		WHERE scale_set_id = ? AND claim_key = ? AND attempt = ?`,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 		attempt.Attempt,
 	).Scan(&resetGeneration, &resetAt); err != nil {
 		t.Fatal(err)
@@ -1571,13 +1571,13 @@ func TestGitHubJITTransitionRejectsChangedDurableIdentityWithoutPartialWrite(t *
 				t.Fatalf("changed identity transition error = %v, want ErrGitHubJITState", err)
 			}
 			current, found, err := controller.CurrentGitHubJITAttempt(
-				ctx, original.ScaleSetID, original.RunnerRequestID)
+				ctx, original.ScaleSetID, original.ClaimKey)
 			if err != nil || !found || current != original {
 				t.Fatalf("attempt changed after rejected transition = (%#v, %t, %v), want %#v",
 					current, found, err, original)
 			}
 			claim, found, err := controller.GitHubClaim(
-				ctx, original.ScaleSetID, original.RunnerRequestID)
+				ctx, original.ScaleSetID, original.ClaimKey)
 			if err != nil || !found || claim.State != GitHubClaimStartDispatching {
 				t.Fatalf("claim changed after rejected transition = (%#v, %t, %v)", claim, found, err)
 			}
@@ -1600,7 +1600,7 @@ func TestGitHubJITTransitionRejectsEpochAndClaimStateSubstitution(t *testing.T) 
 			t.Fatalf("later epoch substitution error = %v, want ErrGitHubJITState", err)
 		}
 		current, found, err := controller.CurrentGitHubJITAttempt(
-			ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+			ctx, attempt.ScaleSetID, attempt.ClaimKey)
 		if err != nil || !found || current.State != GitHubJITStartDispatching {
 			t.Fatalf("attempt after epoch substitution = (%#v, %t, %v)", current, found, err)
 		}
@@ -1612,15 +1612,15 @@ func TestGitHubJITTransitionRejectsEpochAndClaimStateSubstitution(t *testing.T) 
 		defer controller.Close()
 		attempt, _ := prepareGitHubStartDispatchForTest(t, controller, 2, 43, 812, 1212)
 		if _, err := controller.db.Exec(`UPDATE github_job_claims SET state = ?
-			WHERE scale_set_id = ? AND runner_request_id = ?`,
-			GitHubClaimReconciliationRequired, attempt.ScaleSetID, attempt.RunnerRequestID); err != nil {
+			WHERE scale_set_id = ? AND claim_key = ?`,
+			GitHubClaimReconciliationRequired, attempt.ScaleSetID, attempt.ClaimKey); err != nil {
 			t.Fatal(err)
 		}
 		if err := controller.MarkGitHubStartAmbiguous(ctx, attempt); !errors.Is(err, ErrGitHubClaimState) {
 			t.Fatalf("claim state substitution error = %v, want ErrGitHubClaimState", err)
 		}
 		current, found, err := controller.CurrentGitHubJITAttempt(
-			ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+			ctx, attempt.ScaleSetID, attempt.ClaimKey)
 		if err != nil || !found || current.State != GitHubJITStartDispatching {
 			t.Fatalf("attempt after claim substitution = (%#v, %t, %v)", current, found, err)
 		}
@@ -1636,7 +1636,7 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 		scaleSetID      = ScaleSetID(44)
 		sourceMessageID = MessageID(814)
 		freshMessageID  = MessageID(815)
-		runnerRequestID = int64(1214)
+		claimKey        = int64(1214)
 	)
 	attempt, start := prepareGitHubStartDispatchForTest(
 		t,
@@ -1644,7 +1644,7 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 		4,
 		scaleSetID,
 		sourceMessageID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err := controller.MarkGitHubStartAmbiguous(ctx, attempt); err != nil {
 		t.Fatal(err)
@@ -1881,7 +1881,7 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 	source := githubQueueMessageForTest(
 		scaleSetID,
 		sourceMessageID,
-		runnerRequestID,
+		claimKey,
 	)
 	replay, err := controller.CommitGitHubQueueMessage(ctx, source, binding)
 	if err != nil {
@@ -1898,13 +1898,13 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 	freshA := githubQueueMessageForTest(
 		scaleSetID,
 		freshMessageID,
-		runnerRequestID,
+		claimKey,
 	)
 	freshA.Jobs[0].ExecutionID = "github-execution-lost-jit-retry-a"
 	freshB := githubQueueMessageForTest(
 		scaleSetID,
 		freshMessageID+1,
-		runnerRequestID,
+		claimKey,
 	)
 	freshB.Jobs[0].ExecutionID = "github-execution-lost-jit-retry-b"
 	blockedBinding := binding
@@ -1962,7 +1962,7 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 	rearmedClaim, found, err := controller.GitHubClaim(
 		ctx,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err != nil || !found {
 		t.Fatalf("concurrent rearmed claim = (%#v, %t, %v)",
@@ -2003,7 +2003,7 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 	acquire, err := controller.BeginGitHubAcquire(
 		ctx,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -2049,14 +2049,14 @@ func TestGitHubLostJITReleasedWaitsForExactAbsenceAndFreshAvailability(t *testin
 	if err := controller.MarkGitHubPreparing(
 		ctx,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 	); err != nil {
 		t.Fatal(err)
 	}
 	nextAttempt, replayed, err := controller.BeginGitHubJITAttempt(
 		ctx,
 		scaleSetID,
-		runnerRequestID,
+		claimKey,
 		reconciliationEpoch,
 		attempt.RunnerName,
 	)
@@ -2428,7 +2428,7 @@ func TestGitHubStartedTransitionConvergesFastTerminalExecutionAtomically(t *test
 			claim, found, err := controller.GitHubClaim(
 				ctx,
 				attempt.ScaleSetID,
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			)
 			if err != nil || !found ||
 				claim.Execution.State != domain.ExecutionPreparing {
@@ -2466,7 +2466,7 @@ func TestGitHubStartedTransitionConvergesFastTerminalExecutionAtomically(t *test
 				t.Fatalf("durable Running did not close JIT fence = %v", err)
 			}
 			claim, found, err = controller.GitHubClaim(
-				ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+				ctx, attempt.ScaleSetID, attempt.ClaimKey)
 			if err != nil || !found ||
 				claim.State != GitHubClaimRunning ||
 				claim.Execution.State != domain.ExecutionRunning {
@@ -2474,7 +2474,7 @@ func TestGitHubStartedTransitionConvergesFastTerminalExecutionAtomically(t *test
 					claim, found, err)
 			}
 			current, found, err := controller.CurrentGitHubJITAttempt(
-				ctx, attempt.ScaleSetID, attempt.RunnerRequestID)
+				ctx, attempt.ScaleSetID, attempt.ClaimKey)
 			if err != nil || !found || current.State != GitHubJITStarted {
 				t.Fatalf("started attempt = (%#v, %t, %v)", current, found, err)
 			}
@@ -2503,7 +2503,7 @@ func TestGitHubStartedTransitionConvergesFastTerminalExecutionAtomically(t *test
 			finalClaim, found, err := controller.GitHubClaim(
 				ctx,
 				attempt.ScaleSetID,
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			)
 			if err != nil || !found ||
 				finalClaim.State != GitHubClaimRunning ||
@@ -2652,7 +2652,7 @@ func TestGitHubPrunedStartedTerminalHistoryCreatesProviderCleanupIntent(t *testi
 			current, found, err := controller.CurrentGitHubJITAttempt(
 				ctx,
 				attempt.ScaleSetID,
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			)
 			if err != nil || !found || current.State != GitHubJITStarted {
 				t.Fatalf("pruned current attempt = (%#v, %t, %v)",
@@ -2661,7 +2661,7 @@ func TestGitHubPrunedStartedTerminalHistoryCreatesProviderCleanupIntent(t *testi
 			claim, found, err := controller.GitHubClaim(
 				ctx,
 				attempt.ScaleSetID,
-				attempt.RunnerRequestID,
+				attempt.ClaimKey,
 			)
 			if err != nil || !found ||
 				claim.State != GitHubClaimRunning ||
@@ -2813,7 +2813,7 @@ func TestGitHubFreshRequeueCreatesDurableCleanupIntentWithoutPickupProof(t *test
 	current, found, err := controller.CurrentGitHubJITAttempt(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || current.State != GitHubJITStarted {
 		t.Fatalf("current attempt = (%#v, %t, %v)", current, found, err)
@@ -2821,7 +2821,7 @@ func TestGitHubFreshRequeueCreatesDurableCleanupIntentWithoutPickupProof(t *test
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || claim.Execution.State != domain.ExecutionReleased {
 		t.Fatalf("terminal claim = (%#v, %t, %v)", claim, found, err)
@@ -2853,7 +2853,7 @@ func TestGitHubFreshRequeueCreatesDurableCleanupIntentWithoutPickupProof(t *test
 	fresh := githubQueueMessageForTest(
 		attempt.ScaleSetID,
 		902,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "github-unpicked-replacement"
 	// GitHub may repeat the same availability within one batch. The first
@@ -3024,7 +3024,7 @@ func TestGitHubFreshRequeueAcceptsFastTerminalMarkRunningRace(t *testing.T) {
 	current, found, err := controller.CurrentGitHubJITAttempt(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || current.State != GitHubJITStarted {
 		t.Fatalf("fast terminal attempt = (%#v, %t, %v)", current, found, err)
@@ -3032,7 +3032,7 @@ func TestGitHubFreshRequeueAcceptsFastTerminalMarkRunningRace(t *testing.T) {
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found ||
 		claim.State != GitHubClaimReconciliationRequired ||
@@ -3063,7 +3063,7 @@ func TestGitHubFreshRequeueAcceptsFastTerminalMarkRunningRace(t *testing.T) {
 	fresh := githubQueueMessageForTest(
 		attempt.ScaleSetID,
 		1202,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "github-fast-terminal-replacement"
 	commit, err := controller.CommitGitHubQueueMessage(
@@ -3115,7 +3115,7 @@ func TestGitHubFreshRequeueRollsBackUntilTerminalOutboxCatchesSnapshot(
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found ||
 		claim.State != GitHubClaimRunning ||
@@ -3149,7 +3149,7 @@ func TestGitHubFreshRequeueRollsBackUntilTerminalOutboxCatchesSnapshot(
 	fresh := githubQueueMessageForTest(
 		attempt.ScaleSetID,
 		1212,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "github-outbox-pending-replacement"
 	if _, err := controller.CommitGitHubQueueMessage(
@@ -3185,7 +3185,7 @@ func TestGitHubFreshRequeueRollsBackUntilTerminalOutboxCatchesSnapshot(
 	claim, found, err = controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found ||
 		claim.Execution.State != domain.ExecutionReleased {
@@ -3247,7 +3247,7 @@ func TestGitHubFreshTerminalRequeueRollsBackUntilRecoveryAdmission(t *testing.T)
 			fresh := githubQueueMessageForTest(
 				fixture.current.ScaleSetID,
 				MessageID(4200+index),
-				fixture.current.RunnerRequestID,
+				fixture.current.ClaimKey,
 			)
 			fresh.Jobs[0].ExecutionID = domain.ExecutionID(
 				fmt.Sprintf("github-requeue-admission-%d", index),
@@ -3432,7 +3432,7 @@ func prepareGitHubStartedTerminalRequeueFixture(
 	seed int,
 	scaleSetID ScaleSetID,
 	messageID MessageID,
-	runnerRequestID int64,
+	claimKey int64,
 	terminalState domain.ExecutionState,
 	errorCode domain.ExecutionErrorCode,
 ) githubStartedTerminalRequeueFixture {
@@ -3444,7 +3444,7 @@ func prepareGitHubStartedTerminalRequeueFixture(
 		seed,
 		scaleSetID,
 		messageID,
-		runnerRequestID,
+		claimKey,
 	)
 	if err := controller.MarkGitHubStartAmbiguous(ctx, attempt); err != nil {
 		t.Fatal(err)
@@ -3452,20 +3452,20 @@ func prepareGitHubStartedTerminalRequeueFixture(
 	for _, update := range []AgentExecutionUpdate{
 		{
 			NodeID:        start.NodeID,
-			MessageID:     fmt.Sprintf("github-requeue-running-%d", runnerRequestID),
+			MessageID:     fmt.Sprintf("github-requeue-running-%d", claimKey),
 			CommandID:     start.Command.ID,
 			ExecutionID:   start.Command.ExecutionID,
 			State:         domain.ExecutionRunning,
-			PayloadDigest: digestForTest(fmt.Sprintf("github-requeue-running-%d", runnerRequestID)),
+			PayloadDigest: digestForTest(fmt.Sprintf("github-requeue-running-%d", claimKey)),
 		},
 		{
 			NodeID:        start.NodeID,
-			MessageID:     fmt.Sprintf("github-requeue-terminal-%d", runnerRequestID),
+			MessageID:     fmt.Sprintf("github-requeue-terminal-%d", claimKey),
 			CommandID:     start.Command.ID,
 			ExecutionID:   start.Command.ExecutionID,
 			State:         terminalState,
 			ErrorCode:     errorCode,
-			PayloadDigest: digestForTest(fmt.Sprintf("github-requeue-terminal-%d", runnerRequestID)),
+			PayloadDigest: digestForTest(fmt.Sprintf("github-requeue-terminal-%d", claimKey)),
 		},
 	} {
 		if replayed, err := controller.RecordAgentExecutionUpdate(
@@ -3508,7 +3508,7 @@ func prepareGitHubStartedTerminalRequeueFixture(
 	current, found, err := controller.CurrentGitHubJITAttempt(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found || current.State != GitHubJITStarted {
 		t.Fatalf("current started attempt = (%#v, %t, %v)", current, found, err)
@@ -3516,7 +3516,7 @@ func prepareGitHubStartedTerminalRequeueFixture(
 	claim, found, err := controller.GitHubClaim(
 		ctx,
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	)
 	if err != nil || !found ||
 		claim.State != GitHubClaimRunning ||
@@ -3635,7 +3635,7 @@ func TestGitHubExactPickupAuthorityBlocksOnlyMatchingTerminalRequeue(t *testing.
 				Digest:     digestForTest("github-pickup-authority-" + test.name),
 				Jobs: []GitHubJobEvent{{
 					Type:            test.eventType,
-					RunnerRequestID: fixture.current.RunnerRequestID,
+					RunnerRequestID: fixture.current.ClaimKey,
 					RunnerID:        fixture.current.RunnerID + test.runnerIDDelta,
 					RunnerName:      fixture.current.RunnerName + test.nameSuffix,
 					Result:          test.result,
@@ -3654,7 +3654,7 @@ func TestGitHubExactPickupAuthorityBlocksOnlyMatchingTerminalRequeue(t *testing.
 			fresh := githubQueueMessageForTest(
 				fixture.current.ScaleSetID,
 				MessageID(1003+index*10),
-				fixture.current.RunnerRequestID,
+				fixture.current.ClaimKey,
 			)
 			fresh.Jobs[0].ExecutionID = domain.ExecutionID(
 				fmt.Sprintf("github-pickup-replacement-%d", index),
@@ -3715,7 +3715,7 @@ func TestGitHubSameBatchZeroRequestPickupPreventsReplacementIntent(t *testing.T)
 	fresh := githubQueueMessageForTest(
 		fixture.current.ScaleSetID,
 		3102,
-		fixture.current.RunnerRequestID,
+		fixture.current.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "zero-pickup-same-batch-replacement"
 	fresh.Jobs = append([]GitHubJobEvent{{
@@ -3765,7 +3765,7 @@ func TestGitHubLatePickupDiscardsIntentAfterExactAbsence(t *testing.T) {
 	fresh := githubQueueMessageForTest(
 		fixture.current.ScaleSetID,
 		1102,
-		fixture.current.RunnerRequestID,
+		fixture.current.ClaimKey,
 	)
 	fresh.Jobs[0].ExecutionID = "github-late-pickup-replacement"
 	commit, err := controller.CommitGitHubQueueMessage(
@@ -3818,7 +3818,7 @@ func TestGitHubLatePickupDiscardsIntentAfterExactAbsence(t *testing.T) {
 	intent, found, err := controller.GitHubUnpickedRequeueIntent(
 		ctx,
 		fixture.current.ScaleSetID,
-		fixture.current.RunnerRequestID,
+		fixture.current.ClaimKey,
 	)
 	if err != nil || !found || !intent.PickupProven {
 		t.Fatalf("late pickup intent = (%#v, %t, %v)", intent, found, err)
@@ -3930,7 +3930,7 @@ func prepareGitHubStartDispatchForTest(
 	seed int,
 	scaleSetID ScaleSetID,
 	messageID MessageID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (GitHubJITAttempt, IssuedAgentCommand) {
 	t.Helper()
 	return prepareGitHubStartDispatchForArchTest(
@@ -3939,7 +3939,7 @@ func prepareGitHubStartDispatchForTest(
 		seed,
 		scaleSetID,
 		messageID,
-		runnerRequestID,
+		claimKey,
 		domain.ArchAMD64,
 	)
 }
@@ -3950,7 +3950,7 @@ func prepareGitHubStartDispatchForArchTest(
 	seed int,
 	scaleSetID ScaleSetID,
 	messageID MessageID,
-	runnerRequestID int64,
+	claimKey int64,
 	architecture domain.Architecture,
 ) (GitHubJITAttempt, IssuedAgentCommand) {
 	t.Helper()
@@ -3969,11 +3969,11 @@ func prepareGitHubStartDispatchForArchTest(
 		scaleSetID,
 		architecture,
 	)
-	message := githubQueueMessageForTest(scaleSetID, messageID, runnerRequestID)
+	message := githubQueueMessageForTest(scaleSetID, messageID, claimKey)
 	if _, err := controller.CommitGitHubQueueMessage(ctx, message, binding); err != nil {
 		t.Fatal(err)
 	}
-	acquire, err := controller.BeginGitHubAcquire(ctx, scaleSetID, runnerRequestID)
+	acquire, err := controller.BeginGitHubAcquire(ctx, scaleSetID, claimKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4007,12 +4007,12 @@ func prepareGitHubStartDispatchForArchTest(
 	if replayed, err := controller.RecordAgentExecutionUpdate(ctx, preparing); err != nil || replayed {
 		t.Fatalf("record preparing = (%t, %v)", replayed, err)
 	}
-	if err := controller.MarkGitHubPreparing(ctx, scaleSetID, runnerRequestID); err != nil {
+	if err := controller.MarkGitHubPreparing(ctx, scaleSetID, claimKey); err != nil {
 		t.Fatal(err)
 	}
 
 	attempt, replayed, err := controller.BeginGitHubJITAttempt(
-		ctx, scaleSetID, runnerRequestID, epoch, "tewake-fast-terminal")
+		ctx, scaleSetID, claimKey, epoch, "tewake-fast-terminal")
 	if err != nil || replayed {
 		t.Fatalf("begin JIT = (%#v, %t, %v)", attempt, replayed, err)
 	}
@@ -4055,7 +4055,7 @@ func prepareGitHubClaimForJITTest(
 	seed int,
 	scaleSetID ScaleSetID,
 	messageID MessageID,
-	runnerRequestID int64,
+	claimKey int64,
 ) (string, domain.ControllerEpoch) {
 	t.Helper()
 	ctx := context.Background()
@@ -4073,11 +4073,11 @@ func prepareGitHubClaimForJITTest(
 		scaleSetID,
 		domain.ArchAMD64,
 	)
-	message := githubQueueMessageForTest(scaleSetID, messageID, runnerRequestID)
+	message := githubQueueMessageForTest(scaleSetID, messageID, claimKey)
 	if _, err := controller.CommitGitHubQueueMessage(ctx, message, binding); err != nil {
 		t.Fatal(err)
 	}
-	acquire, err := controller.BeginGitHubAcquire(ctx, scaleSetID, runnerRequestID)
+	acquire, err := controller.BeginGitHubAcquire(ctx, scaleSetID, claimKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -4109,7 +4109,7 @@ func prepareGitHubClaimForJITTest(
 	if replayed, err := controller.RecordAgentExecutionUpdate(ctx, preparing); err != nil || replayed {
 		t.Fatalf("record preparing = (%t, %v)", replayed, err)
 	}
-	if err := controller.MarkGitHubPreparing(ctx, scaleSetID, runnerRequestID); err != nil {
+	if err := controller.MarkGitHubPreparing(ctx, scaleSetID, claimKey); err != nil {
 		t.Fatal(err)
 	}
 	return nodeID, epoch
@@ -4118,7 +4118,7 @@ func prepareGitHubClaimForJITTest(
 func githubQueueMessageForTest(
 	scaleSetID ScaleSetID,
 	messageID MessageID,
-	runnerRequestID int64,
+	claimKey int64,
 ) GitHubQueueMessage {
 	return GitHubQueueMessage{
 		ScaleSetID: scaleSetID,
@@ -4126,8 +4126,8 @@ func githubQueueMessageForTest(
 		Digest:     digestForTest("github-message-" + string(rune(messageID))),
 		Jobs: []GitHubJobEvent{{
 			Type:            GitHubJobAvailable,
-			RunnerRequestID: runnerRequestID,
-			ExecutionID:     domain.ExecutionID("github-execution-" + string(rune(runnerRequestID))),
+			RunnerRequestID: claimKey,
+			ExecutionID:     domain.ExecutionID("github-execution-" + string(rune(claimKey))),
 		}},
 	}
 }
