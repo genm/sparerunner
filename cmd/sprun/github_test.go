@@ -35,14 +35,14 @@ func writeTestAppKey(t *testing.T) string {
 // credential store requires the restrictive ACL initialization applies, and the
 // connect command requires a controller that actually exists.
 //
-// macOS has no state-publication credential adapter yet (spr-008), so init
+// macOS has no state-publication credential adapter yet (task-008), so init
 // cannot run there. The skip is conditioned on that platform rather than on any
 // init failure, so a real failure on a supported platform still fails the test,
 // and these tests start running on macOS as soon as the adapter lands.
 func privateControllerDir(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "darwin" {
-		t.Skip("sprun init needs the macOS credential adapter (spr-008)")
+		t.Skip("sprun init needs the macOS credential adapter (task-008)")
 	}
 	directory := filepath.Join(t.TempDir(), "controller")
 	var stdout, stderr bytes.Buffer

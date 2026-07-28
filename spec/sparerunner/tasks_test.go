@@ -7,12 +7,16 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strings"
 	"testing"
 
 	"go.yaml.in/yaml/v3"
 )
 
-var taskIDPattern = regexp.MustCompile(`^spr-[0-9]{3}$`)
+// A task ID is an opaque handle, so the pattern carries no product name and no
+// ordering. Execution order is the depends_on graph alone, which is why this
+// file enforces acyclicity instead of a hand-maintained order field.
+var taskIDPattern = regexp.MustCompile(`^task-[0-9]{3}$`)
 
 type taskManifest struct {
 	Version int        `yaml:"version"`
@@ -28,7 +32,6 @@ type taskSpec struct {
 	DependsOn   []string  `yaml:"depends_on"`
 	Paths       []string  `yaml:"paths"`
 	CITargets   []string  `yaml:"ci_targets"`
-	PROrder     int       `yaml:"pr_order"`
 	Status      string    `yaml:"status"`
 	Notes       yaml.Node `yaml:"notes,omitempty"`
 	Acceptance  []string  `yaml:"acceptance"`
@@ -60,14 +63,13 @@ unexpected: true
 version: 1
 feature: sparerunner
 tasks:
-  - id: spr-001
+  - id: task-001
     title: first
     type: foundation
     description: first task
-    depends_on: [spr-999]
+    depends_on: [task-999]
     paths: [spec]
     ci_targets: [test]
-    pr_order: 1
     status: todo
     acceptance: [validated]
 `,
@@ -76,7 +78,59 @@ version: 1
 feature: sparerunner
 tasks:
   - &task
-    id: spr-001
+    id: task-001
+    title: first
+    type: foundation
+    description: first task
+    depends_on: []
+    paths: [spec]
+    ci_targets: [test]
+    status: todo
+    acceptance: [validated]
+  - *task
+`,
+		"dependency cycle": `
+version: 1
+feature: sparerunner
+tasks:
+  - id: task-001
+    title: first
+    type: foundation
+    description: first task
+    depends_on: [task-002]
+    paths: [spec]
+    ci_targets: [test]
+    status: todo
+    acceptance: [validated]
+  - id: task-002
+    title: second
+    type: foundation
+    description: second task
+    depends_on: [task-001]
+    paths: [spec]
+    ci_targets: [test]
+    status: todo
+    acceptance: [validated]
+`,
+		"self dependency": `
+version: 1
+feature: sparerunner
+tasks:
+  - id: task-001
+    title: first
+    type: foundation
+    description: first task
+    depends_on: [task-001]
+    paths: [spec]
+    ci_targets: [test]
+    status: todo
+    acceptance: [validated]
+`,
+		"retired pr_order field": `
+version: 1
+feature: sparerunner
+tasks:
+  - id: task-001
     title: first
     type: foundation
     description: first task
@@ -86,7 +140,6 @@ tasks:
     pr_order: 1
     status: todo
     acceptance: [validated]
-  - *task
 `,
 	}
 	for name, source := range tests {
@@ -124,7 +177,6 @@ func validateManifest(manifest taskManifest) error {
 		return errors.New("manifest requires version 1, feature sparerunner, and at least one task")
 	}
 	byID := make(map[string]taskSpec, len(manifest.Tasks))
-	byOrder := make(map[int]string, len(manifest.Tasks))
 	for _, task := range manifest.Tasks {
 		if !taskIDPattern.MatchString(task.ID) {
 			return fmt.Errorf("invalid task ID %q", task.ID)
@@ -140,21 +192,52 @@ func validateManifest(manifest taskManifest) error {
 		if _, exists := byID[task.ID]; exists {
 			return fmt.Errorf("duplicate task ID %s", task.ID)
 		}
-		if existing, exists := byOrder[task.PROrder]; exists || task.PROrder < 1 {
-			return fmt.Errorf("task %s has invalid or duplicate PR order with %s", task.ID, existing)
-		}
 		byID[task.ID] = task
-		byOrder[task.PROrder] = task.ID
 	}
 	for _, task := range manifest.Tasks {
 		for _, dependencyID := range task.DependsOn {
-			dependency, exists := byID[dependencyID]
-			if !exists {
+			if _, exists := byID[dependencyID]; !exists {
 				return fmt.Errorf("task %s depends on unknown task %s", task.ID, dependencyID)
 			}
-			if dependency.PROrder >= task.PROrder {
-				return fmt.Errorf("task %s dependency %s is not ordered before it", task.ID, dependencyID)
+		}
+	}
+	return validateAcyclic(manifest.Tasks, byID)
+}
+
+// validateAcyclic proves the graph can be executed at all. It replaces the
+// former pr_order field: a hand-maintained total order duplicated what
+// depends_on already expresses, forced a renumber whenever a task was inserted,
+// and made the ID look like a position it never carried.
+func validateAcyclic(tasks []taskSpec, byID map[string]taskSpec) error {
+	// The zero value is "unvisited", so an absent map entry needs no special case.
+	const (
+		onStack = iota + 1
+		settled
+	)
+	state := make(map[string]int, len(tasks))
+	var path []string
+	var visit func(id string) error
+	visit = func(id string) error {
+		switch state[id] {
+		case settled:
+			return nil
+		case onStack:
+			return fmt.Errorf("task dependency cycle: %s -> %s", strings.Join(path, " -> "), id)
+		}
+		state[id] = onStack
+		path = append(path, id)
+		for _, dependencyID := range byID[id].DependsOn {
+			if err := visit(dependencyID); err != nil {
+				return err
 			}
+		}
+		path = path[:len(path)-1]
+		state[id] = settled
+		return nil
+	}
+	for _, task := range tasks {
+		if err := visit(task.ID); err != nil {
+			return err
 		}
 	}
 	return nil

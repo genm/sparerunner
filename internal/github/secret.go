@@ -68,7 +68,7 @@ func (c JITConfig) Digest() string {
 }
 
 // Deliver passes the encoded JIT configuration to the runner boundary. Consumers
-// must not retain, log, or persist it; spr-006 owns deletion and verification of
+// must not retain, log, or persist it; task-006 owns deletion and verification of
 // all official runner material created after this handoff.
 func (c JITConfig) Deliver(deliver func(value string) error) error {
 	if deliver == nil {

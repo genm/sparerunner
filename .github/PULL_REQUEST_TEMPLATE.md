@@ -6,10 +6,10 @@ Review once CI on the branch is green.
 
 ## Task
 
-<!-- The single `spr-NNN` task this pull request implements, or `none` with a
+<!-- The single `task-NNN` task this pull request implements, or `none` with a
      reason for repository-hygiene changes that no task owns. -->
 
-Task: spr-NNN
+Task: task-NNN
 
 ## What changed
 

@@ -1,11 +1,11 @@
 # macOS native-runner live acceptance
 
-This directory owns the macOS-specific SPR-008 evidence contract. It validates
+This directory owns the macOS-specific task-008 evidence contract. It validates
 the packaged system LaunchDaemon, the dedicated non-login runner identity,
 Keychain-backed node material, the pinned official runner archive, the local
 runner journal, the boot epoch, process ownership, and cleanup residue.
 
-It does not replace SPR-014's three-OS/two-installation GitHub fleet gate. A
+It does not replace task-014's three-OS/two-installation GitHub fleet gate. A
 protected private-repository workflow must drive the real runner lifecycle;
 mock runner output is not accepted as live evidence.
 
@@ -146,7 +146,7 @@ under the runner UID, a released journal, and no workspace/fence residue.
 
 Repository-local tests validate the evidence parser and fail-closed invariants,
 but they are not real reboot, sleep, Keychain ACL, Intel hardware, or private
-GitHub job evidence. SPR-008 remains `in_progress` until protected arm64 and
+GitHub job evidence. task-008 remains `in_progress` until protected arm64 and
 amd64 hosts produce these manifests and Controller-side evidence confirms the
 post-wake/post-reboot authenticated session rather than only local launchd
 recovery. The same live run must prove root LaunchDaemon Keychain access before
