@@ -7,6 +7,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +19,14 @@ import (
 
 func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
 	const nodeID = "0123456789abcdef0123456789abcdef"
 	server := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
+	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
-			server <- err
+			server <- bootstrapStageError("receive", started, err)
 			return
 		}
 		if request.Options.JoinCode != options.JoinCode ||
@@ -32,20 +36,63 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 			server <- errors.New("bootstrap request changed enrollment options")
 			return
 		}
-		server <- request.Complete(nodeID, nil)
-	}()
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
+	})
 	receivedNodeID, err := submitBootstrapJoin(
 		context.Background(),
+		pipeName,
 		options,
 		false,
 	)
 	if err != nil {
-		select {
-		case serverErr := <-server:
-			t.Fatalf("bootstrap submit error = %v; server error = %v", err, serverErr)
-		case <-time.After(time.Second):
-		}
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
+	}
+	if receivedNodeID != nodeID {
+		t.Fatalf("node ID = %q", receivedNodeID)
+	}
+	if err := <-server; err != nil {
 		t.Fatal(err)
+	}
+}
+
+// TestBootstrapCompletesAfterDelayedDurableEnrollment models the real Agent
+// sequence. Production writes node state to disk before it acknowledges, so the
+// pipe sits idle between the request and the response. Every other test
+// completes immediately, which leaves that gap - and whatever the disconnect
+// monitor is doing to the handle inside it - untested.
+func TestBootstrapCompletesAfterDelayedDurableEnrollment(t *testing.T) {
+	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
+	const nodeID = "0123456789abcdef0123456789abcdef"
+	server := make(chan error, 1)
+	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
+		if err != nil {
+			server <- bootstrapStageError("receive", started, err)
+			return
+		}
+		time.Sleep(250 * time.Millisecond)
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
+	})
+	receivedNodeID, err := submitBootstrapJoin(
+		context.Background(),
+		pipeName,
+		options,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if receivedNodeID != nodeID {
 		t.Fatalf("node ID = %q", receivedNodeID)
@@ -57,19 +104,26 @@ func TestBootstrapPipeCompletesOnlyAfterDurableEnrollmentAck(t *testing.T) {
 
 func TestBootstrapPipeReturnsFixedFailureWithoutLeakingCause(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
 	server := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
+	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
-			server <- err
+			server <- bootstrapStageError("receive", started, err)
 			return
 		}
-		server <- request.Complete("", errors.New("secret upstream detail"))
-	}()
-	_, err := submitBootstrapJoin(context.Background(), options, false)
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete("", errors.New("secret upstream detail")),
+		)
+	})
+	_, err := submitBootstrapJoin(context.Background(), pipeName, options, false)
 	if !errors.Is(err, ErrBootstrapEnrollment) ||
 		strings.Contains(err.Error(), "secret upstream detail") {
-		t.Fatalf("client error = %v", err)
+		t.Fatalf("client error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if err := <-server; err != nil {
 		t.Fatal(err)
@@ -118,17 +172,27 @@ func TestSubmitBootstrapJoinTimesOutWithoutService(t *testing.T) {
 	options.ConnectionTimeout = 50 * time.Millisecond
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	if _, err := submitBootstrapJoin(ctx, options, false); !errors.Is(err, ErrBootstrapUnavailable) {
+	if _, err := submitBootstrapJoin(
+		ctx,
+		bootstrapTestPipeName(t),
+		options,
+		false,
+	); !errors.Is(err, ErrBootstrapUnavailable) {
 		t.Fatalf("missing service error = %v", err)
 	}
 }
 
 func TestSubmitBootstrapJoinTimesOutWhenServiceDoesNotAck(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
-	options.ConnectionTimeout = 100 * time.Millisecond
+	// The timeout has to cover pipe creation as well as the missing ack, so it
+	// stays well above server start-up latency. A budget tight enough to expire
+	// before the server goroutine creates its pipe would strand that goroutine
+	// in ConnectNamedPipe and assert nothing about acknowledgement.
+	options.ConnectionTimeout = time.Second
+	pipeName := bootstrapTestPipeName(t)
 	server := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
+	startBootstrapServer(t, func(ctx context.Context) {
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
 			server <- err
 			return
@@ -142,13 +206,18 @@ func TestSubmitBootstrapJoinTimesOutWhenServiceDoesNotAck(t *testing.T) {
 		case <-time.After(5 * time.Second):
 			server <- errors.New("client did not disconnect after its deadline")
 		}
-	}()
+	})
 	if _, err := submitBootstrapJoin(
 		context.Background(),
+		pipeName,
 		options,
 		false,
 	); !errors.Is(err, ErrBootstrapUnavailable) {
-		t.Fatalf("missing bootstrap acknowledgement error = %v", err)
+		t.Fatalf(
+			"missing bootstrap acknowledgement error = %v; %s",
+			err,
+			bootstrapServerDetail(server),
+		)
 	}
 	select {
 	case err := <-server:
@@ -162,17 +231,30 @@ func TestSubmitBootstrapJoinTimesOutWhenServiceDoesNotAck(t *testing.T) {
 
 func TestBootstrapJoinCannotReplayAfterOnePipeInstance(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
 	const nodeID = "abcdef0123456789abcdef0123456789"
 	server := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
-		if err == nil {
-			err = request.Complete(nodeID, nil)
+	startBootstrapServer(t, func(ctx context.Context) {
+		started := time.Now()
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
+		if err != nil {
+			server <- bootstrapStageError("receive", started, err)
+			return
 		}
-		server <- err
-	}()
-	if _, err := submitBootstrapJoin(context.Background(), options, false); err != nil {
-		t.Fatal(err)
+		completing := time.Now()
+		server <- bootstrapStageError(
+			"complete",
+			completing,
+			request.Complete(nodeID, nil),
+		)
+	})
+	if _, err := submitBootstrapJoin(
+		context.Background(),
+		pipeName,
+		options,
+		false,
+	); err != nil {
+		t.Fatalf("bootstrap submit error = %v; %s", err, bootstrapServerDetail(server))
 	}
 	if err := <-server; err != nil {
 		t.Fatal(err)
@@ -180,23 +262,29 @@ func TestBootstrapJoinCannotReplayAfterOnePipeInstance(t *testing.T) {
 	replayContext, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	options.ConnectionTimeout = 50 * time.Millisecond
-	if _, err := submitBootstrapJoin(replayContext, options, false); !errors.Is(err, ErrBootstrapUnavailable) {
+	if _, err := submitBootstrapJoin(
+		replayContext,
+		pipeName,
+		options,
+		false,
+	); !errors.Is(err, ErrBootstrapUnavailable) {
 		t.Fatalf("replay error = %v", err)
 	}
 }
 
 func TestBootstrapRequestDetectsClientDisconnectBeforeAck(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
+	pipeName := bootstrapTestPipeName(t)
 	server := make(chan *BootstrapRequest, 1)
 	serverErr := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
+	startBootstrapServer(t, func(ctx context.Context) {
+		request, err := receiveBootstrapRequest(ctx, pipeName, false)
 		if err != nil {
 			serverErr <- err
 			return
 		}
 		server <- request
-	}()
+	})
 	payload, err := encodeBootstrapJSON(bootstrapRequestFrame{
 		Version:                bootstrapProtocolV1,
 		JoinCode:               options.JoinCode,
@@ -209,7 +297,7 @@ func TestBootstrapRequestDetectsClientDisconnectBeforeAck(t *testing.T) {
 	}
 	connectContext, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	file, _, err := connectBootstrapPipe(connectContext)
+	file, _, err := connectBootstrapPipe(connectContext, pipeName)
 	if err != nil {
 		select {
 		case receiveErr := <-serverErr:
@@ -260,8 +348,10 @@ func TestProductionBootstrapReceiverRejectsNonSystemIdentity(t *testing.T) {
 func TestSubmitRejectsPipeServerThatIsNotLocalSystemService(t *testing.T) {
 	options := validBootstrapJoinOptions(t)
 	server := make(chan error, 1)
-	go func() {
-		request, err := receiveBootstrapRequest(context.Background(), false)
+	// SubmitBootstrapJoin is the production entry point, so this is the one test
+	// that has to serve the real BootstrapPipeName.
+	startBootstrapServer(t, func(ctx context.Context) {
+		request, err := receiveBootstrapRequest(ctx, BootstrapPipeName, false)
 		if err == nil {
 			err = request.Complete(
 				"0123456789abcdef0123456789abcdef",
@@ -269,7 +359,7 @@ func TestSubmitRejectsPipeServerThatIsNotLocalSystemService(t *testing.T) {
 			)
 		}
 		server <- err
-	}()
+	})
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 	if _, err := SubmitBootstrapJoin(ctx, options); !errors.Is(err, ErrBootstrapIdentity) {
@@ -280,6 +370,70 @@ func TestSubmitRejectsPipeServerThatIsNotLocalSystemService(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("unowned test server did not close")
 	}
+}
+
+// startBootstrapServer owns the lifetime of one bootstrap pipe server goroutine.
+// The bootstrap pipe is deliberately single-instance
+// (FILE_FLAG_FIRST_PIPE_INSTANCE), so a goroutine that outlives its test would
+// make every later test fail with ErrBootstrapUnavailable. Cancelling the
+// context releases a server still blocked in ConnectNamedPipe, and the test does
+// not return until the goroutine has actually finished.
+func startBootstrapServer(t *testing.T, serve func(ctx context.Context)) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		serve(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("bootstrap pipe server goroutine did not finish")
+		}
+	})
+}
+
+// bootstrapStageError names the server stage that failed and how long it took.
+// ErrBootstrapUnavailable is returned both when the server never creates its
+// pipe and when it creates one but cannot deliver its response, and those two
+// look identical from the client. The stage and the elapsed time separate them:
+// a receive failure reports milliseconds, while a response that only fails once
+// the client gave up reports the client's whole connection timeout.
+func bootstrapStageError(stage string, started time.Time, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("%s after %s: %w", stage, time.Since(started), err)
+}
+
+// bootstrapServerDetail reports what the server goroutine saw. A client that
+// gives up returns the same ErrBootstrapUnavailable whether the server never
+// created its pipe, rejected the pipe ACL, or simply never answered, so a
+// failure that hides the server's own error is not diagnosable from CI logs.
+// SPARERUNNER_WINDOWS_DEBUG is already set for these tests, so an identity rejection
+// arrives here with its reason attached.
+func bootstrapServerDetail(server <-chan error) string {
+	select {
+	case err := <-server:
+		return fmt.Sprintf("server error = %v", err)
+	case <-time.After(5 * time.Second):
+		return "server reported no result"
+	}
+}
+
+// bootstrapTestPipeName gives each test its own pipe name. Isolation has to come
+// from the name because single-instance creation and the pipe ACL are security
+// properties of the production bootstrap pipe and must stay exactly as shipped.
+func bootstrapTestPipeName(t *testing.T) string {
+	t.Helper()
+	var suffix [8]byte
+	if _, err := rand.Read(suffix[:]); err != nil {
+		t.Fatal(err)
+	}
+	return fmt.Sprintf(`\\.\pipe\SpareRunnerEnrollTest-%d-%x`, os.Getpid(), suffix)
 }
 
 func validBootstrapJoinOptions(t *testing.T) BootstrapJoinOptions {
