@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,7 +78,34 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 	}
 }
 
+// TestPackagedLinuxNextStepIsSystemdRestart exercises the branch itself, with no
+// host path resolution involved, so the Linux packaged contract is asserted on
+// every CI platform. resolveStateDirectoryForPlatform has a POSIX escape hatch
+// for Darwin only, so the end-to-end command test below cannot run on Windows.
+func TestPackagedLinuxNextStepIsSystemdRestart(t *testing.T) {
+	var output bytes.Buffer
+	printPlatformJoinNextStep(&output, "linux", "/var/lib/sparerunner-agent")
+	if !strings.Contains(output.String(), "sudo systemctl restart sparerunner-agent.service") {
+		t.Fatalf("packaged Linux next step = %q", output.String())
+	}
+	if strings.Contains(output.String(), "sparerunner-agent serve") {
+		t.Fatalf("packaged Linux next step suggested a second Agent process: %q", output.String())
+	}
+
+	output.Reset()
+	printPlatformJoinNextStep(&output, "linux", "/home/example/.local/share/sparerunner/agent")
+	if !strings.Contains(
+		output.String(),
+		"sparerunner-agent serve --state-dir /home/example/.local/share/sparerunner/agent",
+	) {
+		t.Fatalf("unpackaged Linux next step = %q", output.String())
+	}
+}
+
 func TestPackagedLinuxJoinPrintsSystemdInstructionWithoutSecondServe(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("a POSIX packaged state directory is not representable as a Windows host path")
+	}
 	var stdout, stderr bytes.Buffer
 	const stateDirectory = "/var/lib/sparerunner-agent"
 	command := newJoinCommandForPlatform(
