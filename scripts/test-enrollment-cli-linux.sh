@@ -18,7 +18,7 @@ case "${target_arch}" in
 esac
 
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
-  go build -trimpath -o "${test_root}/sparerunner" "${repo_root}/cmd/sparerunner"
+  go build -trimpath -o "${test_root}/sprun" "${repo_root}/cmd/sprun"
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
   go build -trimpath -o "${test_root}/sparerunner-agent" "${repo_root}/cmd/sparerunner-agent"
 
@@ -30,7 +30,7 @@ docker run --rm \
   --user 65532:65532 \
   --tmpfs /state:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
-  --mount "type=bind,src=${test_root}/sparerunner,dst=/opt/sparerunner,readonly" \
+  --mount "type=bind,src=${test_root}/sprun,dst=/opt/sprun,readonly" \
   --mount "type=bind,src=${test_root}/sparerunner-agent,dst=/opt/sparerunner-agent,readonly" \
   alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
   /bin/sh -eu -c '
@@ -48,13 +48,13 @@ docker run --rm \
     }
     trap stop_processes EXIT INT TERM
 
-    init_output="$(/opt/sparerunner init \
+    init_output="$(/opt/sprun init \
       --state-dir /state/controller \
       --hint https://127.0.0.1:17443)"
-    join_code="$(printf "%s\n" "${init_output}" | awk "/^sparerunner join / { print \$3 }")"
+    join_code="$(printf "%s\n" "${init_output}" | awk "/^sprun join / { print \$3 }")"
     test -n "${join_code}"
 
-    /opt/sparerunner serve \
+    /opt/sprun serve \
       --state-dir /state/controller \
       --agent-listen 127.0.0.1:17443 \
       --admin-listen "" \
@@ -72,7 +72,7 @@ docker run --rm \
     done
     test "${ready}" = true
 
-    /opt/sparerunner join "${join_code}" \
+    /opt/sprun join "${join_code}" \
       --state-dir /state/agent \
       --controller https://127.0.0.1:17443 >/tmp/join.log 2>&1
     test -s /state/agent/node.json

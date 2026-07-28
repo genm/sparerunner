@@ -60,12 +60,12 @@ check-release-artifacts dist='dist':
   ./scripts/check-release-artifacts.sh "{{dist}}"
 
 test-management-ui-linux: build
-  ./scripts/test-management-ui-linux.sh bin/sparerunner
+  ./scripts/test-management-ui-linux.sh bin/sprun
 
 build:
   mkdir -p bin
   pnpm --dir web build
-  go build -trimpath -o bin/sparerunner ./cmd/sparerunner
+  go build -trimpath -o bin/sprun ./cmd/sprun
   go build -trimpath -o bin/sparerunner-agent ./cmd/sparerunner-agent
 
 # The optional desktop tray needs cgo and a native toolchain, so it stays out of
@@ -79,7 +79,7 @@ build-all:
 
 smoke-embedded-ui-linux: build
   test "$(go env GOOS)" = linux
-  ./scripts/smoke-embedded-ui.sh bin/sparerunner
+  ./scripts/smoke-embedded-ui.sh bin/sprun
 
 check: generate-api-check generate-web-check fmt-check lint test test-platform-linux build
 

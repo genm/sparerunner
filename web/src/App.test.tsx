@@ -124,7 +124,7 @@ describe("App", () => {
     render(<App api={createScenarioClient("handoff_required")} initialRoute="setup" />);
 
     await user.click(await screen.findByRole("button", { name: "Begin browser authorization" }));
-    expect(await screen.findByText(/sparerunner ui authorize 'TWA-TEST-DEVICE-CODE'/)).toBeTruthy();
+    expect(await screen.findByText(/sprun ui authorize 'TWA-TEST-DEVICE-CODE'/)).toBeTruthy();
 
     await user.click(screen.getByRole("button", { name: "Continue after authorization" }));
 

@@ -2,12 +2,12 @@
 set -euo pipefail
 
 if [[ $# -gt 2 ]]; then
-  printf 'usage: %s [sparerunner-binary] [result-json]\n' "$0" >&2
+  printf 'usage: %s [sprun-binary] [result-json]\n' "$0" >&2
   exit 2
 fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-binary="${1:-${repo_root}/bin/sparerunner}"
+binary="${1:-${repo_root}/bin/sprun}"
 result_file="${2:-${repo_root}/output/test-results/embedded-ui-smoke.json}"
 runtime_parent="${TMPDIR:-/tmp}"
 runtime_parent="${runtime_parent%/}"
@@ -36,7 +36,7 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 
 if [[ ! -x "${binary}" ]]; then
-  printf 'sparerunner binary is not executable: %s\n' "${binary}" >&2
+  printf 'sprun binary is not executable: %s\n' "${binary}" >&2
   exit 1
 fi
 

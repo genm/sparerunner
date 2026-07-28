@@ -266,7 +266,7 @@ switch ($Scenario) {
                 ./internal/enroll `
                 ./internal/platform/windows `
                 ./internal/runner `
-                ./cmd/sparerunner `
+                ./cmd/sprun `
                 ./cmd/sparerunner-agent `
                 ./packaging/windows 2>&1 |
                 Tee-Object -FilePath $Result

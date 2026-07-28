@@ -145,7 +145,7 @@ func TestNodeAddUsesManagementAPISessionCookieOriginAndCSRF(t *testing.T) {
 	if operationCalls != 1 {
 		t.Fatalf("operation calls = %d, want 1", operationCalls)
 	}
-	if stdout.String() != "sparerunner join "+joinCode+"\n" {
+	if stdout.String() != "sprun join "+joinCode+"\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	if stderr.Len() != 0 {

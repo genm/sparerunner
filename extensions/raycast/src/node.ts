@@ -77,9 +77,9 @@ interface Preferences {
 }
 
 const STANDARD_CLI_PATHS = [
-  "/opt/homebrew/bin/sparerunner",
-  "/usr/local/bin/sparerunner",
-  "/usr/bin/sparerunner",
+  "/opt/homebrew/bin/sprun",
+  "/usr/local/bin/sprun",
+  "/usr/bin/sprun",
   join(homedir(), ".local", "bin", "sparerunner"),
   join(homedir(), "go", "bin", "sparerunner"),
 ];

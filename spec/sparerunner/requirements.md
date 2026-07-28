@@ -108,19 +108,19 @@ fork-originated code.
 
 ### Initialize a controller
 
-1. Run `sparerunner init`.
+1. Run `sprun init`.
 2. SpareRunner creates the controller identity, SQLite database, single-admin session,
    and first one-time join code.
-3. Run `sparerunner serve`, or install the controller as an OS service with
-   `sparerunner install controller`.
+3. Run `sprun serve`, or install the controller as an OS service with
+   `sprun install controller`.
 4. Open the loopback-only Web UI. The browser creates an in-memory claim secret
    and displays a non-authorizing handoff code.
-5. Run the displayed `sparerunner ui authorize '<code>'` command on the Controller
+5. Run the displayed `sprun ui authorize '<code>'` command on the Controller
    host, then complete the claim in the same browser tab.
 
 ### Join a node
 
-1. Run `sparerunner join spr_...` on the node.
+1. Run `sprun join spr_...` on the node.
 2. The CLI discovers endpoint candidates with mDNS or uses address hints embedded in
    the code.
 3. The CLI verifies the pinned controller fingerprint before sending the one-time
@@ -133,7 +133,7 @@ fork-originated code.
 ### Connect GitHub
 
 1. Create a user-owned GitHub App and give the controller its credentials with
-   `sparerunner github connect`, or start the App Manifest flow from the Web UI,
+   `sprun github connect`, or start the App Manifest flow from the Web UI,
    which creates the App and stores the same credentials in one confirmation.
    Neither path is privileged: both write through the controller-owned platform
    credential store, and the documented CLI path requires no browser session
@@ -185,7 +185,7 @@ fork-originated code.
    like resuming acceptance.
 
 The same status and the same two actions are available from the Raycast launcher on
-macOS and from `sparerunner node` on every supported OS. Every desktop surface performs the
+macOS and from `sprun node` on every supported OS. Every desktop surface performs the
 identical operation against the local agent, so none of them is a privileged path.
 
 ## Exception Journeys
@@ -270,7 +270,7 @@ identical operation against the local agent, so none of them is a privileged pat
   verified, or cleaned across the two modes.
 - A node running under shared runner identity shall report that fact as node state
   (`sharedRunnerIdentity`) through the node-local status document, the agent
-  snapshot and heartbeat, the management API, `sparerunner node status`, and the tray.
+  snapshot and heartbeat, the management API, `sprun node status`, and the tray.
   The reported state is observation only: it shall never grant capacity or relax a
   check.
 - The controller CA defaults to a ten-year validity. Controller and node leaf
@@ -380,7 +380,7 @@ identical operation against the local agent, so none of them is a privileged pat
   the descendant set is proven empty.
 - A workspace created under one Linux execution mode shall never be verifiable or
   cleanable under the other.
-- An operator inspecting the fleet through the management API, `sparerunner node
+- An operator inspecting the fleet through the management API, `sprun node
   status`, or the tray shall be able to tell which nodes run without uid isolation.
 - Each Linux execution shall receive a private `HOME`, XDG cache/config roots, and
   `TMPDIR` below its disposable execution root. Their residue shall be absent before
@@ -533,7 +533,7 @@ identical operation against the local agent, so none of them is a privileged pat
   matching browser secret. Concurrent claims shall issue at most one session, and
   an authentication-audit failure shall revoke that session before returning 503.
 - Browser handoff codes are non-secret correlation values and may appear only in
-  the explicit UI instruction and `sparerunner ui authorize` argument. Claim secrets,
+  the explicit UI instruction and `sprun ui authorize` argument. Claim secrets,
   owner proofs, session cookies, and CSRF values shall never appear in URLs,
   browser history, DOM text, browser storage, command arguments, logs, audit
   events, SQLite, or diagnostics. Reloading or closing the authorizing tab loses

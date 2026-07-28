@@ -88,15 +88,15 @@ jobs:
         run: pnpm --dir web test:ct
 
       - name: Build release binary for browser verification
-        run: go build -trimpath -o "${RUNNER_TEMP}/sparerunner" ./cmd/sparerunner
+        run: go build -trimpath -o "${RUNNER_TEMP}/sprun" ./cmd/sprun
 
       - name: Test critical management journey in a real browser
-        run: ./scripts/test-management-ui-linux.sh "${RUNNER_TEMP}/sparerunner"
+        run: ./scripts/test-management-ui-linux.sh "${RUNNER_TEMP}/sprun"
 
       - name: Smoke embedded Web UI from the release binary
         run: |
           ./scripts/smoke-embedded-ui.sh \
-            "${RUNNER_TEMP}/sparerunner" \
+            "${RUNNER_TEMP}/sprun" \
             output/test-results/embedded-ui-smoke.json
 
       - name: Install actionlint
@@ -146,7 +146,7 @@ jobs:
         run: go test ./...
 
       - name: Build controller
-        run: go build -trimpath ./cmd/sparerunner
+        run: go build -trimpath ./cmd/sprun
 
       - name: Build agent
         run: go build -trimpath ./cmd/sparerunner-agent

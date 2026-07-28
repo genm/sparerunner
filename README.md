@@ -40,8 +40,8 @@ ARC / Kubernetes / commercial runner platforms
 SpareRunner is under active pre-alpha development. The repository currently
 contains the accepted specification, durable domain/store foundations, the
 isolated GitHub scale-set adapter, and a Linux-capable controller/node
-enrollment path. `sparerunner init`, `sparerunner serve`, `sparerunner join`,
-`sparerunner node add`, and `sparerunner-agent serve` work for development,
+enrollment path. `sprun init`, `sprun serve`, `sprun join`,
+`sprun node add`, and `sparerunner-agent serve` work for development,
 including pinned enrollment, mTLS WebSockets, reconnect, the signed GitHub App
 Manifest flow, installation discovery across multiple private org/repo scopes,
 private Target verification, generated management UI/API, node-affined
@@ -77,14 +77,14 @@ The specification is the project source of truth:
 ## Intended experience
 
 ```bash
-sparerunner init
-sparerunner serve
+sprun init
+sprun serve
 ```
 
 Then, on another computer:
 
 ```bash
-sparerunner join spr_...
+sprun join spr_...
 ```
 
 Connect a GitHub App you own, then point a Target at a private scope. This needs
@@ -92,9 +92,9 @@ no browser session with the controller — see
 [Connecting a GitHub App](docs/github-app.md):
 
 ```bash
-sparerunner github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
-sparerunner github installations
-sparerunner config apply fleet.yaml
+sprun github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
+sprun github installations
+sprun config apply fleet.yaml
 ```
 
 Workflows then select the fleet with:
@@ -111,12 +111,12 @@ tray or menu bar. It shows every private org/repo scope that computer currently
 waits on and what is running right now, and stops or resumes accepting new jobs
 in one click. The owner can also exclude a single scope while the machine keeps
 serving the rest. Stopping never cancels the job already running, and the same
-switch is available from Raycast on macOS, and as `sparerunner node pause` /
-`sparerunner node resume`:
+switch is available from Raycast on macOS, and as `sprun node pause` /
+`sprun node resume`:
 
 ```bash
 sparerunner-agent serve --local-control
-sparerunner node status
+sprun node status
 ```
 
 ## Product boundary

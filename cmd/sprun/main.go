@@ -57,7 +57,7 @@ func runContextWithInput(
 
 func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "sparerunner",
+		Use:           "sprun",
 		Short:         "Orchestrate trusted GitHub Actions runners across computers you own",
 		SilenceErrors: true,
 		SilenceUsage:  true,
@@ -130,7 +130,7 @@ func newInitCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Controller initialized in %s\n", directory)
-			fmt.Fprintf(command.OutOrStdout(), "sparerunner join %s\n", code)
+			fmt.Fprintf(command.OutOrStdout(), "sprun join %s\n", code)
 			return nil
 		},
 	}
@@ -270,7 +270,7 @@ func newNodeCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(command.OutOrStdout(), "sparerunner join %s\n", code)
+				fmt.Fprintf(command.OutOrStdout(), "sprun join %s\n", code)
 				return nil
 			})
 		},

@@ -17,6 +17,8 @@ func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	if err := run([]string{"version"}, &stdout, &stderr); err != nil {
 		t.Fatalf("run(version) returned error: %v", err)
 	}
+	// `version` reports the product build, which every binary shares, so it stays
+	// "sparerunner" even though the command itself is `sprun`.
 	if !strings.Contains(stdout.String(), "sparerunner ") {
 		t.Fatalf("version output = %q, want build information", stdout.String())
 	}
