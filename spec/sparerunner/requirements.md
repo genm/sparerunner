@@ -1,23 +1,54 @@
-# Tewake Requirements
+# SpareRunner Requirements
 
 Status: accepted for implementation
 
-Feature ID: `tewake`
+Feature ID: `sparerunner`
 
-Audience: individual developers and small trusted teams
+Audience: individual developers and small trusted teams who need more runner
+capacity than GitHub-hosted minutes give them, but who are not going to design,
+run, and pay for dedicated runner infrastructure such as ARC on Kubernetes or a
+commercial runner platform.
 
 ## Goal
 
-Tewake shall let a user join Windows, macOS, and Linux computers they already own
+SpareRunner shall let a user join Windows, macOS, and Linux computers they already own
 to one LAN-first fleet, then distribute GitHub Actions jobs from multiple private
 repositories and organizations across the available computers. A stock self-hosted
-runner registers against exactly one org or repo; Tewake's distinguishing value is
+runner registers against exactly one org or repo; SpareRunner's distinguishing value is
 one fleet that waits on many private scopes at once while each machine's owner
 casually controls which of those scopes it serves.
 
 The product replaces the repeated manual workflow of SSHing into each computer,
 downloading and registering a runner per scope, installing a service, tuning
 parallelism, and re-registering broken runners.
+
+### Spare capacity, not temporary capacity
+
+"Spare" describes where the capacity comes from, not how long it lasts. The
+product shall serve both of these without a separate mode, a separate install,
+or a different set of concepts:
+
+- A computer its owner uses for daily work, which contributes only while the
+  owner is willing to lend it, and which the owner reclaims in one action.
+- A surplus computer with no other job, which serves as a full-time runner and
+  is expected to stay available.
+
+What both have in common is that the administrator already owns the hardware and
+is not provisioning a machine for CI. The requirements that make the first case
+usable — node and fleet concurrency limits, node availability control, per-Target
+exclusion, and never cancelling the job already running — are what let the same
+fleet hold both kinds of computer at once.
+
+### Boundary that travels with the invitation
+
+Because the product invites a user to lend a computer they also use themselves,
+every statement of that invitation shall carry its boundary. Native mode gives a
+job an ephemeral runner identity and a disposable work directory on a durable
+machine; it is not a disposable machine and not a sandbox. Workflow code runs
+with the local runner account's privileges. The product is for private
+repositories and trusted workflows, actions, contributors, and dependencies, and
+it shall never present lending a personal computer as safe for public or
+fork-originated code.
 
 ## Actors
 
@@ -33,7 +64,7 @@ parallelism, and re-registering broken runners.
   process containment, slot-account handoff, and verified cleanup without
   accepting arbitrary commands from the Agent.
 - **Workflow**: code executed by the official GitHub Actions runner. Native workflows
-  are trusted code, but they remain untrusted input to Tewake's protocol and file
+  are trusted code, but they remain untrusted input to SpareRunner's protocol and file
   handling.
 
 ## User Stories
@@ -45,8 +76,8 @@ parallelism, and re-registering broken runners.
   manually register a GitHub runner.
 - As an Administrator, I want to connect one GitHub App to multiple accounts and
   organizations so that one fleet can serve several private scopes.
-- As a workflow author, I want to use `runs-on: tewake` for platform-neutral work
-  and `tewake-linux`, `tewake-macos`, or `tewake-windows` for platform-specific
+- As a workflow author, I want to use `runs-on: sparerunner` for platform-neutral work
+  and `sparerunner-linux`, `sparerunner-macos`, or `sparerunner-windows` for platform-specific
   work.
 - As an Administrator, I want node and fleet concurrency limits to be enforced so
   that background CI does not overwhelm a personal computer.
@@ -77,19 +108,19 @@ parallelism, and re-registering broken runners.
 
 ### Initialize a controller
 
-1. Run `tewake init`.
-2. Tewake creates the controller identity, SQLite database, single-admin session,
+1. Run `sparerunner init`.
+2. SpareRunner creates the controller identity, SQLite database, single-admin session,
    and first one-time join code.
-3. Run `tewake serve`, or install the controller as an OS service with
-   `tewake install controller`.
+3. Run `sparerunner serve`, or install the controller as an OS service with
+   `sparerunner install controller`.
 4. Open the loopback-only Web UI. The browser creates an in-memory claim secret
    and displays a non-authorizing handoff code.
-5. Run the displayed `tewake ui authorize '<code>'` command on the Controller
+5. Run the displayed `sparerunner ui authorize '<code>'` command on the Controller
    host, then complete the claim in the same browser tab.
 
 ### Join a node
 
-1. Run `tewake join twk_...` on the node.
+1. Run `sparerunner join spr_...` on the node.
 2. The CLI discovers endpoint candidates with mDNS or uses address hints embedded in
    the code.
 3. The CLI verifies the pinned controller fingerprint before sending the one-time
@@ -102,7 +133,7 @@ parallelism, and re-registering broken runners.
 ### Connect GitHub
 
 1. Create a user-owned GitHub App and give the controller its credentials with
-   `tewake github connect`, or start the App Manifest flow from the Web UI,
+   `sparerunner github connect`, or start the App Manifest flow from the Web UI,
    which creates the App and stores the same credentials in one confirmation.
    Neither path is privileged: both write through the controller-owned platform
    credential store, and the documented CLI path requires no browser session
@@ -111,7 +142,7 @@ parallelism, and re-registering broken runners.
 3. Create a GitHub Target for a private repository or organization scope.
 4. Reject public scopes, unverifiable visibility, unsafe runner-group access, and
    overlapping repository-/organization-level routing.
-5. Create a new Tewake-owned scale set for that Target. Reject attaching a
+5. Create a new SpareRunner-owned scale set for that Target. Reject attaching a
    pre-existing/shared scale set, and reject binding one scale set to multiple
    Targets.
 
@@ -154,7 +185,7 @@ parallelism, and re-registering broken runners.
    like resuming acceptance.
 
 The same status and the same two actions are available from the Raycast launcher on
-macOS and from `tewake node` on every supported OS. Every desktop surface performs the
+macOS and from `sparerunner node` on every supported OS. Every desktop surface performs the
 identical operation against the local agent, so none of them is a privileged path.
 
 ## Exception Journeys
@@ -180,7 +211,7 @@ identical operation against the local agent, so none of them is a privileged pat
   confirms it.
 - If the desktop session provides no tray host, the tray client exits with an
   explicit error and the agent service, CLI, and Web UI remain unaffected.
-- If a launcher integration cannot find an installed, compatible Tewake CLI on the
+- If a launcher integration cannot find an installed, compatible SpareRunner CLI on the
   computer, it presents an actionable installation error instead of a silent no-op or
   an assumed state.
 - If the node owner excludes a Target while disconnected from the controller, the
@@ -220,7 +251,7 @@ identical operation against the local agent, so none of them is a privileged pat
   Agent-owned cache entry or prebuilt workspace shall never be privileged
   execution authority.
 - Linux additionally supports one weaker execution mode, shared runner identity,
-  selected exclusively by an explicit `tewake-agent serve
+  selected exclusively by an explicit `sparerunner-agent serve
   --allow-shared-runner-identity` flag. It drops exactly one property of the mode
   above: uid separation between the Agent and the job. The job runs as the same
   Unix user as the Agent and can therefore read and write everything that user
@@ -234,12 +265,12 @@ identical operation against the local agent, so none of them is a privileged pat
   zero capacity. Combining the flag with the privileged Supervisor options shall be
   rejected at startup rather than silently preferring one mode.
 - Shared runner identity shall use its own cache, runtime, and fence roots below the
-  user's data directory (`$XDG_DATA_HOME`, else `~/.local/share/tewake/…`) and its
+  user's data directory (`$XDG_DATA_HOME`, else `~/.local/share/sparerunner/…`) and its
   own versioned workspace-backend identity, so that no workspace is shared,
   verified, or cleaned across the two modes.
 - A node running under shared runner identity shall report that fact as node state
   (`sharedRunnerIdentity`) through the node-local status document, the agent
-  snapshot and heartbeat, the management API, `tewake node status`, and the tray.
+  snapshot and heartbeat, the management API, `sparerunner node status`, and the tray.
   The reported state is observation only: it shall never grant capacity or relax a
   check.
 - The controller CA defaults to a ten-year validity. Controller and node leaf
@@ -252,7 +283,7 @@ identical operation against the local agent, so none of them is a privileged pat
   explicit certificate or authenticated reverse proxy configuration.
 - The default node `maxRunners` is 1. A fleet-wide maximum is optional and otherwise
   equals the sum of node maxima.
-- Tewake shall not invent a node-count quota or other product limit without a
+- SpareRunner shall not invent a node-count quota or other product limit without a
   measured resource boundary or platform contract.
 - The tray client and any launcher integration are optional, unprivileged, per-user
   presentations of existing Node state. They are not new user-facing concepts,
@@ -283,7 +314,7 @@ identical operation against the local agent, so none of them is a privileged pat
 - The eligible-Target list the controller reports to each agent is bounded to 256
   entries. This bound exists only to reject a malformed or hostile payload; it is
   not a product quota on the number of GitHub Targets a fleet or node may serve,
-  and Tewake shall not otherwise invent a narrower limit without a measured
+  and SpareRunner shall not otherwise invent a narrower limit without a measured
   resource boundary or platform contract.
 
 ## Acceptance
@@ -308,7 +339,7 @@ identical operation against the local agent, so none of them is a privileged pat
   cannot be verified, target creation shall fail.
 - When repository- and organization-level targets would route the same label for the
   same repository, configuration shall fail with an actionable conflict.
-- When a workflow requests `tewake-linux`, `tewake-macos`, or `tewake-windows`, only
+- When a workflow requests `sparerunner-linux`, `sparerunner-macos`, or `sparerunner-windows`, only
   nodes matching that OS and architecture profile shall be eligible.
 
 ### Capacity and lifecycle
@@ -349,7 +380,7 @@ identical operation against the local agent, so none of them is a privileged pat
   the descendant set is proven empty.
 - A workspace created under one Linux execution mode shall never be verifiable or
   cleanable under the other.
-- An operator inspecting the fleet through the management API, `tewake node
+- An operator inspecting the fleet through the management API, `sparerunner node
   status`, or the tray shall be able to tell which nodes run without uid isolation.
 - Each Linux execution shall receive a private `HOME`, XDG cache/config roots, and
   `TMPDIR` below its disposable execution root. Their residue shall be absent before
@@ -480,7 +511,7 @@ identical operation against the local agent, so none of them is a privileged pat
 - The loopback management surface shall issue an administrator session only from
   an explicit, empty-body, same-origin `POST /api/v1/session` whose Host and Origin
   exactly match the configured listener and whose
-  `X-Tewake-Admin-Bootstrap` header contains a fresh owner proof. The proof shall
+  `X-SpareRunner-Admin-Bootstrap` header contains a fresh owner proof. The proof shall
   be derived locally from the private Controller credential, be valid for at most
   two minutes, contain a random nonce, and be accepted only once. It shall never
   appear in command arguments, environment variables, durable configuration,
@@ -502,7 +533,7 @@ identical operation against the local agent, so none of them is a privileged pat
   matching browser secret. Concurrent claims shall issue at most one session, and
   an authentication-audit failure shall revoke that session before returning 503.
 - Browser handoff codes are non-secret correlation values and may appear only in
-  the explicit UI instruction and `tewake ui authorize` argument. Claim secrets,
+  the explicit UI instruction and `sparerunner ui authorize` argument. Claim secrets,
   owner proofs, session cookies, and CSRF values shall never appear in URLs,
   browser history, DOM text, browser storage, command arguments, logs, audit
   events, SQLite, or diagnostics. Reloading or closing the authorizing tab loses
@@ -561,6 +592,33 @@ identical operation against the local agent, so none of them is a privileged pat
 - Iroh, WAN/NAT traversal, or public relay dependency
 - Docker mode before the native runner core is complete
 - GHES, Gitea, or enterprise-level runner scope
+
+## Future Direction
+
+These are recognized as directions the product may take. They are not scope, they
+are not scheduled, and nothing in the current design may assume them. They are
+recorded here so that a later proposal is read as a change of scope rather than
+as something the specification always intended.
+
+- **Container and VM execution modes.** Native execution is the only mode with a
+  stated isolation contract today. A container mode would target reproducible
+  test and build environments; a VM mode is the only credible path toward public
+  repositories and fork-originated pull requests, which native mode must never
+  claim. Either one adds an isolation contract and a threat model, so neither is
+  a configuration flag on the existing runtime.
+- **Participation outside one LAN.** The fleet is LAN-first because that is what
+  the current transport and discovery guarantee. NAT traversal or a relay would
+  let an owner lend a computer from another network without a VPN, an open
+  inbound port, or manual certificate work. Any such connectivity layer stays
+  separate from the GitHub control plane; it must not become a dependency of
+  enrollment, scheduling, or runner lifecycle.
+- **Agent self-update.** Runner package updates are already handled. Updating the
+  Agent itself across a fleet the administrator does not want to visit by hand is
+  a different problem, with its own signing, rollback, and trust requirements.
+
+gRPC and protobuf are not future direction. The transport is versioned WebSocket
+JSON by an accepted design decision, and reopening that is a design change, not a
+roadmap item.
 
 ## Release Preconditions
 

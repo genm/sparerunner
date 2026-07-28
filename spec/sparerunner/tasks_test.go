@@ -1,4 +1,4 @@
-package tewake_test
+package sparerunner_test
 
 import (
 	"bytes"
@@ -12,7 +12,7 @@ import (
 	"go.yaml.in/yaml/v3"
 )
 
-var taskIDPattern = regexp.MustCompile(`^twk-[0-9]{3}$`)
+var taskIDPattern = regexp.MustCompile(`^spr-[0-9]{3}$`)
 
 type taskManifest struct {
 	Version int        `yaml:"version"`
@@ -52,19 +52,19 @@ func TestTaskManifestRejectsUnknownFieldsAndBrokenGraph(t *testing.T) {
 	tests := map[string]string{
 		"unknown field": `
 version: 1
-feature: tewake
+feature: sparerunner
 tasks: []
 unexpected: true
 `,
 		"unknown dependency": `
 version: 1
-feature: tewake
+feature: sparerunner
 tasks:
-  - id: twk-001
+  - id: spr-001
     title: first
     type: foundation
     description: first task
-    depends_on: [twk-999]
+    depends_on: [spr-999]
     paths: [spec]
     ci_targets: [test]
     pr_order: 1
@@ -73,10 +73,10 @@ tasks:
 `,
 		"duplicate task": `
 version: 1
-feature: tewake
+feature: sparerunner
 tasks:
   - &task
-    id: twk-001
+    id: spr-001
     title: first
     type: foundation
     description: first task
@@ -120,8 +120,8 @@ func decodeManifest(source []byte) (taskManifest, error) {
 }
 
 func validateManifest(manifest taskManifest) error {
-	if manifest.Version != 1 || manifest.Feature != "tewake" || len(manifest.Tasks) == 0 {
-		return errors.New("manifest requires version 1, feature tewake, and at least one task")
+	if manifest.Version != 1 || manifest.Feature != "sparerunner" || len(manifest.Tasks) == 0 {
+		return errors.New("manifest requires version 1, feature sparerunner, and at least one task")
 	}
 	byID := make(map[string]taskSpec, len(manifest.Tasks))
 	byOrder := make(map[int]string, len(manifest.Tasks))

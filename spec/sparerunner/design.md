@@ -1,22 +1,30 @@
-# Tewake Design
+# SpareRunner Design
 
 Status: accepted for implementation
 
-Feature ID: `tewake`
+Feature ID: `sparerunner`
 
 ## Context
 
 Today a developer must download, register, configure, and supervise GitHub Actions
 runners independently on every computer and for every repository or organization.
-Tewake turns persistent computers the user already owns into a host-centric fleet.
+SpareRunner turns persistent computers the user already owns into a host-centric fleet.
 It does not provision or destroy infrastructure instances.
+
+The capacity is spare in the sense that the administrator already owns the
+hardware, not in the sense that it is short-lived. One fleet holds both a
+daily-use computer that participates while its owner is willing to lend it and a
+surplus computer that serves full time. The design consequence is that node
+availability is a first-class, owner-authoritative input to scheduling rather
+than an administrative override, which is why it has its own authority boundary
+below rather than being a field the Administrator edits.
 
 The first release is LAN-first, single-admin, and optimized for trusted private
 workflows. It deliberately stays smaller than ARC or GARM while reusing GitHub's
 official scale-set and runner implementations.
 
 GitHub self-hosted runner registration is inherently single-scope: one runner
-registers against exactly one repository or organization. Tewake's distinguishing
+registers against exactly one repository or organization. SpareRunner's distinguishing
 value is the opposite shape — one fleet of computers waiting on many private
 org/repo scopes at once, with each machine's owner able to casually decide which
 of those scopes their own computer serves, without touching the rest of the fleet
@@ -50,27 +58,47 @@ No component claims another component's observations as fact without reconciliat
 ### Repository layout
 
 ```text
-api/                     OpenAPI source and generated boundary
-cmd/tewake/              Controller and operator CLI entrypoint
-cmd/tewake-agent/        Node service entrypoint
-cmd/tewake-tray/         Optional per-user desktop tray client
-extensions/raycast/      Optional macOS Raycast extension over the CLI contract
+api/                       OpenAPI source and generated boundary
+cmd/sparerunner/           Controller and operator CLI entrypoint
+cmd/sparerunner-agent/     Node service entrypoint
+cmd/sparerunner-tray/      Optional per-user desktop tray client
+extensions/raycast/        Optional macOS Raycast extension over the CLI contract
 internal/
-  agent/                 Local reconciliation and command handling
-  nodectl/               Local control endpoint and node availability intent
-  api/                   Management handlers and SSE
-  domain/                Shared states and invariants
-  enroll/                One-time enrollment and PKI
-  github/                actions/scaleset adapter
-  reconcile/             Controller recovery and epoch logic
-  runner/                Native runner lifecycle and package cache
-  scheduler/             Node-affined slot ledger and placement
-  store/                 Controller and agent SQLite stores
-  transport/             Versioned WebSocket protocol
-packaging/               systemd, launchd, Windows Service, installers
-spec/tewake/             Requirements, design, and task graph SSOT
-web/                     React management UI
+  agentstate/              Agent-side observed state and journal projection
+  api/                     Management handlers and SSE
+  app/                     Controller and agent composition and reconciliation
+  auth/                    Administrator session and CSRF surface
+  buildinfo/               Version and provenance stamped at build time
+  config/                  Fleet configuration parsing and validation
+  domain/                  Shared states and invariants
+  enroll/                  One-time enrollment, PKI, and private-material storage
+  github/                  actions/scaleset adapter
+  nodectl/                 Local control endpoint and node availability intent
+  platform/                Per-OS containment, slot accounts, and verified cleanup
+  reconcile/               Controller recovery and epoch logic
+  releaseevidence/         Release evidence manifest and validator
+  runner/                  Native runner lifecycle and package cache
+  scheduler/               Node-affined slot ledger and placement
+  store/                   Controller and agent SQLite stores and migrations
+  transport/               Versioned WebSocket protocol
+  webui/                   Embedded management console assets
+  winacl/                  Windows ACL primitives for private roots
+packaging/                 systemd, launchd, Windows Service, installers
+spec/sparerunner/          Requirements, design, and task graph SSOT
+web/                       React management UI
 ```
+
+Three package names that a reader may expect are deliberately absent, because
+this layout already answers them:
+
+- There is no `internal/machine`. The user-facing computer is a Node, modelled in
+  `internal/domain` with its owner-facing control in `internal/nodectl` and its
+  observed state in `internal/agentstate`.
+- There is no `internal/runtime`. Execution mode is an OS containment concern and
+  lives in `internal/platform/{linux,macos,windows}`, where the privileged
+  boundary and its tests belong together.
+- There is no `proto/`. The agent protocol is versioned WebSocket JSON, and the
+  Stack table rejects gRPC and protobuf for this graph and deployment shape.
 
 ## Stack
 
@@ -82,7 +110,7 @@ web/                     React management UI
 | Daily commands | `just`; Process Compose for local processes; lefthook for local gates |
 | Agent transport | `net/http`, `coder/websocket`, node certificates, mDNS discovery |
 | Node-local control | Unix domain socket or Windows named pipe with OS peer-identity checks; optional cgo tray binary built natively per platform |
-| Launcher integration | Optional macOS Raycast extension in TypeScript over the versioned `tewake node --json` contract, with no stored credentials |
+| Launcher integration | Optional macOS Raycast extension in TypeScript over the versioned `sparerunner node --json` contract, with no stored credentials |
 | Management API | Contract-first `/api/v1` OpenAPI; generated Go and TypeScript types; SSE |
 | Storage | SQLite WAL with `database/sql` and a pure-Go driver; separate controller and agent DBs |
 | UI | React, TypeScript, Vite, pnpm; generated static output embedded into the Go binary |
@@ -136,20 +164,20 @@ GitHub Target =
   installation + repository/organization scope + scale set + runner profile
 ```
 
-One scope has a default `tewake` profile. OS-fixed profiles use distinct scale-set
-names: `tewake-linux`, `tewake-macos`, and `tewake-windows`. The first release does
+One scope has a default `sparerunner` profile. OS-fixed profiles use distinct scale-set
+names: `sparerunner-linux`, `sparerunner-macos`, and `sparerunner-windows`. The first release does
 not depend on custom multi-label routing.
 
 Target creation verifies private visibility and safe runner-group access. A
 repository-level target and organization-level target may not route the same
 repository/label pair.
 
-Each scale set is created and exclusively managed by exactly one Tewake Target;
+Each scale set is created and exclusively managed by exactly one SpareRunner Target;
 attaching an arbitrary pre-existing or shared scale set is not supported. The
 Controller store enforces a unique scale-set-to-Target binding. This ownership
 contract is required because GitHub runner records do not expose
 `RunnerRequestID`: generation-ambiguity cleanup may use only the deterministic
-Tewake runner name inside that exclusively owned scale set, followed by two
+SpareRunner runner name inside that exclusively owned scale set, followed by two
 durable absence reads before clearing the fence.
 
 ### Runner Profile
@@ -211,7 +239,7 @@ boundary; memory is a filter and score.
 
 ## GitHub Integration
 
-The adapter owns the pinned Public Preview dependency and exposes Tewake domain
+The adapter owns the pinned Public Preview dependency and exposes SpareRunner domain
 types. It uses low-level poll and acknowledgement operations so message processing
 order remains explicit.
 
@@ -224,7 +252,7 @@ order remains explicit.
 6. Prepare the runtime and generate JIT configuration only when the selected agent is
    ready.
 
-Tewake never writes the JIT body to Controller SQLite, the Agent journal, logs, or
+SpareRunner never writes the JIT body to Controller SQLite, the Agent journal, logs, or
 diagnostics; only a digest and delivery state are retained. The official runner's
 current interface receives the body through `--jitconfig`, decodes it, and writes
 configuration and credential files below the runner root. The entire
@@ -271,7 +299,7 @@ stayed `queued` forever with all `github_*` tables empty.
 
 ## Enrollment and PKI
 
-`tewake init` creates a controller CA/identity, controller database, management
+`sparerunner init` creates a controller CA/identity, controller database, management
 session secret, and first one-time join code.
 
 A join code encodes:
@@ -292,7 +320,7 @@ revokes that node credential before deleting the replay row. The design does not
 add an arbitrary wall-clock expiration unless clipboard/process exposure is
 measured and an operator-configurable lifetime is specified.
 
-mDNS `_tewake._tcp.local` provides endpoint candidates only. Before sending the join
+mDNS `_sparerunner._tcp.local` provides endpoint candidates only. Before sending the join
 secret, the agent validates the fingerprint from the code. The agent generates its
 key locally; the controller certificate binds immutable `NodeID` with `clientAuth`
 usage. After enrollment, the node only creates outbound WSS+mTLS sessions.
@@ -432,7 +460,7 @@ The agent uses a dedicated service account and OS process containment:
 - Job Object and Windows Service recovery on Windows
 
 On Linux, the outbound network Agent itself runs as an unprivileged
-`tewake-agent` account. A separate root-owned local Supervisor service owns the
+`sparerunner-agent` account. A separate root-owned local Supervisor service owns the
 delegated cgroup subtree, durable start fences, slot-account handoff, and verified
 cleanup. The two services communicate only over a root-created Unix socket. The
 Supervisor authenticates the Agent with the peer credential supplied by the
@@ -447,7 +475,7 @@ That privileged mode depends on a root Supervisor service. A personal computer
 whose owner cannot or will not install one connects and then advertises zero
 capacity forever. That is the correct fail-closed outcome, not a usable one, so
 Linux has a second execution mode selected exclusively by an explicit
-`tewake-agent serve --allow-shared-runner-identity` flag.
+`sparerunner-agent serve --allow-shared-runner-identity` flag.
 
 The mode drops exactly one property: uid separation between the Agent and the job.
 The official runner executes as the same Unix user as the Agent, so a job can read
@@ -485,14 +513,14 @@ silently preferring one of them.
 
 Because the mode owns no privileged path, its cache, runtime, and fence roots
 default below the user's data directory — `$XDG_DATA_HOME`, else
-`~/.local/share/tewake/…` — instead of `/var/…`. The two modes also use different
+`~/.local/share/sparerunner/…` — instead of `/var/…`. The two modes also use different
 versioned workspace-backend strings, so a workspace created under one mode can
 never be verified or cleaned under the other; a cross-mode workspace fails the
 existing identity check instead of being adopted or repaired.
 
 The mode is reported, not hidden. `sharedRunnerIdentity` is node state on the
 node-local status document, travels on the agent→controller snapshot and
-heartbeat, and is exposed through the management API, the `tewake node status`
+heartbeat, and is exposed through the management API, the `sparerunner node status`
 text output, and the tray, so an operator inspecting the fleet can tell which
 nodes lack uid isolation. The field is pure observation: it never grants capacity
 and never relaxes a check.
@@ -558,7 +586,7 @@ credentials, and RSA material into its root. After one job, the agent first fenc
 and stops the entire process tree, even when the workspace identity is missing or
 mismatched. It only removes the runner configuration, diagnostics subject to
 explicit retention policy, workspace, and execution directory after the expected
-identity is re-observed, then verifies absence. Tewake does not claim that a Go
+identity is re-observed, then verifies absence. SpareRunner does not claim that a Go
 string, process argument, or official runner memory can be zeroized. Failure to
 verify filesystem and process cleanup is a capacity-blocking quarantine.
 
@@ -639,7 +667,7 @@ before a process start was proven. Controller restart and Agent acknowledgement 
 prune the Agent-side command and runner journal, so the Controller retains issued
 command and execution-update history as the durable source for this distinction.
 
-Lost-JIT provider cleanup is exact and ordered. Tewake queries the runner identity
+Lost-JIT provider cleanup is exact and ordered. SpareRunner queries the runner identity
 bound to the original scale set and attempt, removes that runner when present, then
 requires two post-removal absence reads separated by the durable confirmation
 interval under unchanged Controller, GitHub-session, and Agent-snapshot authority.
@@ -722,7 +750,7 @@ provides:
 - controller settings and non-secret YAML export/apply
 - health, version, and staleness metadata
 
-The App credential has two equal entry points: the `tewake github` CLI, which
+The App credential has two equal entry points: the `sparerunner github` CLI, which
 needs no browser and no management session, and the Web UI Manifest flow, which
 creates the App and returns the same credential in one confirmation. Both write
 through the controller-owned platform credential store, so the console is a
@@ -757,7 +785,7 @@ Every UI and API request first compares the request Host with the canonical
 authority exactly. A mismatch returns 421 and never issues a cookie. Static UI GETs
 do not create an administrator session. Session bootstrap is an explicit
 same-origin `POST /api/v1/session` with an empty body and a mandatory
-`X-Tewake-Admin-Bootstrap` header. The CLI reads the private
+`X-SpareRunner-Admin-Bootstrap` header. The CLI reads the private
 `admin-session.key` through the owning platform credential adapter and derives a
 domain-separated HMAC proof over the canonical origin, issue time, and a fresh
 128-bit nonce. Its `twb1` wire value is valid for two minutes, is consumed once by
@@ -765,9 +793,9 @@ an in-memory replay ledger, is sent only in that request, and is then cleared. T
 root and proof are never placed in argv, environment variables, SQLite, config,
 logs, audit rows, or response bodies.
 
-TWK-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
+SPR-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
 browser bootstrap. JavaScript cannot read the Controller credential and a plain
-same-origin session POST returns 401. TWK-013 adds a device-code-style browser
+same-origin session POST returns 401. SPR-013 adds a device-code-style browser
 handoff without putting a bearer credential in a URL or command argument:
 
 1. the browser creates a random 256-bit claim secret with Web Crypto, retains it
@@ -776,7 +804,7 @@ handoff without putting a bearer credential in a URL or command argument:
 2. the Controller returns a process-key-signed `twh1` code containing a 128-bit
    handoff ID, issue time, and claim digest. The code is a correlation value, not
    authentication authority;
-3. the UI displays `tewake ui authorize '<code>'`. That CLI command uses the
+3. the UI displays `sparerunner ui authorize '<code>'`. That CLI command uses the
    existing owner proof, temporary administrator session, CSRF, and logout path to
    approve the exact code;
 4. the same browser tab sends the code and its claim secret to
@@ -874,7 +902,7 @@ remain auditable. The database continues to retain only the code digest.
 SSE is an authenticated, same-origin, invalidation-only stream. Native
 `EventSource` cannot attach the per-session CSRF header and same-origin GETs do not
 reliably carry an Origin header, so the Web client reads the stream with
-same-origin `fetch`, the host-only session cookie, and `X-Tewake-CSRF`. The token
+same-origin `fetch`, the host-only session cookie, and `X-SpareRunner-CSRF`. The token
 never enters the URL, while cross-origin JavaScript cannot send that header through
 the API's no-CORS boundary. Events contain a schema version, opaque cursor, and
 safe resource names, not resource snapshots. `ready`, `invalidate`, and `reset`
@@ -909,8 +937,8 @@ Targets simultaneously — which of those Targets it currently excludes.
 
 ```mermaid
 flowchart LR
-    T["tewake-tray<br/>desktop user"] <-->|"local socket / named pipe"| A["Agent service"]
-    R["Raycast extension"] -->|"tewake node --json"| CLI["tewake CLI"]
+    T["sparerunner-tray<br/>desktop user"] <-->|"local socket / named pipe"| A["Agent service"]
+    R["Raycast extension"] -->|"sparerunner node --json"| CLI["sparerunner CLI"]
     CLI <-->|"local socket / named pipe"| A
     A <-->|"outbound WSS + mTLS"| C["Controller"]
     UI["Web UI"] <-->|"/api/v1"| C
@@ -1033,7 +1061,7 @@ computer's own capacity.
 
 ### Tray client
 
-`tewake-tray` is an unprivileged per-user binary started as a login item: a launchd
+`sparerunner-tray` is an unprivileged per-user binary started as a login item: a launchd
 LaunchAgent on macOS, an XDG autostart entry on Linux, and a per-user startup entry on
 Windows. The agent service never depends on it; a missing, crashed, or never-installed
 tray changes no fleet behavior.
@@ -1048,7 +1076,7 @@ Linux has no universal tray. The client uses StatusNotifierItem where the deskto
 provides it and otherwise exits with an explicit unsupported-environment error,
 pointing at the CLI. It never degrades into a silent no-op window.
 
-Because tray integration needs cgo on macOS and Linux, `tewake-tray` is a separate
+Because tray integration needs cgo on macOS and Linux, `sparerunner-tray` is a separate
 optional artifact built natively per platform and excluded from the pure-Go
 cross-build matrix. Controller and agent releases never gate on it, and the support
 matrix states which platform packages include it.
@@ -1056,14 +1084,14 @@ matrix states which platform packages include it.
 ### Launcher integration
 
 Third-party desktop launchers integrate through the CLI rather than through the local
-socket. `tewake node status`, `tewake node pause`, and `tewake node resume` accept
+socket. `sparerunner node status`, `sparerunner node pause`, and `sparerunner node resume` accept
 `--json` and emit a stable, versioned, non-secret document containing the same fields
 the tray renders, including intent, `pending`, connection state, observation age, and
 running executions. A non-zero exit code always carries a machine-readable error
 class. This keeps one implementation of the local protocol, peer authorization, and
 degraded-state semantics; a launcher cannot invent a second dialect of them.
 
-Per-Target availability adds `tewake node targets [--exclude|--include] <targetId>`
+Per-Target availability adds `sparerunner node targets [--exclude|--include] <targetId>`
 and a `targets` field to the status document, so the nodectl local-control contract's
 version advances from 1 to 2: it strictly decodes, and pre-1.0 carries no
 backward-compatibility shim, exactly like the Agent-Controller protocol version.
@@ -1083,12 +1111,12 @@ explicit preference and the standard install locations, and verifies protocol
 compatibility. A missing, incompatible, or non-executable CLI produces an actionable
 installation error; it never renders an assumed accepting or idle state. Extension
 source lives in `extensions/raycast/`; publishing to the Raycast store is a separate
-optional step that gates no Tewake artifact.
+optional step that gates no SpareRunner artifact.
 
 ### Surface parity and audit
 
 The availability mutation exists once in `/api/v1` and is used by the Web UI, by
-`tewake node pause`/`tewake node resume`, by the tray through the agent, and by the
+`sparerunner node pause`/`sparerunner node resume`, by the tray through the agent, and by the
 Raycast extension through the CLI. Each change persists an audit event with node ID,
 requesting surface, actor identity, previous and next value, and result. The
 per-Target exclude/include mutation and the eligible-Target list follow the same
@@ -1181,7 +1209,7 @@ secrets, or raw environment snapshots.
 - Security tests for public-scope rejection, token/certificate replay, JIT canaries,
   traversal/symlinks, unauthenticated/CSRF mutation, local control endpoint peer
   authorization, and diagnostics redaction
-- Golden-document contract tests for `tewake node --json`, plus launcher tests for
+- Golden-document contract tests for `sparerunner node --json`, plus launcher tests for
   missing, incompatible, and non-executable CLI resolution
 - Linux shared-runner-identity tests for opt-in-only selection, `setsid` descendant
   termination through `cgroup.kill`, fail-closed construction without a delegated
@@ -1197,9 +1225,9 @@ artifacts have explicit short retention and are uploaded only on failure.
 
 ## Rollout and Release
 
-Development follows `spec/tewake/tasks.yaml`, one mergeable task per Draft PR and
+Development follows `spec/sparerunner/tasks.yaml`, one mergeable task per Draft PR and
 bottom-up dependency order. Required pull-request CI uses GitHub-hosted runners only;
-public fork pull requests never reach personal nodes. Real Tewake fleet smoke runs
+public fork pull requests never reach personal nodes. Real SpareRunner fleet smoke runs
 only for trusted protected-branch commits and release gates.
 
 The first public tag requires:

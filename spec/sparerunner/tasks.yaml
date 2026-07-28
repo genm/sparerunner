@@ -1,8 +1,12 @@
+# Task IDs were `twk-NNN` before the SpareRunner rename (spr-022). The mapping is
+# exact and positional: `twk-NNN` is the same task as `spr-NNN`. Commits and pull
+# requests merged before that change use the old prefix, and Git history is not
+# rewritten to match.
 version: 1
-feature: tewake
+feature: sparerunner
 
 tasks:
-  - id: twk-001
+  - id: spr-001
     title: Bootstrap the OSS repository and specification
     type: foundation
     description: >
@@ -21,8 +25,8 @@ tasks:
       - LICENSE
       - README.md
       - SECURITY.md
-      - cmd/tewake
-      - cmd/tewake-agent
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
       - go.mod
       - go.sum
       - internal/buildinfo
@@ -30,7 +34,7 @@ tasks:
       - justfile
       - lefthook.yml
       - process-compose.yaml
-      - spec/tewake
+      - spec/sparerunner
       - web
       - scripts/cross-build.sh
     ci_targets: [lint, typecheck, test, build]
@@ -39,17 +43,17 @@ tasks:
     acceptance:
       - The requirements, design, and task vocabulary are consistent and executable.
       - "`just check` succeeds and emits machine-readable Go and Vitest results."
-      - "`tewake` and `tewake-agent` cross-compile for supported Linux, macOS, and Windows targets."
+      - "`sparerunner` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
       - Required CI always reports and uses only GitHub-hosted runners.
 
-  - id: twk-002
+  - id: spr-002
     title: Prove and isolate the GitHub scale-set contract
     type: integration
     description: >
       Pin the official scale-set client behind an internal adapter and prove App
       Manifest, multiple installations, scale-set lifecycle, JIT generation,
       message replay, and job pickup behavior in a private sandbox.
-    depends_on: [twk-001]
+    depends_on: [spr-001]
     paths:
       - internal/github
       - test/contract/github
@@ -69,13 +73,13 @@ tasks:
       - JIT configuration is passed as a secret value and is absent from persistence and logs.
       - Startup latency and GitHub's current pickup/requeue behavior are measured in the sandbox.
 
-  - id: twk-003
+  - id: spr-003
     title: Implement domain states and invariants
     type: backend
     description: >
       Define Node, Target, Runner Profile, Slot, Execution, command, epoch, and
       transition contracts without infrastructure dependencies.
-    depends_on: [twk-001]
+    depends_on: [spr-001]
     paths:
       - internal/domain
     ci_targets: [lint, test, build]
@@ -91,13 +95,13 @@ tasks:
       - A repeated command ID with a different payload is rejected.
       - Terminal executions cannot return to an active state.
 
-  - id: twk-004
+  - id: spr-004
     title: Implement crash-safe controller and agent stores
     type: backend
     description: >
       Add versioned migrations, WAL SQLite stores, atomic message/reservation
       persistence, controller epochs, agent journal, backup, and recovery mode.
-    depends_on: [twk-003]
+    depends_on: [spr-003]
     paths:
       - internal/store
       - internal/store/migrations
@@ -111,27 +115,27 @@ tasks:
       the exact snapshot and replay without duplicates. A second kill proves migration
       rollback, and an unrelated SQLite fixture remains byte-for-byte unchanged when
       rejected. Physical power-loss and end-to-end GitHub/runner crash windows remain
-      gates for twk-007/twk-011.
+      gates for spr-007/spr-011.
     acceptance:
       - Message, reservation, and desired execution commit atomically.
       - Crash-boundary integration tests recover without duplicate active executions.
       - Migration failure leaves the original database intact and readiness degraded.
       - Backup and restore exclude OS-keystore secrets.
 
-  - id: twk-005
+  - id: spr-005
     title: Implement enrollment and authenticated agent transport
     type: backend
     description: >
       Implement controller identity, fingerprinted one-time join codes, node key
       generation, mDNS discovery, node certificates, outbound mTLS WebSockets, and
       the versioned envelope.
-    depends_on: [twk-003, twk-004]
+    depends_on: [spr-003, spr-004]
     paths:
       - internal/enroll
       - internal/transport
       - internal/app
-      - cmd/tewake
-      - cmd/tewake-agent
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
       - scripts/test-enrollment-cli-linux.sh
     ci_targets: [lint, test, build]
     pr_order: 5
@@ -146,14 +150,14 @@ tasks:
       - mDNS results are ignored until the pinned fingerprint is verified.
       - Leaf renewal preserves Node ID and rejects expired or superseded certificate serials.
 
-  - id: twk-006
+  - id: spr-006
     title: Implement the native runner lifecycle
     type: backend
     description: >
       Implement package caching, runtime preparation, process supervision,
       one-job execution, cleanup verification, and quarantine using a fake runner
       before live GitHub integration.
-    depends_on: [twk-003, twk-005]
+    depends_on: [spr-003, spr-005]
     paths:
       - internal/runner
       - test/integration/runner
@@ -164,7 +168,7 @@ tasks:
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
       - Process-tree residue, symlink escape, and traversal are rejected or quarantined.
-      - Tewake never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
+      - SpareRunner never persists or logs JIT configuration, and every file the official runner materializes from it is absent after cleanup.
       - Cleanup verification failure prevents slot release.
     notes: >
       The core pins all six official runner archives, verifies exact size and
@@ -201,18 +205,18 @@ tasks:
       cleanup removes runner credential/workspace canaries.
       SQLite-backed runner journal, dedicated OS identity, actual systemd/launchd/
       Job Object ownership, live official-runner execution, and service/process
-      restart recovery remain twk-007/twk-008/twk-009/twk-011 platform gates.
+      restart recovery remain spr-007/spr-008/spr-009/spr-011 platform gates.
 
-  - id: twk-007
+  - id: spr-007
     title: Complete the Linux vertical slice
     type: platform
     description: >
       Add systemd service-account packaging and run the first real private GitHub
       job through the controller, Linux agent, scale set, and native runner.
-    depends_on: [twk-002, twk-004, twk-005, twk-006]
+    depends_on: [spr-002, spr-004, spr-005, spr-006]
     paths:
       - .github/workflows/ci.yml
-      - cmd/tewake-agent
+      - cmd/sparerunner-agent
       - internal/app
       - internal/github
       - packaging/linux
@@ -230,8 +234,8 @@ tasks:
       - "2026-07-26: Independent review found and closed capacity advertisement by online-but-unexecutable nodes, terminal-state regression after fast jobs, unbounded command/session history, and local journal failure hidden by reconnect loops. Root-side package provenance and exec-boundary containment hardening plus the reproducible live acceptance harness remain under integration."
       - "2026-07-26: A real private GitHub job, systemd restart process counts, GitHub redelivery at the commit/ack crash seam, and cleanup-failure evidence still require the dedicated sandbox and Linux host. Until those gates pass, this task and its Draft PR remain in progress."
       - "2026-07-27: The live driver now rejects dirty or mismatched build provenance and builds linked worktrees through a detached non-hardlinked local clone. This prevents Go from stamping an in-repository worktree binary with the containing checkout's unrelated HEAD while reporting vcs.modified=false."
-      - "2026-07-27: Ubuntu systemd execution exposed two real packaging mismatches: Delegate=yes had changed the Supervisor cgroup to root:tewake-agent, and RuntimeDirectory= reapplied the new root primary group after ExecStartPre=. The unit now keeps its primary group and delegated cgroup root-owned while a separate tmpfiles rule owns only the local socket directory as root:tewake-agent; packaging tests reject either ownership regression."
-      - "2026-07-27: Ubuntu 24.04 arm64 preflight now starts the Supervisor with a root:root delegated cgroup, root:tewake-agent 0750 socket directory, and root:tewake-agent 0660 socket. Deliberately changing the socket directory to root:root produced no socket and an explicit failed service result; rerunning the package tmpfiles rule restored the active service."
+      - "2026-07-27: Ubuntu systemd execution exposed two real packaging mismatches: Delegate=yes had changed the Supervisor cgroup to root:sparerunner-agent, and RuntimeDirectory= reapplied the new root primary group after ExecStartPre=. The unit now keeps its primary group and delegated cgroup root-owned while a separate tmpfiles rule owns only the local socket directory as root:sparerunner-agent; packaging tests reject either ownership regression."
+      - "2026-07-27: Ubuntu 24.04 arm64 preflight now starts the Supervisor with a root:root delegated cgroup, root:sparerunner-agent 0750 socket directory, and root:sparerunner-agent 0660 socket. Deliberately changing the socket directory to root:root produced no socket and an explicit failed service result; rerunning the package tmpfiles rule restored the active service."
     acceptance:
       - One private job completes and its workspace and JIT material are absent afterward.
       - Service restart leaves exactly one runner listener and one agent process.
@@ -239,15 +243,15 @@ tasks:
       - Cleanup failure places the Linux node in quarantine.
       - Losing or changing the durable node credential drops native capacity while exact replay and cancel remain available.
 
-  - id: twk-008
+  - id: spr-008
     title: Add macOS service and runner support
     type: platform
     description: >
       Implement launchd, Keychain secret storage, process supervision, sleep/reconnect,
       and native runner behavior for macOS arm64 and x64.
-    depends_on: [twk-005, twk-006, twk-007]
+    depends_on: [spr-005, spr-006, spr-007]
     paths:
-      - cmd/tewake-agent
+      - cmd/sparerunner-agent
       - internal/app
       - internal/enroll
       - internal/runner
@@ -269,16 +273,16 @@ tasks:
       - arm64 and x64 package selection is correct.
       - Process tree and workspace cleanup pass on a real macOS node.
 
-  - id: twk-009
+  - id: spr-009
     title: Add Windows service and runner support
     type: platform
     description: >
       Implement Windows Service recovery, DPAPI secret storage, Job Object process
       ownership, package selection, and locked-file cleanup handling.
-    depends_on: [twk-005, twk-006, twk-007]
+    depends_on: [spr-005, spr-006, spr-007]
     paths:
-      - cmd/tewake
-      - cmd/tewake-agent
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
       - internal/app
       - internal/enroll
       - internal/runner
@@ -307,13 +311,13 @@ tasks:
       - Live evidence rejects path overlap and foreign existing directories without changing contents or security descriptors, while exact config-bound scenario reuse succeeds.
       - SCM evidence rejects duplicate, missing, unknown, wrong-role, wrong-service, or wrong-path command-line arguments after native Windows parsing.
 
-  - id: twk-010
+  - id: spr-010
     title: Implement node-affined scheduling
     type: backend
     description: >
       Implement the concrete slot ledger, per-target grants, deterministic
       round-robin, eligibility filters, stable node ranking, and capacity advertisement.
-    depends_on: [twk-002, twk-003, twk-004, twk-007]
+    depends_on: [spr-002, spr-003, spr-004, spr-007]
     paths:
       - internal/scheduler
     ci_targets: [lint, test, build]
@@ -321,7 +325,7 @@ tasks:
     status: in_progress
     notes:
       - "2026-07-26: The in-memory scheduler now wraps the domain SlotLedger with concrete per-target grants, deterministic round-robin, eligibility and ranking, exact bind/release ownership, and stable capacity reporting. Restored reservations are claimed before admission; an Agent-reported active execution without matching durable ownership blocks that node and conservatively consumes fleet capacity rather than being reused."
-      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain twk-011/twk-014 responsibilities."
+      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain spr-011/spr-014 responsibilities."
       - "2026-07-26: Draft PR #9 passed Quality, Go on Ubuntu/macOS/Windows, all supported cross-builds, and the required aggregate gate in hosted CI run 30214294870."
     acceptance:
       - Randomized multi-target histories never exceed node or fleet capacity.
@@ -330,13 +334,13 @@ tasks:
       - Draining, quarantined, offline, and unreconciled nodes are ineligible.
       - Round-robin serves every continuously eligible target.
 
-  - id: twk-011
+  - id: spr-011
     title: Implement restart and disconnect reconciliation
     type: backend
     description: >
       Reconcile controller epochs, per-node snapshots, agent disconnects, drain,
       quarantine, cleanup tombstones, stale GitHub state, and runner update state.
-    depends_on: [twk-007, twk-010]
+    depends_on: [spr-007, spr-010]
     paths:
       - internal/reconcile
       - test/fault
@@ -344,7 +348,7 @@ tasks:
     pr_order: 11
     status: in_progress
     notes:
-      - "2026-07-26: twk-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. twk-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
+      - "2026-07-26: spr-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. spr-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
       - "2026-07-26: Controller restart now advances the epoch, restores capacity at zero, and reconciles each fresh Agent snapshot independently. Commands, observations, cleanup tombstones, JIT-generation fences, provider observations, runner-release freshness, and desired execution state use exact SQLite authority and fail-closed compare-and-swap transitions."
       - "2026-07-26: Agent disconnect now revokes native readiness and advances the exact snapshot authority revision before the in-memory offline projection. A deterministic real-SQLite test disconnects after readiness is read but before the claim transaction and proves that no claim, reservation, AcquireJobs call, or GitHub message acknowledgement occurs; another fresh Node continues to advertise capacity."
       - "2026-07-26: Real subprocess fault tests SIGKILL the Controller after queue/claim commit and before GitHub acknowledgement, and SIGKILL the Agent after a Start command is durably accepted but before execution. Restart produces one runtime or a single terminal cleanup outbox respectively, never duplicates JIT delivery or Start, and raw SQLite/WAL/SHM scans confirm that JIT material is absent."
@@ -356,20 +360,20 @@ tasks:
       - "2026-07-28: The coordinator is now resolved per Target rather than pinned to a node, because one scale set exposes exactly one message queue and only one coordinator/session/poller may exist per Target. Advertised demand is the honest sum of `GitHubSingleSlotCapacity` over every candidate node of the Target, with no invented cap. The node that receives a durable claim is chosen deterministically: candidates ordered by NodeID, first with durable capacity greater than zero wins; a replayed queue message takes the binding from the existing claim's own execution slot instead of re-selecting, so a crash/restart cannot land a replay on a different node. Per-node exclusion, drain, and stop still fall out of the existing `githubSlotAvailable` predicate in `internal/store/controller_github.go` and are not re-implemented in the app layer. Admission checks and node reconciliation now act on the node read from the claim's execution slot rather than a coordinator-wide node; `ControllerRunnerConfig.NodeID` survives only as the live acceptance rig's explicit single-node pin. The poll-claim authority attached to a binding still carries that one node's own capacity (the store requires exactly 1); only the upstream-advertised capacity is the fleet-wide sum."
       - "2026-07-26: Agent Hello acknowledgement records a per-Node command-sequence baseline before snapshot capture. Ordinary and recovery command dispatch shares the Node lifecycle boundary with snapshot commit, so an overlapping replacement snapshot is rejected before SQLite projection and an old actor cannot receive a command after replacement. Prepare, Start, Cancel, replay Prepare, reconciliation Cancel, the reverse commit order, and exact SQLite snapshot/epoch replay CAS have deterministic race tests."
       - "2026-07-26: Snapshot ACK and disconnect persistence no longer hold the Node lifecycle lock. A stalled ACK can be superseded; unresolved disconnect persistence rejects reconnect immediately and is canceled by Controller shutdown. Tests cover stalled ACK replacement, pending-projection retry, shutdown cancellation, command-consumer failure, and ambiguous caller timeout recovery."
-      - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a twk-007/twk-014 release dependency and is not claimed by these deterministic fault tests."
+      - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a spr-007/spr-014 release dependency and is not claimed by these deterministic fault tests."
     acceptance:
       - Controller and agent kill tests do not create duplicate runners.
       - One offline node does not block restored capacity from reconciled nodes.
       - GitHub 5xx retains last-known state and surfaces stale metadata.
       - Cleanup tombstones survive restart and keep a node quarantined.
 
-  - id: twk-012
+  - id: spr-012
     title: Implement the management API and configuration contract
     type: backend
     description: >
       Define OpenAPI, generated clients, REST/SSE handlers, single-admin session,
       CSRF and Origin enforcement, audit persistence, and non-secret YAML import/export.
-    depends_on: [twk-004, twk-010, twk-011]
+    depends_on: [spr-004, spr-010, spr-011]
     paths:
       - api
       - internal/api
@@ -377,42 +381,42 @@ tasks:
       - internal/config
       - internal/store
       - internal/app
-      - cmd/tewake
+      - cmd/sparerunner
     ci_targets: [lint, typecheck, test, build]
     pr_order: 12
     status: done
     notes:
       - "2026-07-26: The first-release management authority is fixed to explicit same-origin loopback session bootstrap. Join codes are one-time loopback credential-delivery responses and GitHub Manifest callback routes remain unavailable until a signed one-time callback-state contract exists."
       - "2026-07-26: The OpenAPI-generated Go and TypeScript contracts now own the loopback REST/SSE surface. Process-local owner sessions, exact Host/Origin/CSRF checks, immediate logout revocation even during audit failure, optimistic configuration revisions, bounded JSON/YAML transport, one-time join-code delivery, typed enrollment and Agent rejection audit, and cursor-bounded audit reads all fail closed under focused race and integration tests."
-      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until twk-013; live GitHub and three-OS authority remain twk-014 release gates."
+      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until spr-013; live GitHub and three-OS authority remain spr-014 release gates."
     acceptance:
       - Generated Go and TypeScript contracts match the checked OpenAPI source.
       - Unauthenticated, unauthorized, and cross-origin mutations return 401 or 403.
       - Stale configuration revisions fail with an optimistic conflict.
       - YAML export and every response exclude all secret material.
 
-  - id: twk-013
+  - id: spr-013
     title: Build the embedded management UI
     type: frontend
     description: >
       Add the owner-authorized browser handoff, then build Setup, Overview, Nodes,
       Targets, Runs, and Settings against the generated client and embed the
       production output into the controller.
-    depends_on: [twk-012]
+    depends_on: [spr-012]
     paths:
-      - spec/tewake
+      - spec/sparerunner
       - api
       - internal/api
       - internal/auth
       - internal/store
-      - cmd/tewake
+      - cmd/sparerunner
       - web
       - internal/webui
     ci_targets: [lint, typecheck, test, build, e2e]
     pr_order: 13
     status: done
     notes:
-      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. TWK-013 must show these controls as unavailable rather than fabricate a successful Target journey; TWK-016 now owns that missing provider authority and enables the final setup journey."
+      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. SPR-013 must show these controls as unavailable rather than fabricate a successful Target journey; SPR-016 now owns that missing provider authority and enables the final setup journey."
       - "2026-07-26: Browser bootstrap is fixed to a two-party handoff. The browser-held claim secret never leaves volatile memory except for same-origin claim, while the CLI-visible signed code carries no session authority by itself."
       - "2026-07-27: The process-key-signed two-minute browser handoff now requires exact Host/Origin, owner session and CSRF approval, and the browser-held 256-bit preimage. Approval and claim use rollback-capable fences; 16 concurrent HTTP claims issue exactly one cookie and audit, while audit, entropy, expiry, restart, tamper, wrong-secret, and replay failures remain fail closed without persisting claim or session material."
       - "2026-07-27: The generated-client console implements Setup, Overview, Nodes, Targets, Runs, and Settings with explicit last-known, offline, stale, permission, quarantine, optimistic-conflict, and committed-but-unconfirmed states. Join-code responses racing Close/Escape/hidden/unmount are cancelled and scrubbed; GitHub App and Target controls remain visibly disabled with their missing authority rather than submitting an unverified Target."
@@ -426,7 +430,7 @@ tasks:
       - Component screenshots have no unresolved visual or accessibility defects.
       - A release binary serves the same generated UI with no Node.js runtime.
 
-  - id: twk-020
+  - id: spr-020
     title: Implement GitHub App management authority and Target provisioning
     type: integration
     description: >
@@ -434,23 +438,23 @@ tasks:
       ownership, installation and private-scope discovery, fail-closed Target
       verification, durable scale-set provisioning intent, and the corresponding
       Setup and Target UI journey.
-    depends_on: [twk-012, twk-013]
+    depends_on: [spr-012, spr-013]
     paths:
-      - spec/tewake
+      - spec/sparerunner
       - api
       - internal/api
       - internal/app
       - internal/github
       - internal/platform
       - internal/store
-      - cmd/tewake
+      - cmd/sparerunner
       - web
       - test/contract/github
     ci_targets: [lint, typecheck, test, build, e2e]
     pr_order: 14
     status: in_progress
     notes:
-      - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows host evidence remain pending for TWK-014/008/009."
+      - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows host evidence remain pending for SPR-014/008/009."
       - "2026-07-27: Runner-group authority now paginates every provider page and rejects a truncated 100-page view before provisioning; a second-page conflict test proves no scale set or group mutation occurs after the complete private-scope check."
       - "2026-07-27: Controller startup now selects the service-user file credential store on Linux and the native private-material boundary (Keychain/DPAPI) on macOS/Windows; metadata decoding rejects unknown or trailing JSON and exact replay is no-clobber. Host credential/service evidence remains a live release gate."
     acceptance:
@@ -459,7 +463,7 @@ tasks:
       - Public, unknown, unsafe runner-group, overlapping, and shared scale-set Targets fail closed before desired configuration commits.
       - The operator can complete GitHub setup and private Target creation from the generated-client UI.
 
-  - id: twk-016
+  - id: spr-016
     title: Implement node availability control
     type: backend
     description: >
@@ -467,22 +471,22 @@ tasks:
       endpoint with OS peer authorization, protocol reporting, scheduler
       enforcement, the shared API/CLI availability mutation, and the versioned
       machine-readable CLI document that desktop clients integrate against.
-    depends_on: [twk-010, twk-012]
+    depends_on: [spr-010, spr-012]
     paths:
       - internal/nodectl
       - internal/agent
       - internal/scheduler
       - internal/transport
       - internal/api
-      - cmd/tewake
-      - cmd/tewake-agent
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
     ci_targets: [lint, test, build]
     pr_order: 15
     status: in_progress
     notes:
       - "2026-07-27: Durable intent, the same-host endpoint with kernel-verified peer authorization, agent readiness conjunction, transport reporting, and the versioned CLI document are implemented. `scripts/test-node-availability-linux.sh` proves stop, restart durability, pending resume until controller acknowledgement, offline stop, and endpoint refusal without --local-control against real controller, agent, and CLI binaries in a restricted container."
       - "2026-07-27: Remaining for acceptance: the Windows named-pipe endpoint with an explicit DACL fails closed today, the controller does not yet persist an audit event per availability change, and the management API and Web UI do not yet expose the reported intent as a distinct field."
-      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as twk-019, not part of this task's acceptance."
+      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as spr-019, not part of this task's acceptance."
     acceptance:
       - A stopped node receives no execution and remains stopped across agent service restart and reboot.
       - Stopping during a running job leaves the job running and passes normal verified cleanup.
@@ -490,27 +494,27 @@ tasks:
       - Controller Draining, Quarantined, and Revoked override a local Accepting intent.
       - An unauthorized or unidentifiable local control peer is refused with no state change and an audit event.
       - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
-      - "`tewake node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
+      - "`sparerunner node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
 
-  - id: twk-017
+  - id: spr-017
     title: Ship the desktop tray client
     type: platform
     description: >
       Build the optional unprivileged per-user tray client for macOS, Windows, and
       StatusNotifierItem Linux desktops, with login-item installation and native
       per-platform build and packaging.
-    depends_on: [twk-007, twk-008, twk-009, twk-016]
+    depends_on: [spr-007, spr-008, spr-009, spr-016]
     paths:
-      - cmd/tewake-tray
+      - cmd/sparerunner-tray
       - packaging/tray
       - test/live/tray
     ci_targets: [lint, test, build, e2e]
     pr_order: 16
     status: in_progress
     notes:
-      - "2026-07-27: `cmd/tewake-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
+      - "2026-07-27: `cmd/sparerunner-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
       - "2026-07-27: Remaining for acceptance: StatusNotifierItem Linux and Windows runs, login-item packaging, and reviewed screenshots of each rendered state."
-      - "2026-07-28: Per-target control/display is specified and tracked as twk-019; this task ships only the global accept/stop toggle."
+      - "2026-07-28: Per-target control/display is specified and tracked as spr-019; this task ships only the global accept/stop toggle."
     acceptance:
       - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
@@ -518,7 +522,7 @@ tasks:
       - Removing, stopping, or never installing the tray changes no fleet behavior.
       - Tray build failure does not gate controller or agent artifacts, and the support matrix states which packages include it.
 
-  - id: twk-019
+  - id: spr-019
     title: Implement per-target node availability
     type: backend
     description: >
@@ -527,18 +531,18 @@ tasks:
       slot-availability enforcement, the agent-side fail-closed exec-boundary
       backstop, target attribution in the agent journal, and the nodectl protocol
       v2 exclude/include/list surface shared by the tray, CLI, and Raycast.
-    depends_on: [twk-016, twk-020]
+    depends_on: [spr-016, spr-020]
     paths:
-      - spec/tewake
+      - spec/sparerunner
       - internal/domain
       - internal/transport
       - internal/store
       - internal/app
       - internal/nodectl
       - internal/scheduler
-      - cmd/tewake
-      - cmd/tewake-agent
-      - cmd/tewake-tray
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - cmd/sparerunner-tray
       - extensions/raycast
       - api
       - web
@@ -554,13 +558,13 @@ tasks:
       - Excluding a Target while disconnected, including an unknown Target ID, records locally as a safe no-op and syncs on reconnect.
       - Every exclusion or inclusion change persists an audit event with the node, the requesting surface, the previous and next value, and the result.
 
-  - id: twk-014
+  - id: spr-014
     title: Validate cross-platform security and release behavior
     type: verification
     description: >
       Run real three-OS, two-installation E2E and publish the threat model, security
       contract, support matrix, native-isolation limitations, and machine-readable evidence.
-    depends_on: [twk-008, twk-009, twk-011, twk-013, twk-017, twk-020, twk-019]
+    depends_on: [spr-008, spr-009, spr-011, spr-013, spr-017, spr-020, spr-019]
     paths:
       - docs/security
       - test/live
@@ -569,20 +573,20 @@ tasks:
     pr_order: 18
     status: in_progress
     notes:
-      - "2026-07-27: Added the TWK-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `tewake.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
+      - "2026-07-27: Added the SPR-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `sparerunner.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
     acceptance:
       - Private generic and OS-specific jobs route correctly across all three OSes.
       - Public target creation and unsafe runner-group access fail closed.
       - Secret canaries are absent from databases, journals, logs, metrics, UI, and diagnostics.
       - Restart, disconnect, drain, stale-state, and quarantine scenarios pass with real agents.
 
-  - id: twk-015
+  - id: spr-015
     title: Package and publish the first OSS release
     type: release
     description: >
       Add installers, service manifests, GoReleaser, signed checksums, SBOM,
       artifact attestations, upgrade/uninstall flows, and public release documentation.
-    depends_on: [twk-014]
+    depends_on: [spr-014]
     paths:
       - .github/workflows/release.yml
       - packaging
@@ -599,7 +603,7 @@ tasks:
     status: in_progress
     notes:
       - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
-      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until TWK-014/live/signing gates pass."
+      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until SPR-014/live/signing gates pass."
       - "2026-07-27: The local release runbook now keeps Syft enabled for snapshots and puts root license files and nested third-party files in the archive with explicit non-overlapping globs. A fresh v2.17.0/Syft v1.49.0 snapshot produced all six archives with no duplicate-entry warnings and passed the artifact checker."
       - "2026-07-27: The release evidence validator now resolves the Go module from its own repository path, so the documented gate can be invoked from an external evidence directory and still fails closed on missing manifests."
       - "2026-07-27: Hosted PR #17 run 30266682090 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 29a1b64. This validates the release plumbing only; no tagged artifact or live-fleet evidence was published."
@@ -618,14 +622,14 @@ tasks:
       - Every release gate and real-fleet evidence check succeeds.
       - The public release documents unsupported signing or platform combinations explicitly.
 
-  - id: twk-018
+  - id: spr-018
     title: Ship the Raycast launcher extension
     type: frontend
     description: >
       Build the optional macOS Raycast extension over the versioned CLI contract,
       with status view, pause and resume commands, CLI resolution and compatibility
       checks, and no stored controller credential.
-    depends_on: [twk-008, twk-016]
+    depends_on: [spr-008, spr-016]
     paths:
       - extensions/raycast
       - docs/integrations
@@ -633,22 +637,22 @@ tasks:
     pr_order: 20
     status: in_progress
     notes:
-      - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no Tewake artifact."
+      - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no SpareRunner artifact."
       - "2026-07-27: The extension is implemented and `ray build` type-checks it. Its own code path was verified against the real CLI and a live endpoint: status, pause, resume, pending resume, controller confirmation, a missing CLI, and an unreachable agent each produce the documented class. Remaining for acceptance: a run inside Raycast itself and reviewed screenshots."
     acceptance:
       - Pause and resume from Raycast produce the same effective state as the tray, the CLI, and the Web UI.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
       - A missing, incompatible, or non-executable CLI produces an actionable installation error instead of an assumed state.
       - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
-      - Removing or never installing the extension changes no fleet behavior, and its build gates no Tewake artifact.
+      - Removing or never installing the extension changes no fleet behavior, and its build gates no SpareRunner artifact.
 
-  - id: twk-021
+  - id: spr-021
     title: Add the opt-in shared runner identity Linux mode
     type: platform
     description: >
       Add a second Linux native-runner execution mode that runs the job as the
       Agent's own Unix user, selected only by an explicit
-      `tewake-agent serve --allow-shared-runner-identity` flag. It drops uid
+      `sparerunner-agent serve --allow-shared-runner-identity` flag. It drops uid
       separation between Agent and job and nothing else: per-execution cgroup v2
       descendant ownership through `cgroup.kill`, the durable start fence,
       last-instant workspace verification, one-shot JIT delivery, verified
@@ -658,24 +662,75 @@ tasks:
       workspace-backend identity, and reports `sharedRunnerIdentity` as node state
       through the agent snapshot and heartbeat, the management API, the CLI status
       output, and the tray.
-    depends_on: [twk-007, twk-016]
+    depends_on: [spr-007, spr-016]
     paths:
       - internal/platform/linux
-      - cmd/tewake-agent
+      - cmd/sparerunner-agent
       - internal/nodectl
       - internal/transport
       - internal/app
       - api/openapi.yaml
-      - spec/tewake
+      - spec/sparerunner
     ci_targets: [lint, typecheck, test, build]
     pr_order: 21
     status: in_progress
     notes:
-      - "2026-07-28: The mode is deliberately weaker than twk-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
+      - "2026-07-28: The mode is deliberately weaker than spr-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
     acceptance:
       - Without `--allow-shared-runner-identity`, no shared-identity backend is constructed and a missing privileged Supervisor still advertises zero capacity instead of falling back.
       - Passing the flag together with the privileged Supervisor options is rejected at startup rather than silently preferring one mode.
       - A job that calls `setsid()` under shared runner identity is still terminated with its descendants, and its workspace is not released until the descendant set is proven empty.
       - Construction without a unified cgroup v2 hierarchy, without a writable systemd user delegated subtree, without `cgroup.kill`, or with a non-absolute, wrongly-owned, non-0700, symlinked, or group/world-writable-ancestor root returns strong-ownership-unavailable and advertises zero capacity, never a weaker containment.
       - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
-      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `tewake node status`, and the tray, and grants no capacity and relaxes no check."
+      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `sparerunner node status`, and the tray, and grants no capacity and relaxes no check."
+
+  - id: spr-022
+    title: Rename the product to SpareRunner and restate its positioning
+    type: foundation
+    description: >
+      Rename the product from Tewake to SpareRunner across the specification,
+      documentation, Go module path, command binaries, OS service and account
+      identities, containment and enrollment identifiers, management session
+      surface, embedded Web console, and the Raycast extension. Restate the
+      product definition around spare capacity on computers the administrator
+      already owns, covering both a daily-use computer that participates while
+      idle and a surplus computer that serves full time, without weakening the
+      private-scope and trusted-workflow boundary. The rename is a deliberate
+      pre-alpha breaking change: enrolled nodes, stored private material, join
+      codes, and installed OS services from the previous name are not migrated.
+    depends_on: [spr-021]
+    paths:
+      - spec/sparerunner
+      - README.md
+      - AGENTS.md
+      - CONTRIBUTING.md
+      - SECURITY.md
+      - docs
+      - go.mod
+      - cmd/sparerunner
+      - cmd/sparerunner-agent
+      - cmd/sparerunner-tray
+      - internal
+      - api/openapi.yaml
+      - packaging
+      - web
+      - extensions/raycast
+      - justfile
+      - scripts
+      - .goreleaser.yaml
+      - .github
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 22
+    status: in_progress
+    notes:
+      - "2026-07-28: Task IDs moved from `twk-NNN` to `spr-NNN` positionally. Merged commits and pull requests keep the old prefix because Git history is not rewritten."
+      - "The user-facing concepts stay Node, GitHub Target, and Runner Profile. `Machine` was considered and rejected: it would break the API schema, the store, the Web console, and the CLI without changing what the product does."
+      - "Container and VM execution modes, NAT traversal and relay for participation outside one LAN, and agent self-update are recorded as future direction, not as first-release scope. gRPC and protobuf stay rejected because the transport is versioned WebSocket JSON."
+    acceptance:
+      - No source file, filename, identifier, or generated artifact carries the previous product name, except the historical mapping note in this manifest.
+      - The join code magic stays three bytes, and its encoder and decoder agree, so enrollment succeeds end to end under the new prefix.
+      - Containment scope names, service accounts, ACL principals, and installation ownership markers are renamed together, so the privileged Linux, macOS, and Windows boundary tests still pass instead of failing open.
+      - The controller PKI names, the WebSocket subprotocol, and the discovery service are renamed together, so a node still enrolls, reconnects, and is rejected when the peer identity does not match.
+      - Generated OpenAPI code, the embedded Web console, and lock files are regenerated rather than edited, and their drift gates pass.
+      - The README status text matches the manifest status of every task it describes, and no capability is described as planned once it is implemented.
+      - Every statement that invites the reader to lend a computer they also use themselves carries the private-scope and not-a-sandbox boundary with it.
