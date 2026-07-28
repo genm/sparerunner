@@ -19,6 +19,8 @@ import (
 	syswindows "golang.org/x/sys/windows"
 )
 
+var procIsProcessInJob = kernel32.NewProc("IsProcessInJob")
+
 type currentTokenSource struct{}
 
 func (currentTokenSource) Token(context.Context) (syswindows.Token, string, error) {
@@ -210,9 +212,14 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 		t.Fatalf("descendant pid %d never opened: %v", descendantPID, err)
 	}
 	defer syswindows.CloseHandle(descendant)
-	// The assigned parent and its descendant must both be accounted to the Job
-	// Object, otherwise the termination below would prove nothing about the tree.
-	waitForJobProcesses(t, job, 2)
+	// The descendant must be inside the containment boundary, otherwise the
+	// termination below would prove nothing about the tree. Process count is not
+	// the instrument: a console-allocating parent also carries conhost.exe into
+	// the job, so only this exact pid answers the question.
+	contained, err := processInJob(descendant, job)
+	if err != nil || !contained {
+		t.Fatalf("descendant pid %d is outside the Job Object: %v", descendantPID, err)
+	}
 	// A descendant that already exited would satisfy the wait below without
 	// TerminateAndWait doing anything, so require it alive at this instant.
 	if result, err := syswindows.WaitForSingleObject(descendant, 0); err != nil ||
@@ -417,22 +424,20 @@ func waitForPIDFile(t *testing.T, path string) int {
 	return 0
 }
 
-func waitForJobProcesses(t *testing.T, job syswindows.Handle, expected uint32) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	var observed uint32
-	for time.Now().Before(deadline) {
-		active, err := activeJobProcesses(job)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if active == expected {
-			return
-		}
-		observed = active
-		time.Sleep(25 * time.Millisecond)
+// processInJob answers whether one exact process belongs to a Job Object.
+// Windows assigns a process to its creator's job at creation, so no polling
+// window is needed once the process handle is open.
+func processInJob(process, job syswindows.Handle) (bool, error) {
+	var member int32
+	result, _, err := procIsProcessInJob.Call(
+		uintptr(process),
+		uintptr(job),
+		uintptr(unsafe.Pointer(&member)),
+	)
+	if result == 0 {
+		return false, err
 	}
-	t.Fatalf("job active processes = %d, want %d", observed, expected)
+	return member != 0, nil
 }
 
 func waitForProcessHandle(t *testing.T, pid uint32) (syswindows.Handle, error) {
