@@ -110,7 +110,7 @@ fail-closed behavior; they do not prove native Keychain access or ACL behavior.
 
 ## Installation
 
-The release installer in `spr-015` invokes the checked
+The release installer in `task-015` invokes the checked
 `install-service.sh`. For a development package:
 
 ```bash

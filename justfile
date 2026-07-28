@@ -61,8 +61,12 @@ lint-web:
 lint-raycast:
   npm --prefix extensions/raycast run typecheck
 
+# actionlint checks that a workflow is well formed; zizmor checks what a
+# well-formed workflow is permitted to do. CI runs zizmor through its own
+# Action, pinned to the version below, so the two cannot drift.
 lint-workflows:
   actionlint
+  zizmor .
 
 lint-shell:
   shellcheck --severity=style scripts/*.sh packaging/macos/*.sh \
@@ -117,6 +121,15 @@ test-race:
     ./internal/reconcile/... ./internal/scheduler/... ./internal/transport/... \
     ./internal/nodectl/... ./internal/github/...
 
+# `just test` already runs every fuzz target's committed seed corpus. This
+# generates new inputs, which is the part that needs time rather than a gate.
+# The nightly deep-verification workflow runs the same targets one job each with
+# a much larger budget, and a test in test/verification fails if its matrix and
+# this script ever disagree about which targets exist.
+[doc("Fuzz every target for a short local budget")]
+fuzz time='30s':
+  ./scripts/fuzz.sh "{{time}}"
+
 test-enrollment-cli-linux:
   ./scripts/test-enrollment-cli-linux.sh
 
@@ -129,7 +142,7 @@ test-node-availability-linux:
 test-platform-linux:
   ./scripts/test-platform-linux.sh
 
-validate-release-evidence file='output/release-evidence/spr-014.json':
+validate-release-evidence file='output/release-evidence/task-014.json':
   ./scripts/validate-release-evidence.sh "{{file}}"
 
 check-release-artifacts dist='dist':

@@ -35,6 +35,9 @@ These instructions supplement the user-scope rules. The closest specification un
 - Update upstream spec files before changing downstream task behavior.
 - Implement one task as one mergeable Draft PR. Merge bottom-up by `depends_on`.
 - Mark a task `done` only after its acceptance evidence passes.
+- Task IDs are `task-NNN`: permanent, opaque, never reused or renumbered, and never
+  re-derived from the product name. The number is mint order, not execution order;
+  `depends_on` is the only ordering. Gaps mean an abandoned task, not a missing one.
 
 ## Ownership boundaries
 
@@ -71,6 +74,13 @@ These instructions supplement the user-scope rules. The closest specification un
   surface once introduced. Capture and self-review screenshots for UI changes.
 - Required pull-request CI uses GitHub-hosted runners only. Real SpareRunner nodes are
   limited to trusted protected-branch and release workflows.
+- Untrusted decoding boundaries carry a fuzz target that asserts a differential
+  property, not only the absence of a panic. Run them with `just fuzz`; the
+  nightly deep-verification workflow runs the same targets far longer, and a
+  target missing from its matrix fails a test.
+- Verification that only needs wall-clock time belongs in
+  `.github/workflows/deep-verification.yml`, not in required CI. It runs on a
+  schedule only, so it never re-checks a pull request's unrelated surface.
 
 ## Security invariants
 
@@ -87,6 +97,15 @@ These instructions supplement the user-scope rules. The closest specification un
 
 ## Git and release
 
+- `main` is the only long-lived branch. Branch names are `task-NNN-slug`, or `fix/`,
+  `docs/`, `chore/` when no task owns the change. `dependabot/*` is not hand-authored.
+- Branch an unmerged `depends_on` from its dependency and base the PR on that PR,
+  then `git rebase --onto main` once the parent merges.
+- Pull requests are squash-merged through the merge queue. `main` is never
+  force-pushed, and tags are cut from `main` only.
+- Worktrees live outside the repository under `~/.claude/worktrees/sparerunner/<branch>`
+  or `~/.codex/worktrees/sparerunner/<branch>`, and their creator removes them in the
+  same task.
 - Commit messages are English Conventional Commits and do not contain AI trailers.
 - Do not bypass lefthook. Fix the owning failure.
 - Actions are pinned to full commit SHAs.

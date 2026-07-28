@@ -70,11 +70,79 @@ security set-generic-password-partition-list \
 That keeps access within the boundary the trust-all ACL already grants — any
 process of the same user, still not the separate runner UID.
 
+## Branches
+
+`main` is the only long-lived branch. There is no `develop` and no `release/*`:
+those exist to maintain several shipped versions at once, and this project has
+none. A maintenance branch can be cut from a tag later if a released version
+ever needs a fix, so nothing is lost by not carrying one now.
+
+Branch from the current `main` and name the branch after what owns the change:
+
+| Change | Branch |
+| --- | --- |
+| A specification task | `task-NNN-short-slug` |
+| A fix no task owns | `fix/short-slug` |
+| Documentation only | `docs/short-slug` |
+| CI, tooling, or repository hygiene | `chore/short-slug` |
+
+The slug is a human affordance and may be reworded freely; the task ID is the
+part that must stay accurate. `dependabot/*` belongs to Dependabot — do not
+create branches in that namespace by hand.
+
+When a task's `depends_on` is not yet merged, branch from the dependency instead
+of `main` and target the dependency's pull request as the base. That makes the
+task graph visible in GitHub rather than in the author's head. After the parent
+merges, rebase onto `main`:
+
+```bash
+git rebase --onto main task-011-restart-reconciliation task-014-live-gate
+```
+
+A branch is short-lived by contract. Rebase on `main` rather than letting a
+branch drift, and delete it once it merges or is abandoned — in the same change
+that abandons it. Long-running branches are how a task quietly stops matching
+the specification it claims to implement.
+
+Agent and parallel work belongs in a Git worktree outside the repository, under
+`~/.claude/worktrees/sparerunner/<branch>` or `~/.codex/worktrees/sparerunner/<branch>`.
+Whoever creates a worktree removes it with `git worktree remove` in the same
+task. Do not run a full dependency install in a worktree that only needs to read
+or edit files.
+
+## Merging
+
+Pull requests are squash-merged, so `main` keeps one commit per task and its
+history stays bisectable. Merge commits and rebase merges are not used, and
+`main` is never force-pushed.
+
+Merge through the merge queue: required CI runs the queued combination, which is
+what stops two individually-green pull requests from breaking `main` together.
+`.github/workflows/ci.yml` already handles `merge_group`.
+
+`main` requires:
+
+- required status checks, including `ci/required`, before merge;
+- linear history, matching squash-only merges;
+- no force push and no deletion;
+- automatic branch deletion after merge.
+
+Real SpareRunner nodes only ever run on protected branches and release
+workflows. That guarantee depends on `main` actually being protected, so the
+protection rules above are a security control, not a preference.
+
+## Releases
+
+Tags are cut from `main` and nowhere else, and the tag is the only release
+trigger. Pre-alpha tags are `v0.Y.Z-alpha.N`. See [docs/RELEASE.md](docs/RELEASE.md)
+for the gates a tag must clear before its draft can be published.
+
 ## Pull requests
 
-- Use one task ID per pull request and open it as Draft. Task IDs are `spr-NNN`.
-  Anything merged before the SpareRunner rename (spr-022) uses the old `twk-NNN`
-  prefix; the mapping is positional, so `twk-007` is `spr-007`.
+- Use one task ID per pull request and open it as Draft. Task IDs are `task-NNN`
+  and are permanent, opaque handles: the number is mint order, never execution
+  order, and it is never reused or renumbered. Execution order is `depends_on`.
+  Repository-hygiene changes that no task owns declare `none` with a reason.
 - Describe which acceptance clauses are proven and attach machine-readable or live
   evidence where relevant.
 - Use English Conventional Commit messages. Pull request titles, descriptions, and
@@ -105,7 +173,7 @@ not a drive-by suppression.
 Release changes must keep `.goreleaser.yaml`, the tag workflow, the artifact
 checker, and [docs/RELEASE.md](docs/RELEASE.md) consistent. A local snapshot or
 hosted build is not live three-OS evidence. Keep the release draft until the
-SPR-014 manifest validates and Apple/Windows signing prerequisites are available.
+task-014 manifest validates and Apple/Windows signing prerequisites are available.
 
 ## Security-sensitive changes
 
@@ -113,3 +181,15 @@ Enrollment, authentication, certificates, GitHub App credentials, JIT delivery,
 process cleanup, updater/release code, and persistence invariants require both a
 normal-path test and a fail-closed test. Follow `SECURITY.md` for private disclosure;
 do not open a public issue for a suspected vulnerability.
+
+A change that parses input from an operator, a peer, or GitHub belongs behind a
+fuzz target. `just test` runs the committed seed corpus of every target, and
+`just fuzz` generates new inputs locally.
+
+The nightly `Deep verification` workflow spends the free hosted capacity that a
+pull request cannot afford to wait for: each fuzz target for far longer, and the
+whole module under the race detector with shuffled repetition on all three
+operating systems. It runs on a schedule and on `workflow_dispatch` only, so it
+never re-checks a pull request's unrelated surface, and it gates nothing. A
+finding there is a defect in shipped behavior, not in one proposed change.
+`just fuzz` reproduces the fuzzing locally.
