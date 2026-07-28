@@ -28,15 +28,15 @@ type GitHubRunnerIdentity struct {
 // inferred from an earlier process. RunnerObserved distinguishes proven absence
 // from an API response that did not query runner registration.
 type GitHubReconciliationObservation struct {
-	ObservedAt      time.Time
-	Stale           bool
-	ScaleSetID      store.ScaleSetID
-	RunnerRequestID int64
-	JobObserved     bool
-	JobState        GitHubJobObservationState
-	RunnerObserved  bool
-	RunnerName      string
-	Runner          *GitHubRunnerIdentity
+	ObservedAt     time.Time
+	Stale          bool
+	ScaleSetID     store.ScaleSetID
+	ClaimKey       int64
+	JobObserved    bool
+	JobState       GitHubJobObservationState
+	RunnerObserved bool
+	RunnerName     string
+	Runner         *GitHubRunnerIdentity
 }
 
 type AmbiguityResolutionKind string
@@ -122,7 +122,7 @@ func ResolveGitHubFence(
 		return AmbiguityResolution{}, invalid("github_attempt_required", "github_fence.attempt", "runner observation requires a durable JIT attempt")
 	}
 	if observation.ScaleSetID != fence.ScaleSetID ||
-		observation.RunnerRequestID != fence.RunnerRequestID ||
+		observation.ClaimKey != fence.ClaimKey ||
 		observation.RunnerName != fence.Attempt.RunnerName {
 		return AmbiguityResolution{}, invalid("github_runner_query_identity_mismatch", "github_observation", "was not produced by the exact durable runner query")
 	}

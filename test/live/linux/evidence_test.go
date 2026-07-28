@@ -71,7 +71,7 @@ func TestAckGateWritesDurableAllowlistBeforeRefusingDelete(t *testing.T) {
 		if readErr == nil && found {
 			if replay.Phase != "committed_before_ack" ||
 				replay.MessageID != 71 ||
-				replay.RunnerRequestID != 91 ||
+				replay.ClaimKey != 91 ||
 				replay.AvailableObservedAt != availableAt.Format(time.RFC3339Nano) ||
 				replay.CommitControllerEpoch != 2 ||
 				replay.CommitObservedAt != availableAt.Format(time.RFC3339Nano) ||
@@ -193,7 +193,7 @@ func TestScenarioStartAllowsOnlyExactUnfinishedCrashReplay(t *testing.T) {
 		NodeID:                "0123456789abcdef0123456789abcdef",
 		ScaleSetID:            41,
 		MessageID:             71,
-		RunnerRequestID:       91,
+		ClaimKey:              91,
 		ExecutionID:           "execution",
 		AvailableObservedAt:   observedAt,
 		CommitControllerEpoch: 2,
@@ -241,7 +241,7 @@ func TestResultEvidenceAlwaysEmitsWarmLatencyForPassingZeroMillis(t *testing.T) 
 		ExecutionID:              "execution",
 		ExecutionState:           string(domain.ExecutionReleased),
 		NodeState:                string(domain.NodeActive),
-		RunnerRequestID:          91,
+		ClaimKey:                 91,
 		AvailableObservedAt:      "2026-07-26T00:00:00Z",
 		JobStartedObservedAt:     "2026-07-26T00:00:00Z",
 		JobCompletedObservedAt:   "2026-07-26T00:00:00Z",

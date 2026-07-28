@@ -20,18 +20,20 @@ type RunnerLifecycle interface {
 var _ RunnerLifecycle = (*Client)(nil)
 
 // RunnerQuery binds a provider read to one durable JIT attempt. GitHub runner
-// records do not expose RunnerRequestID, so callers still pass it to prevent a
-// name-only lookup from becoming an unscoped reconciliation API.
+// records expose no Tewake identity at all, so callers still pass the owning
+// claim key to prevent a name-only lookup from becoming an unscoped
+// reconciliation API. The key is never sent upstream; it is negative for a
+// claim GitHub created from assigned demand rather than an offered job.
 type RunnerQuery struct {
-	ScaleSetID      ScaleSetID
-	RunnerRequestID int64
-	Name            string
-	ExpectedID      int
+	ScaleSetID ScaleSetID
+	ClaimKey   int64
+	Name       string
+	ExpectedID int
 }
 
 func (query RunnerQuery) validate() error {
 	if query.ScaleSetID <= 0 ||
-		query.RunnerRequestID <= 0 ||
+		query.ClaimKey == 0 ||
 		!isGitHubPathPart(query.Name) ||
 		query.ExpectedID < 0 {
 		return ErrInvalidPreviewResponse

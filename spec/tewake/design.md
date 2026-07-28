@@ -236,6 +236,71 @@ potentially truncated message list.
 The adapter preserves last-known data on transient errors and exposes staleness
 metadata. It never converts an external 5xx into an empty successful snapshot.
 
+#### Assigned jobs, not JobAvailable, create runner executions
+
+`Statistics.TotalAssignedJobs` is the demand signal. Desired active executions
+for a scale set equal that statistic; whenever the durable active count is below
+it, the missing executions are created and driven through the shared
+prepare → JIT → start path.
+
+Tewake originally created a durable execution only from a `JobAvailable`
+message. That is not the scale-set protocol. The pinned reference listener
+(`github.com/actions/scaleset`) acquires `JobAvailable` jobs and creates
+*nothing* from them; runner creation is driven entirely from
+`HandleDesiredRunnerCount(ctx, Statistics.TotalAssignedJobs)`, and the listener
+re-evaluates that count even when a long poll returns no message at all.
+`JobAvailable` is only the "claim this offered job for my scale set" handshake.
+
+Live evidence from a healthy session against a real organization: GitHub
+assigned the queued job directly (`TotalAssignedJobs = 1`,
+`TotalAvailableJobs = 0`), delivered `JobAssigned` with no runner request ID,
+and never offered the job. Polling, commit, and acknowledgement all worked, and
+the workflow still sat `queued` forever because no `JobAvailable` was ever going
+to arrive. Counting `JobAssigned` messages is equally wrong: GitHub can truncate
+a large message backlog, so only the statistic is authoritative.
+
+Durable representation. Every GitHub table was keyed on
+`(scale_set_id, runner_request_id)` with a positivity constraint, and an
+assigned-demand execution has no request ID. Migration 019 separates identity
+from provider correlation:
+
+- `claim_key` is the Tewake-owned durable identity every child table
+  references. It is the provider request ID for a claim created from a
+  `JobAvailable` offer, so existing rows and child foreign keys keep their
+  values unchanged, and it is negative for a claim created from assigned
+  demand. The two namespaces are disjoint by sign.
+- `runner_request_id` becomes a nullable correlation attribute on
+  `github_job_claims`, unique per scale set when present. It is never
+  synthesized: `AcquireJobs` and provider correlation read it, so a fabricated
+  value could collide with a real one.
+- `source_message_id` becomes nullable because an empty long poll carries no
+  queue message, yet may still legitimately create a claim.
+
+A nullable identity column was rejected: SQLite does not enforce a composite
+foreign key whose child columns contain NULL, so the five child tables would
+have silently lost referential integrity for every assigned-demand row.
+
+Lifecycle. An assigned-demand claim enters the shared lifecycle at `acquired`
+— there is nothing to acquire, because GitHub already assigned the job and
+matches it to whichever ephemeral runner registers — and has no
+`github_acquire_attempts` row. `GenerateJITConfig` needs only scale set, name,
+and work folder, so no job identity is required to start a runner. Pickup is
+proven the same way it always was: `JobStarted` / `JobCompleted` correlated by
+exact provider runner ID and name, which is the only correlation such a claim
+can have.
+
+Safety. Demand reconciliation runs inside the transaction that commits the
+message which carried the statistics, before `DeleteMessage`, so a crash
+redelivers rather than loses work. It converges to a count read from durable
+state in the same transaction rather than creating one execution per message
+seen, so redelivery and restart cannot duplicate. It applies exactly the gates
+the `JobAvailable` claim boundary applies — node capacity, `node_target_exclusions`,
+availability intent, admission, runner-update policy, and audit health — by
+calling the same predicates rather than duplicating them; demand that no node
+can serve is reported and logged (`github_assigned_demand_unserved`), never
+silently dropped. Demand is never invented: when no statistics have ever been
+recorded for a scale set, nothing is created.
+
 ### Fleet supervision
 
 `ControllerFleet` (`internal/app/controller_fleet.go`) is the production

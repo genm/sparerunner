@@ -54,6 +54,7 @@ type controllerRunnerStore interface {
 	ReadGitHubScaleSetSessionHealth(context.Context, store.ScaleSetID) (store.GitHubScaleSetSessionHealth, error)
 	ReadGitHubPollState(context.Context, store.GitHubTargetRuntimeBinding, domain.NodeID) (store.GitHubPollState, error)
 	CommitGitHubQueueMessage(context.Context, store.GitHubQueueMessage, store.SingleSlotBinding) (store.GitHubMessageCommit, error)
+	ReconcileGitHubAssignedDemand(context.Context, store.ScaleSetID, store.SingleSlotBinding) (store.GitHubAssignedDemandResult, error)
 	GitHubSingleSlotCapacity(context.Context, store.SingleSlotBinding) (int, error)
 	NextActionableGitHubClaim(context.Context, store.ScaleSetID) (store.GitHubJobClaim, bool, error)
 	GitHubPendingClaimDispatchReady(context.Context, store.GitHubJobClaim) (bool, error)
@@ -369,16 +370,10 @@ func (coordinator *ControllerRunnerCoordinator) CommitMessage(
 	// A new claim may only be created for the node this poll actually selected
 	// and advertised authority for. When the binding came from an existing
 	// claim on a different node, the commit stays a pure replay.
-	if hasScope && scope.claimable && scope.nodeID == binding.NodeID {
-		admission, err := coordinator.config.Reconciler.Admission(binding.NodeID)
+	if hasScope {
+		binding.ClaimEnabled, err = coordinator.claimEnabled(scope, binding.NodeID)
 		if err != nil {
 			return err
-		}
-		if snapshot, online, _ := coordinator.agents.Readiness(binding.NodeID); online {
-			binding.ClaimEnabled = scope.authority.AdvertisedCapacity > 0 &&
-				snapshot.NativeRunnerReady &&
-				snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
-				admission.AllowsNewCapacity
 		}
 	}
 	// Audit health may change while the provider long poll is returning. Check
@@ -412,10 +407,119 @@ func (coordinator *ControllerRunnerCoordinator) CommitMessage(
 			return err
 		}
 	}
+	if err := coordinator.applyAssignedDemand(
+		commit.AssignedDemand, binding.NodeID); err != nil {
+		return err
+	}
 	if commit.UnclaimedAvailable {
 		return ErrGitHubAvailableUnclaimed
 	}
 	return nil
+}
+
+// claimEnabled is the single answer to "may this poll create a new durable
+// claim on this node". Both halves of the scale-set protocol ask it, so
+// assigned demand can never reach the store with a gate the JobAvailable path
+// would have applied.
+func (coordinator *ControllerRunnerCoordinator) claimEnabled(
+	scope controllerRunnerPollScope,
+	nodeID domain.NodeID,
+) (bool, error) {
+	if !scope.claimable || scope.nodeID != nodeID {
+		return false, nil
+	}
+	admission, err := coordinator.config.Reconciler.Admission(nodeID)
+	if err != nil {
+		return false, err
+	}
+	snapshot, online, _ := coordinator.agents.Readiness(nodeID)
+	if !online {
+		return false, nil
+	}
+	return scope.authority.AdvertisedCapacity > 0 &&
+		snapshot.NativeRunnerReady &&
+		snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
+		admission.AllowsNewCapacity, nil
+}
+
+// applyAssignedDemand projects a demand-created claim and makes refused demand
+// visible. Demand no node could serve is a normal, recoverable state, but it is
+// the state in which a workflow sits queued with nothing happening, so it is
+// never dropped silently.
+func (coordinator *ControllerRunnerCoordinator) applyAssignedDemand(
+	demand store.GitHubAssignedDemandResult,
+	nodeID domain.NodeID,
+) error {
+	if !demand.Observed {
+		return nil
+	}
+	if demand.Created != nil {
+		if err := coordinator.config.Reconciler.ApplyGitHubClaim(
+			*demand.Created); err != nil {
+			return err
+		}
+		coordinator.logger.Info(
+			"github_assigned_demand_execution_created",
+			slog.String("component", "github"),
+			slog.String("target_id", string(coordinator.config.TargetID)),
+			slog.String("node_id", string(nodeID)),
+			slog.Int("assigned_jobs", demand.Desired),
+			slog.Int("active_before", demand.Active),
+			slog.String("execution_id", string(demand.Created.Execution.ID)),
+		)
+	}
+	if demand.Unserved > 0 {
+		coordinator.logger.Warn(
+			"github_assigned_demand_unserved",
+			slog.String("component", "github"),
+			slog.String("target_id", string(coordinator.config.TargetID)),
+			slog.String("node_id", string(nodeID)),
+			slog.Int("assigned_jobs", demand.Desired),
+			slog.Int("active", demand.Active),
+			slog.Int("unserved", demand.Unserved),
+		)
+	}
+	return nil
+}
+
+// reconcileAssignedDemandForPoll re-evaluates desired runner count for a long
+// poll that returned no message. The reference scale-set listener does the same
+// on a nil message, and without it a job assigned while the Controller was busy
+// would wait for the next unrelated message before anything was created.
+func (coordinator *ControllerRunnerCoordinator) reconcileAssignedDemandForPoll(
+	ctx context.Context,
+	scope controllerRunnerPollScope,
+) error {
+	// Degraded audit already forces advertised capacity to zero, so there is no
+	// demand this poll could serve. Skipping is the same fail-closed answer the
+	// candidate evaluation gives, and avoids turning an ordinary empty poll into
+	// an admission error.
+	if !coordinator.store.ManagementAuditHealthy() {
+		return nil
+	}
+	binding := store.SingleSlotBinding{
+		TargetID:      coordinator.config.TargetID,
+		NodeID:        scope.nodeID,
+		Slot:          0,
+		PollAuthority: scope.authority,
+	}
+	if binding.NodeID == "" {
+		return nil
+	}
+	claimEnabled, err := coordinator.claimEnabled(scope, binding.NodeID)
+	if err != nil {
+		return err
+	}
+	binding.ClaimEnabled = claimEnabled
+	demand, err := coordinator.store.ReconcileGitHubAssignedDemand(
+		ctx, store.ScaleSetID(coordinator.config.ScaleSetID), binding)
+	if err != nil {
+		if errors.Is(err, store.ErrManagementAuditPersistence) {
+			return ErrControllerRunnerAdmission
+		}
+		return err
+	}
+	return coordinator.applyAssignedDemand(demand, binding.NodeID)
 }
 
 func (coordinator *ControllerRunnerCoordinator) currentPollScope() (
@@ -701,11 +805,12 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 		!chosen.runnerRecheckAt.IsZero() {
 		authority.AdmissionDeadlineUnixNano = chosen.runnerRecheckAt.UnixNano()
 	}
-	coordinator.setPollScope(controllerRunnerPollScope{
+	scope := controllerRunnerPollScope{
 		authority: authority,
 		nodeID:    chosen.nodeID,
 		claimable: selected >= 0,
-	})
+	}
+	coordinator.setPollScope(scope)
 	defer coordinator.clearPollScope()
 
 	// Every candidate's readiness matters, not just the selected one: a node
@@ -723,6 +828,10 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 		message, err := coordinator.poller.PollOnce(ctx, demand)
 		if err != nil {
 			err = coordinator.persistProviderFailure(ctx, err)
+			return message, false, err
+		}
+		if message == nil {
+			err = coordinator.reconcileAssignedDemandForPoll(ctx, scope)
 		}
 		return message, false, err
 	}
@@ -804,6 +913,10 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 	}
 	if err != nil {
 		err = coordinator.persistProviderFailure(ctx, err)
+		return message, false, err
+	}
+	if message == nil {
+		err = coordinator.reconcileAssignedDemandForPoll(ctx, scope)
 	}
 	return message, false, err
 }
@@ -1195,7 +1308,7 @@ func (coordinator *ControllerRunnerCoordinator) pendingUnpickedRequeue(
 	intent, found, err := coordinator.store.GitHubUnpickedRequeueIntent(
 		ctx,
 		fence.Claim.ScaleSetID,
-		fence.Claim.RunnerRequestID,
+		fence.Claim.ClaimKey,
 	)
 	if err != nil || !found {
 		return store.GitHubUnpickedRequeueIntent{}, false, err
@@ -1410,7 +1523,7 @@ func (coordinator *ControllerRunnerCoordinator) driveNext(ctx context.Context) (
 		if fence.Claim.State == store.GitHubClaimAcquireAmbiguous {
 			return false, nil
 		}
-		err := coordinator.reconcileJITAttempt(ctx, fence.Claim.RunnerRequestID)
+		err := coordinator.reconcileJITAttempt(ctx, fence.Claim.ClaimKey)
 		if errors.Is(err, ErrGitHubReconciliationRequired) {
 			var providerFailure *github.ProviderFailure
 			if !errors.As(err, &providerFailure) {
@@ -1418,7 +1531,7 @@ func (coordinator *ControllerRunnerCoordinator) driveNext(ctx context.Context) (
 					coordinator.store.GitHubUnpickedRequeueIntent(
 						ctx,
 						fence.Claim.ScaleSetID,
-						fence.Claim.RunnerRequestID,
+						fence.Claim.ClaimKey,
 					)
 				if intentErr != nil {
 					return true, intentErr
@@ -1461,6 +1574,14 @@ func (coordinator *ControllerRunnerCoordinator) driveNext(ctx context.Context) (
 }
 
 func (coordinator *ControllerRunnerCoordinator) acquire(ctx context.Context, claim store.GitHubJobClaim) error {
+	// Only an offered job can be acquired. An assigned-demand claim has no
+	// provider request ID at all and enters the lifecycle already acquired, so
+	// reaching here with one would mean a synthesized ID had leaked into the
+	// AcquireJobs call.
+	if claim.Origin != store.GitHubClaimFromJobAvailable ||
+		claim.RunnerRequestID <= 0 {
+		return store.ErrGitHubClaimState
+	}
 	if err := coordinator.requireRunnerAdmission(
 		ctx, claim.Execution.Slot.NodeID); err != nil {
 		return err
@@ -1468,16 +1589,16 @@ func (coordinator *ControllerRunnerCoordinator) acquire(ctx context.Context, cla
 	attempt, err := coordinator.store.BeginGitHubAcquire(
 		ctx,
 		claim.ScaleSetID,
-		claim.RunnerRequestID,
+		claim.ClaimKey,
 	)
 	if err != nil {
 		return err
 	}
 	acquireFence := reconcile.GitHubFence{
-		ExecutionID:     claim.Execution.ID,
-		ScaleSetID:      claim.ScaleSetID,
-		RunnerRequestID: claim.RunnerRequestID,
-		ClaimState:      store.GitHubClaimAcquireAmbiguous,
+		ExecutionID: claim.Execution.ID,
+		ScaleSetID:  claim.ScaleSetID,
+		ClaimKey:    claim.ClaimKey,
+		ClaimState:  store.GitHubClaimAcquireAmbiguous,
 	}
 	if err := coordinator.config.Reconciler.ApplyGitHubFence(acquireFence); err != nil {
 		return err
@@ -1595,12 +1716,12 @@ func (coordinator *ControllerRunnerCoordinator) prepare(ctx context.Context, cla
 	}
 	switch update.State {
 	case domain.ExecutionPreparing:
-		if err := coordinator.store.MarkGitHubPreparing(ctx, claim.ScaleSetID, claim.RunnerRequestID); err != nil {
+		if err := coordinator.store.MarkGitHubPreparing(ctx, claim.ScaleSetID, claim.ClaimKey); err != nil {
 			return false, err
 		}
 		return true, nil
 	case domain.ExecutionFailed:
-		if err := coordinator.store.MarkGitHubPrepareFailed(ctx, claim.ScaleSetID, claim.RunnerRequestID); err != nil {
+		if err := coordinator.store.MarkGitHubPrepareFailed(ctx, claim.ScaleSetID, claim.ClaimKey); err != nil {
 			return false, err
 		}
 		return false, ErrGitHubPrepareFailed
@@ -1614,9 +1735,9 @@ func (coordinator *ControllerRunnerCoordinator) generateAndStart(ctx context.Con
 	if err := coordinator.requireRunnerAdmission(ctx, nodeID); err != nil {
 		return err
 	}
-	runnerName := deterministicRunnerName(claim.ScaleSetID, claim.RunnerRequestID)
+	runnerName := deterministicRunnerName(claim.ScaleSetID, claim.ClaimKey)
 	attempt, replayed, err := coordinator.store.BeginGitHubJITAttempt(
-		ctx, claim.ScaleSetID, claim.RunnerRequestID,
+		ctx, claim.ScaleSetID, claim.ClaimKey,
 		coordinator.config.ControllerEpoch, runnerName)
 	if err != nil {
 		return err
@@ -1763,11 +1884,11 @@ func githubFenceForAttempt(
 	// later state-machine mutations from rewriting the expected CAS token.
 	attemptToken := attempt
 	return reconcile.GitHubFence{
-		ExecutionID:     claim.Execution.ID,
-		ScaleSetID:      claim.ScaleSetID,
-		RunnerRequestID: claim.RunnerRequestID,
-		ClaimState:      claimState,
-		Attempt:         &attemptToken,
+		ExecutionID: claim.Execution.ID,
+		ScaleSetID:  claim.ScaleSetID,
+		ClaimKey:    claim.ClaimKey,
+		ClaimState:  claimState,
+		Attempt:     &attemptToken,
 	}
 }
 
@@ -1799,19 +1920,19 @@ func claimStateForAttempt(
 // runner registration before marking it absent.
 func (coordinator *ControllerRunnerCoordinator) ReconcileJITAttempt(
 	ctx context.Context,
-	runnerRequestID int64,
+	claimKey int64,
 ) error {
 	coordinator.driveMu.Lock()
 	defer coordinator.driveMu.Unlock()
-	return coordinator.reconcileJITAttempt(ctx, runnerRequestID)
+	return coordinator.reconcileJITAttempt(ctx, claimKey)
 }
 
 func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 	ctx context.Context,
-	runnerRequestID int64,
+	claimKey int64,
 ) error {
 	attempt, found, err := coordinator.store.CurrentGitHubJITAttempt(
-		ctx, store.ScaleSetID(coordinator.config.ScaleSetID), runnerRequestID)
+		ctx, store.ScaleSetID(coordinator.config.ScaleSetID), claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubReconciliationRequired
@@ -1822,7 +1943,7 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 		coordinator.store.GitHubUnpickedRequeueIntent(
 			ctx,
 			attempt.ScaleSetID,
-			runnerRequestID,
+			claimKey,
 		)
 	if err != nil {
 		return errors.Join(ErrGitHubReconciliationRequired, err)
@@ -1848,7 +1969,7 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 	default:
 		return ErrGitHubReconciliationRequired
 	}
-	claim, found, err := coordinator.store.GitHubClaim(ctx, attempt.ScaleSetID, runnerRequestID)
+	claim, found, err := coordinator.store.GitHubClaim(ctx, attempt.ScaleSetID, claimKey)
 	if err != nil || !found {
 		if err == nil {
 			err = ErrGitHubReconciliationRequired
@@ -2000,7 +2121,7 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 	}
 	if attempt.RunnerName != deterministicRunnerName(
 		attempt.ScaleSetID,
-		attempt.RunnerRequestID,
+		attempt.ClaimKey,
 	) {
 		return ErrGitHubReconciliationRequired
 	}
@@ -2017,10 +2138,10 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 	githubSessionGeneration := sessionHealth.TransitionGeneration
 	operationContext, cancelOperation := coordinator.finiteProviderOperation(ctx)
 	reference, err := coordinator.lifecycle.QueryRunner(operationContext, github.RunnerQuery{
-		ScaleSetID:      github.ScaleSetID(attempt.ScaleSetID),
-		RunnerRequestID: attempt.RunnerRequestID,
-		Name:            attempt.RunnerName,
-		ExpectedID:      attempt.RunnerID,
+		ScaleSetID: github.ScaleSetID(attempt.ScaleSetID),
+		ClaimKey:   attempt.ClaimKey,
+		Name:       attempt.RunnerName,
+		ExpectedID: attempt.RunnerID,
 	})
 	cancelOperation()
 	if err != nil {
@@ -2029,11 +2150,11 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 		return errors.Join(ErrGitHubReconciliationRequired, providerErr)
 	}
 	providerObservation := reconcile.GitHubReconciliationObservation{
-		ObservedAt:      time.Now(),
-		ScaleSetID:      attempt.ScaleSetID,
-		RunnerRequestID: attempt.RunnerRequestID,
-		RunnerObserved:  true,
-		RunnerName:      attempt.RunnerName,
+		ObservedAt:     time.Now(),
+		ScaleSetID:     attempt.ScaleSetID,
+		ClaimKey:       attempt.ClaimKey,
+		RunnerObserved: true,
+		RunnerName:     attempt.RunnerName,
 	}
 	if reference != nil {
 		providerObservation.Runner = &reconcile.GitHubRunnerIdentity{
@@ -2129,7 +2250,7 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 				coordinator.store.GitHubUnpickedRequeueIntent(
 					ctx,
 					attempt.ScaleSetID,
-					attempt.RunnerRequestID,
+					attempt.ClaimKey,
 				)
 			if err != nil || !found ||
 				latestIntent.Attempt != attempt ||
@@ -2287,21 +2408,21 @@ func validateControllerRunnerUpdate(
 func deterministicExecutionID(
 	scaleSetID github.ScaleSetID,
 	messageID int,
-	runnerRequestID int64,
+	claimKey int64,
 ) domain.ExecutionID {
 	return domain.ExecutionID("twk-exec-" + deterministicControllerToken(
 		fmt.Sprintf(
 			"execution\x00%d\x00%d\x00%d",
 			scaleSetID,
 			messageID,
-			runnerRequestID,
+			claimKey,
 		),
 	))
 }
 
-func deterministicRunnerName(scaleSetID store.ScaleSetID, runnerRequestID int64) string {
+func deterministicRunnerName(scaleSetID store.ScaleSetID, claimKey int64) string {
 	return "tewake-" + deterministicControllerToken(
-		fmt.Sprintf("runner\x00%d\x00%d", scaleSetID, runnerRequestID))
+		fmt.Sprintf("runner\x00%d\x00%d", scaleSetID, claimKey))
 }
 
 func deterministicCommandID(kind string, executionID domain.ExecutionID, discriminator string) domain.CommandID {
