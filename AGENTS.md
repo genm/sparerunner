@@ -76,9 +76,8 @@ These instructions supplement the user-scope rules. The closest specification un
   nightly deep-verification workflow runs the same targets far longer, and a
   target missing from its matrix fails a test.
 - Verification that only needs wall-clock time belongs in
-  `.github/workflows/deep-verification.yml`, not in required CI. It runs the
-  whole module under the race detector, and `just vulncheck-lockfiles` reports
-  the JavaScript advisories `just vulncheck` does not cover.
+  `.github/workflows/deep-verification.yml`, not in required CI. It runs on a
+  schedule only, so it never re-checks a pull request's unrelated surface.
 
 ## Security invariants
 

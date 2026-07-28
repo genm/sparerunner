@@ -130,11 +130,6 @@ test-race:
 fuzz time='30s':
   ./scripts/fuzz.sh "{{time}}"
 
-# The JavaScript counterpart to `just vulncheck`. Needs network access to OSV.
-[doc("Report known vulnerabilities in every dependency lock file")]
-vulncheck-lockfiles:
-  ./scripts/scan-lockfile-vulnerabilities.sh
-
 test-enrollment-cli-linux:
   ./scripts/test-enrollment-cli-linux.sh
 

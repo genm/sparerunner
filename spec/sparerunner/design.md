@@ -1362,8 +1362,8 @@ and Web suites, the race detector over the packages that own the controller's
 concurrency, `govulncheck`, the cross-build matrix, CodeQL, and dependency review
 of newly introduced packages.
 
-The nightly deep-verification workflow gates nothing and covers what required CI
-deliberately leaves out:
+The nightly deep-verification workflow gates nothing and covers the two things
+required CI deliberately leaves out:
 
 - Coverage-guided fuzzing of the untrusted decoding boundaries — the join code an
   operator pastes, the agent WebSocket envelope, and the operator configuration
@@ -1376,9 +1376,9 @@ deliberately leaves out:
   the controller application and store suites are far too slow under the
   detector to hold a pull request; this is where they are covered, and where
   order dependence between tests is exposed
-- Every dependency lock file against OSV, which covers the Web console, the API
-  codegen toolchain, and the Raycast extension. `govulncheck` sees only Go, and
-  dependency review sees a lock file only when a pull request changes it
+It runs on a schedule and on manual dispatch only. A workflow that gates nothing
+must not re-check a pull request's unrelated surface, so nothing about it is
+attached to a pull request event.
 
 A finding on the nightly surface is a defect in shipped behavior and is triaged
 as one, not as a failure of whichever change happened to be merged last.

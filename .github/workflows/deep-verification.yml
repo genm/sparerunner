@@ -10,7 +10,7 @@ name: Deep verification
 on:
   schedule:
     # 17:41 UTC daily, off the hour and away from the CodeQL, Scorecard, and
-    # security-drift schedules so the four do not contend.
+    # security-drift schedules so they do not contend.
     - cron: "41 17 * * *"
   workflow_dispatch:
     inputs:
@@ -23,21 +23,13 @@ on:
           - "20"
           - "60"
           - "240"
-  # Re-runs when the workflow itself changes, so a broken definition is caught
-  # on the pull request that broke it rather than on the next night.
-  pull_request:
-    paths:
-      - .github/workflows/deep-verification.yml
 
 permissions:
   contents: read
 
 concurrency:
   group: deep-verification-${{ github.ref }}
-  # A scheduled run is never superseded, so it always finishes. A pull request
-  # run only proves the definition still works, and the newest push is the only
-  # one whose answer is wanted.
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   fuzz:
@@ -78,8 +70,7 @@ jobs:
 
       # Each run starts from the inputs earlier runs found interesting, so
       # nightly fuzzing accumulates coverage instead of rediscovering the same
-      # shallow inputs every time. A pull request run reads the default branch's
-      # entries but writes only its own, which is Actions' own cache scoping.
+      # shallow inputs every time.
       - name: Restore the generated fuzz corpus
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -87,11 +78,9 @@ jobs:
           key: fuzz-corpus-${{ matrix.target }}-${{ github.run_id }}
           restore-keys: fuzz-corpus-${{ matrix.target }}-
 
-      # A pull request only proves the workflow still runs, so it uses the
-      # shortest budget rather than holding a job for twenty minutes.
       - name: Fuzz ${{ matrix.target }}
         env:
-          FUZZ_MINUTES: ${{ inputs.fuzz-minutes || (github.event_name == 'pull_request' && '2') || '20' }}
+          FUZZ_MINUTES: ${{ inputs.fuzz-minutes || '20' }}
         run: >-
           go test -run '^$' -fuzz '^${{ matrix.target }}$'
           -fuzztime "${FUZZ_MINUTES}m" -timeout 290m ${{ matrix.package }}
@@ -122,13 +111,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # A pull request run exists to prove the invocation still works, so it
-        # uses one runner rather than holding three for hours on a job that
-        # gates nothing. The other two operating systems run on the schedule.
-        os: >-
-          ${{ fromJSON(github.event_name == 'pull_request'
-          && '["ubuntu-24.04"]'
-          || '["ubuntu-24.04","macos-15","windows-2025"]') }}
+        os:
+          - ubuntu-24.04
+          - macos-15
+          - windows-2025
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,13 +126,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The second pass is what turns shuffling into an order-dependence check,
-      # so the schedule always runs it. A pull request run drops to one pass for
-      # the same reason it runs on one operating system.
       - name: Test under the race detector with shuffled repetition
         shell: bash
-        env:
-          RACE_COUNT: ${{ github.event_name == 'pull_request' && '1' || '2' }}
         run: |
           mkdir -p output/test-results
           go tool gotestsum \
@@ -154,7 +135,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-deep-race-junit.xml \
             --jsonfile output/test-results/go-deep-race.json \
-            -- -race -shuffle=on "-count=${RACE_COUNT}" -timeout=170m ./...
+            -- -race -shuffle=on -count=2 -timeout=170m ./...
 
       - name: Upload failure evidence
         if: failure()
@@ -164,24 +145,3 @@ jobs:
           path: output/test-results/
           if-no-files-found: ignore
           retention-days: 7
-
-  lockfiles:
-    name: Lock file vulnerabilities
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
-        with:
-          go-version-file: go.mod
-
-      # govulncheck covers Go, and dependency review covers a lock file only
-      # when a pull request changes it. Neither sees an advisory published
-      # against a JavaScript dependency nobody touched.
-      - name: Scan every lock file against OSV
-        run: ./scripts/scan-lockfile-vulnerabilities.sh

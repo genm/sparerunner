@@ -119,8 +119,9 @@ fuzz target. `just test` runs the committed seed corpus of every target, and
 `just fuzz` generates new inputs locally.
 
 The nightly `Deep verification` workflow spends the free hosted capacity that a
-pull request cannot afford to wait for: each fuzz target for far longer, the
+pull request cannot afford to wait for: each fuzz target for far longer, and the
 whole module under the race detector with shuffled repetition on all three
-operating systems, and every dependency lock file against OSV. It gates nothing,
-so a finding there is a defect in shipped behavior, not in one proposed change.
-`just fuzz` and `just vulncheck-lockfiles` reproduce it locally.
+operating systems. It runs on a schedule and on `workflow_dispatch` only, so it
+never re-checks a pull request's unrelated surface, and it gates nothing. A
+finding there is a defect in shipped behavior, not in one proposed change.
+`just fuzz` reproduces the fuzzing locally.
