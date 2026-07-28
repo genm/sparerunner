@@ -1,6 +1,6 @@
 # Windows agent packaging
 
-Status: implementation and cross-compilation are available, but SPR-009 remains
+Status: implementation and cross-compilation are available, but task-009 remains
 `in_progress` until the real Windows acceptance matrix below has been captured.
 Cross-compilation is not evidence for SCM, DPAPI, Job Object, locked-file, sleep,
 or reboot behavior.
