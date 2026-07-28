@@ -17,7 +17,7 @@ import (
 
 const windowsDPAPIMagic = "TWKDPAPI\x01"
 
-var windowsDPAPIEntropy = []byte("tewake/private-material/windows/v1")
+var windowsDPAPIEntropy = []byte("sparerunner/private-material/windows/v1")
 
 func persistPrivateMaterial(path string, contents []byte) error {
 	// SavePrivateMaterial does not take ownership of its caller's buffer. In
