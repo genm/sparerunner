@@ -35,6 +35,7 @@ Almost every mistake in this CLI comes from running a command on the wrong host.
 | `init`, `serve`, `node add`, `github …`, `ui authorize`, `config …` | the controller host | controller state directory |
 | `join` | the computer being enrolled | agent state directory |
 | `node status`, `node pause`, `node resume`, `node targets` | the node itself | that node's local control endpoint |
+| `doctor` | the computer being diagnosed | controller state when present, and this computer's local agent endpoint |
 
 `node status` and its siblings talk to the local agent over a same-host socket
 (Unix domain socket, or a named pipe on Windows). They are not remote commands
@@ -65,6 +66,7 @@ sprun github installations       list accounts the App is installed into
 sprun ui authorize <code>        authorize one browser handoff to the console
 sprun config export              export non-secret configuration as YAML
 sprun config apply <file|->      apply a versioned configuration document
+sprun doctor                     read-only diagnosis of controller, GitHub, and this computer's agent
 sprun evidence validate --file   validate a cross-platform evidence manifest
 sprun version                    print version and provenance
 ```
@@ -166,6 +168,19 @@ credential store and are never written to the file. `apply` is atomic and
 revision-checked, so a stale document is rejected rather than silently merged.
 When `apply` reports a revision conflict, re-export, re-apply your intent on top
 of the current revision, and apply again — do not retry the stale file.
+
+## Diagnose a computer
+
+```bash
+sprun doctor --json
+```
+
+`doctor` is read-only and composes the surfaces above into one report:
+controller state, the management session, GitHub authority, and this computer's
+agent endpoint. Absence is not failure — a computer with no controller state or
+no installed agent reports `unavailable` findings and exits zero. The exit code
+is non-zero exactly when a check fails, so scripts can gate on it. Findings
+carry the same machine-readable error classes the underlying surfaces emit.
 
 ## Reading failures
 
