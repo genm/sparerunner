@@ -899,9 +899,9 @@ an in-memory replay ledger, is sent only in that request, and is then cleared. T
 root and proof are never placed in argv, environment variables, SQLite, config,
 logs, audit rows, or response bodies.
 
-SPR-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
+task-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
 browser bootstrap. JavaScript cannot read the Controller credential and a plain
-same-origin session POST returns 401. SPR-013 adds a device-code-style browser
+same-origin session POST returns 401. task-013 adds a device-code-style browser
 handoff without putting a bearer credential in a URL or command argument:
 
 1. the browser creates a random 256-bit claim secret with Web Crypto, retains it
