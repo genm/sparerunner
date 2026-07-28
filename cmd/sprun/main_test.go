@@ -77,6 +77,62 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 	}
 }
 
+func TestPackagedLinuxJoinPrintsSystemdInstructionWithoutSecondServe(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	const stateDirectory = "/var/lib/sparerunner-agent"
+	command := newJoinCommandForPlatform(
+		"linux",
+		func(_ context.Context, options app.JoinOptions) (string, error) {
+			if options.StateDirectory != stateDirectory {
+				t.Fatalf("join state directory = %q, want %q", options.StateDirectory, stateDirectory)
+			}
+			return "node-linux", nil
+		},
+	)
+	command.SetOut(&stdout)
+	command.SetErr(&stderr)
+	command.SetArgs([]string{
+		"spr_test-code",
+		"--state-dir",
+		stateDirectory,
+	})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("packaged Linux join returned error: %v", err)
+	}
+	output := stdout.String()
+	if !strings.Contains(output, "Node node-linux joined successfully") ||
+		!strings.Contains(
+			output,
+			"sudo systemctl restart sparerunner-agent.service",
+		) {
+		t.Fatalf("packaged Linux join output = %q", output)
+	}
+	if strings.Contains(output, "sparerunner-agent serve") {
+		t.Fatalf("packaged Linux join suggested a second Agent process: %q", output)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("packaged Linux join stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestUnpackagedLinuxJoinStillPrintsTheManualServeCommand(t *testing.T) {
+	var stdout bytes.Buffer
+	stateDirectory := t.TempDir()
+	command := newJoinCommandForPlatform(
+		"linux",
+		func(context.Context, app.JoinOptions) (string, error) { return "node-local", nil },
+	)
+	command.SetOut(&stdout)
+	command.SetErr(&stdout)
+	command.SetArgs([]string{"spr_test-code", "--state-dir", stateDirectory})
+	if err := command.Execute(); err != nil {
+		t.Fatalf("unpackaged Linux join returned error: %v", err)
+	}
+	if !strings.Contains(stdout.String(), "sparerunner-agent serve --state-dir "+stateDirectory) {
+		t.Fatalf("unpackaged Linux join output = %q", stdout.String())
+	}
+}
+
 func TestRunServeFailsClosedWhenControllerIsNotInitialized(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 

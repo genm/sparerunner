@@ -237,9 +237,18 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 
 func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
 	const macOSServiceState = "/Library/Application Support/SpareRunner/agent"
+	const linuxServiceState = "/var/lib/sparerunner-agent"
 	switch {
 	case goos == "windows":
 		fmt.Fprintln(output, "SpareRunnerAgent service is enrolled and running.")
+	case goos == "linux" && stateDirectory == linuxServiceState:
+		// The packaged systemd unit already owns this state directory, so the
+		// operator must restart that service rather than start a second Agent
+		// process beside it.
+		fmt.Fprintln(
+			output,
+			"systemd manages this Agent. Activate it with: sudo systemctl restart sparerunner-agent.service",
+		)
 	case goos == "darwin" && stateDirectory == macOSServiceState:
 		// The path is a platform contract, not a host path to normalize. Comparing
 		// it verbatim keeps cross-compiled CLI tests from treating a macOS path as a
