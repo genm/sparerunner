@@ -107,6 +107,10 @@ jobs:
     # module, on every supported operating system, where the budget is only
     # wall-clock. Shuffling and a second pass are what expose order dependence
     # between tests, which a single ordered run cannot.
+    #
+    # Measured: one whole-module pass under the detector took 24m32s on a hosted
+    # ubuntu-24.04 runner, so two passes land near fifty minutes. The budget is
+    # that measurement with room for a slower runner, not a round number.
     timeout-minutes: 180
     strategy:
       fail-fast: false
