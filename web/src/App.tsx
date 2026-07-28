@@ -365,7 +365,7 @@ function BrowserHandoff({
             Run this command on the Controller host. The displayed code is not a credential and
             expires at {formatDate(delivery.expiresAt)}.
           </p>
-          <code className="device-command">sparerunner ui authorize '{delivery.code}'</code>
+          <code className="device-command">sprun ui authorize '{delivery.code}'</code>
           <button disabled={busy} onClick={() => void continueHandoff()} type="button">
             {busy ? "Checking authorization…" : "Continue after authorization"}
           </button>
@@ -674,7 +674,7 @@ function NodesPage({ api, csrfToken, snapshot, onRefresh, onToast, mutationsDisa
       ) : (
         <EmptyPanel
           title="No enrolled nodes"
-          detail="Create a join code, then run sparerunner join on a trusted computer."
+          detail="Create a join code, then run sprun join on a trusted computer."
         />
       )}
     </section>

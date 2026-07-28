@@ -36,8 +36,8 @@
       "type": "textfield",
       "required": false,
       "title": "SpareRunner CLI",
-      "description": "Path to the sparerunner binary. Leave empty to search the standard install locations.",
-      "placeholder": "/usr/local/bin/sparerunner"
+      "description": "Path to the sprun binary. Leave empty to search the standard install locations.",
+      "placeholder": "/usr/local/bin/sprun"
     },
     {
       "name": "stateDirectory",

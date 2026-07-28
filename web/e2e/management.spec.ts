@@ -83,7 +83,7 @@ test("authorizes the browser, manages join codes, enrolls a node, and drains it"
 
     await page.getByRole("button", { name: "Begin browser authorization" }).click();
     const handoffCommand = await page.locator(".device-command").textContent();
-    const handoffCode = exactCommandArgument(handoffCommand, "sparerunner ui authorize");
+    const handoffCode = exactCommandArgument(handoffCommand, "sprun ui authorize");
     phase = "browser_owner_authorization";
     await runSpareRunner(runtime.binary, [
       "ui",

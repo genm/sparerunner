@@ -49,6 +49,6 @@ sandbox.
 
 The threat model is satisfied only when a trusted live harness produces a
 `sparerunner.cross-platform-security.v1` manifest and
-`sparerunner evidence validate --file <manifest>` accepts it. Missing, partial, or
+`sprun evidence validate --file <manifest>` accepts it. Missing, partial, or
 locally mocked evidence must fail the gate; it must not be replaced with a
 default `passed` value.

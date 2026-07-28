@@ -9,8 +9,8 @@ before:
 
 builds:
   - id: controller
-    main: ./cmd/sparerunner
-    binary: sparerunner
+    main: ./cmd/sprun
+    binary: sprun
     goos:
       - linux
       - darwin

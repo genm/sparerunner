@@ -68,7 +68,7 @@ pipe instance. In the same elevated session, run:
 & "$env:ProgramFiles\SpareRunner\sparerunner.exe" join spr_...
 ```
 
-On Windows, `sparerunner join` does not write Agent state as the interactive user. It
+On Windows, `sprun join` does not write Agent state as the interactive user. It
 verifies that `\\.\pipe\SpareRunnerEnroll` belongs to the running LocalSystem
 `SpareRunnerAgent` SCM PID, submits one versioned request, and reports success only
 after the service has durably persisted and reloaded the node credential. If

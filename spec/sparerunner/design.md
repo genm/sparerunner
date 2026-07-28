@@ -59,7 +59,7 @@ No component claims another component's observations as fact without reconciliat
 
 ```text
 api/                       OpenAPI source and generated boundary
-cmd/sparerunner/           Controller and operator CLI entrypoint
+cmd/sprun/                 Controller and operator CLI entrypoint
 cmd/sparerunner-agent/     Node service entrypoint
 cmd/sparerunner-tray/      Optional per-user desktop tray client
 extensions/raycast/        Optional macOS Raycast extension over the CLI contract
@@ -110,7 +110,7 @@ this layout already answers them:
 | Daily commands | `just`; Process Compose for local processes; lefthook for local gates |
 | Agent transport | `net/http`, `coder/websocket`, node certificates, mDNS discovery |
 | Node-local control | Unix domain socket or Windows named pipe with OS peer-identity checks; optional cgo tray binary built natively per platform |
-| Launcher integration | Optional macOS Raycast extension in TypeScript over the versioned `sparerunner node --json` contract, with no stored credentials |
+| Launcher integration | Optional macOS Raycast extension in TypeScript over the versioned `sprun node --json` contract, with no stored credentials |
 | Management API | Contract-first `/api/v1` OpenAPI; generated Go and TypeScript types; SSE |
 | Storage | SQLite WAL with `database/sql` and a pure-Go driver; separate controller and agent DBs |
 | UI | React, TypeScript, Vite, pnpm; generated static output embedded into the Go binary |
@@ -121,6 +121,28 @@ this layout already answers them:
 Nx/Turborepo, gRPC/protobuf, Postgres, Redis, an OpenTelemetry backend, and
 Storybook are not used. The current graph, protocol volume, and deployment shape do
 not justify them.
+
+### Command and artifact names
+
+The operator types `sprun`. Everything durable keeps the formal name.
+
+| Surface | Name |
+| --- | --- |
+| Product | SpareRunner |
+| Operator CLI and controller binary | `sprun` |
+| Node service binary and OS service | `sparerunner-agent` |
+| Tray client binary | `sparerunner-tray` |
+| Go module, config directory, containment scope, runner label, mDNS service | `sparerunner` |
+
+`sprun` is a contraction of SPAre RUNner rather than an initialism, which is what
+keeps it distinctive: `spr` collides with common abbreviations and `srun` is
+Slurm's job-launch command. Only the CLI is shortened. A long-running background
+process must stay identifiable in a process list and in logs, so the Agent keeps
+`sparerunner-agent`; the controller is not registered as an OS service by any unit
+in `packaging/`, so shortening the binary an operator invokes by hand costs
+nothing there. Shipping a second identical binary as an alias was rejected: it
+would not shorten anything, and it would duplicate the controller artifact and its
+signing and attestation surface across every supported platform.
 
 ## Domain Model
 
@@ -364,7 +386,7 @@ stayed `queued` forever with all `github_*` tables empty.
 
 ## Enrollment and PKI
 
-`sparerunner init` creates a controller CA/identity, controller database, management
+`sprun init` creates a controller CA/identity, controller database, management
 session secret, and first one-time join code.
 
 A join code encodes:
@@ -585,7 +607,7 @@ existing identity check instead of being adopted or repaired.
 
 The mode is reported, not hidden. `sharedRunnerIdentity` is node state on the
 node-local status document, travels on the agent→controller snapshot and
-heartbeat, and is exposed through the management API, the `sparerunner node status`
+heartbeat, and is exposed through the management API, the `sprun node status`
 text output, and the tray, so an operator inspecting the fleet can tell which
 nodes lack uid isolation. The field is pure observation: it never grants capacity
 and never relaxes a check.
@@ -815,7 +837,7 @@ provides:
 - controller settings and non-secret YAML export/apply
 - health, version, and staleness metadata
 
-The App credential has two equal entry points: the `sparerunner github` CLI, which
+The App credential has two equal entry points: the `sprun github` CLI, which
 needs no browser and no management session, and the Web UI Manifest flow, which
 creates the App and returns the same credential in one confirmation. Both write
 through the controller-owned platform credential store, so the console is a
@@ -869,7 +891,7 @@ handoff without putting a bearer credential in a URL or command argument:
 2. the Controller returns a process-key-signed `twh1` code containing a 128-bit
    handoff ID, issue time, and claim digest. The code is a correlation value, not
    authentication authority;
-3. the UI displays `sparerunner ui authorize '<code>'`. That CLI command uses the
+3. the UI displays `sprun ui authorize '<code>'`. That CLI command uses the
    existing owner proof, temporary administrator session, CSRF, and logout path to
    approve the exact code;
 4. the same browser tab sends the code and its claim secret to
@@ -1003,7 +1025,7 @@ Targets simultaneously — which of those Targets it currently excludes.
 ```mermaid
 flowchart LR
     T["sparerunner-tray<br/>desktop user"] <-->|"local socket / named pipe"| A["Agent service"]
-    R["Raycast extension"] -->|"sparerunner node --json"| CLI["sparerunner CLI"]
+    R["Raycast extension"] -->|"sprun node --json"| CLI["sprun CLI"]
     CLI <-->|"local socket / named pipe"| A
     A <-->|"outbound WSS + mTLS"| C["Controller"]
     UI["Web UI"] <-->|"/api/v1"| C
@@ -1149,14 +1171,14 @@ matrix states which platform packages include it.
 ### Launcher integration
 
 Third-party desktop launchers integrate through the CLI rather than through the local
-socket. `sparerunner node status`, `sparerunner node pause`, and `sparerunner node resume` accept
+socket. `sprun node status`, `sprun node pause`, and `sprun node resume` accept
 `--json` and emit a stable, versioned, non-secret document containing the same fields
 the tray renders, including intent, `pending`, connection state, observation age, and
 running executions. A non-zero exit code always carries a machine-readable error
 class. This keeps one implementation of the local protocol, peer authorization, and
 degraded-state semantics; a launcher cannot invent a second dialect of them.
 
-Per-Target availability adds `sparerunner node targets [--exclude|--include] <targetId>`
+Per-Target availability adds `sprun node targets [--exclude|--include] <targetId>`
 and a `targets` field to the status document, so the nodectl local-control contract's
 version advances from 1 to 2: it strictly decodes, and pre-1.0 carries no
 backward-compatibility shim, exactly like the Agent-Controller protocol version.
@@ -1181,7 +1203,7 @@ optional step that gates no SpareRunner artifact.
 ### Surface parity and audit
 
 The availability mutation exists once in `/api/v1` and is used by the Web UI, by
-`sparerunner node pause`/`sparerunner node resume`, by the tray through the agent, and by the
+`sprun node pause`/`sprun node resume`, by the tray through the agent, and by the
 Raycast extension through the CLI. Each change persists an audit event with node ID,
 requesting surface, actor identity, previous and next value, and result. The
 per-Target exclude/include mutation and the eligible-Target list follow the same
@@ -1274,7 +1296,7 @@ secrets, or raw environment snapshots.
 - Security tests for public-scope rejection, token/certificate replay, JIT canaries,
   traversal/symlinks, unauthenticated/CSRF mutation, local control endpoint peer
   authorization, and diagnostics redaction
-- Golden-document contract tests for `sparerunner node --json`, plus launcher tests for
+- Golden-document contract tests for `sprun node --json`, plus launcher tests for
   missing, incompatible, and non-executable CLI resolution
 - Linux shared-runner-identity tests for opt-in-only selection, `setsid` descendant
   termination through `cgroup.kill`, fail-closed construction without a delegated

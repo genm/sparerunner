@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  printf 'usage: %s <sparerunner-binary>\n' "$0" >&2
+  printf 'usage: %s <sprun-binary>\n' "$0" >&2
   exit 2
 fi
 
@@ -39,7 +39,7 @@ if [[ "$(uname -s)" != Linux ]]; then
   exit 1
 fi
 if [[ ! -x "${binary}" ]]; then
-  printf 'sparerunner binary is not executable\n' >&2
+  printf 'sprun binary is not executable\n' >&2
   exit 1
 fi
 playwright="${repo_root}/web/node_modules/.bin/playwright"

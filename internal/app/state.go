@@ -622,7 +622,7 @@ func ensurePrivateStateDirectory(directory string) error {
 // state directory this host may write private material into. Commands that
 // touch credentials directly — rather than through the management API — call it
 // so an uninitialized or hand-made directory produces the actionable "run
-// sparerunner init" error instead of a platform credential-store failure, which on
+// sprun init" error instead of a platform credential-store failure, which on
 // Windows is how a missing directory ACL surfaces.
 func RequireInitializedControllerState(directory string) error {
 	absolute, err := absoluteStateDirectory(directory)

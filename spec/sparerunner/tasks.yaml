@@ -25,7 +25,7 @@ tasks:
       - LICENSE
       - README.md
       - SECURITY.md
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
       - go.mod
       - go.sum
@@ -43,7 +43,7 @@ tasks:
     acceptance:
       - The requirements, design, and task vocabulary are consistent and executable.
       - "`just check` succeeds and emits machine-readable Go and Vitest results."
-      - "`sparerunner` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
+      - "`sprun` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
       - Required CI always reports and uses only GitHub-hosted runners.
 
   - id: spr-002
@@ -134,7 +134,7 @@ tasks:
       - internal/enroll
       - internal/transport
       - internal/app
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
       - scripts/test-enrollment-cli-linux.sh
     ci_targets: [lint, test, build]
@@ -281,7 +281,7 @@ tasks:
       ownership, package selection, and locked-file cleanup handling.
     depends_on: [spr-005, spr-006, spr-007]
     paths:
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
       - internal/app
       - internal/enroll
@@ -385,7 +385,7 @@ tasks:
       - internal/config
       - internal/store
       - internal/app
-      - cmd/sparerunner
+      - cmd/sprun
     ci_targets: [lint, typecheck, test, build]
     pr_order: 12
     status: done
@@ -413,7 +413,7 @@ tasks:
       - internal/api
       - internal/auth
       - internal/store
-      - cmd/sparerunner
+      - cmd/sprun
       - web
       - internal/webui
     ci_targets: [lint, typecheck, test, build, e2e]
@@ -451,7 +451,7 @@ tasks:
       - internal/github
       - internal/platform
       - internal/store
-      - cmd/sparerunner
+      - cmd/sprun
       - web
       - test/contract/github
     ci_targets: [lint, typecheck, test, build, e2e]
@@ -482,7 +482,7 @@ tasks:
       - internal/scheduler
       - internal/transport
       - internal/api
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
     ci_targets: [lint, test, build]
     pr_order: 15
@@ -498,7 +498,7 @@ tasks:
       - Controller Draining, Quarantined, and Revoked override a local Accepting intent.
       - An unauthorized or unidentifiable local control peer is refused with no state change and an audit event.
       - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
-      - "`sparerunner node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
+      - "`sprun node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
 
   - id: spr-017
     title: Ship the desktop tray client
@@ -544,7 +544,7 @@ tasks:
       - internal/app
       - internal/nodectl
       - internal/scheduler
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
       - cmd/sparerunner-tray
       - extensions/raycast
@@ -688,7 +688,7 @@ tasks:
       - A job that calls `setsid()` under shared runner identity is still terminated with its descendants, and its workspace is not released until the descendant set is proven empty.
       - Construction without a unified cgroup v2 hierarchy, without a writable systemd user delegated subtree, without `cgroup.kill`, or with a non-absolute, wrongly-owned, non-0700, symlinked, or group/world-writable-ancestor root returns strong-ownership-unavailable and advertises zero capacity, never a weaker containment.
       - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
-      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `sparerunner node status`, and the tray, and grants no capacity and relaxes no check."
+      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `sprun node status`, and the tray, and grants no capacity and relaxes no check."
 
   - id: spr-022
     title: Rename the product to SpareRunner and restate its positioning
@@ -713,7 +713,7 @@ tasks:
       - SECURITY.md
       - docs
       - go.mod
-      - cmd/sparerunner
+      - cmd/sprun
       - cmd/sparerunner-agent
       - cmd/sparerunner-tray
       - internal
@@ -741,3 +741,43 @@ tasks:
       - Generated OpenAPI code, the embedded Web console, and lock files are regenerated rather than edited, and their drift gates pass.
       - The README status text matches the manifest status of every task it describes, and no capability is described as planned once it is implemented.
       - Every statement that invites the reader to lend a computer they also use themselves carries the private-scope and not-a-sandbox boundary with it.
+
+  - id: spr-023
+    title: Shorten the operator CLI to sprun
+    type: foundation
+    description: >
+      Rename the operator CLI and the controller binary it builds from
+      `sparerunner` to `sprun`, and add a repository agent skill that describes
+      the real command surface. Only the typed command changes. The product name,
+      Go module path, configuration directory, containment scope, runner label,
+      mDNS service, launchd label, service units, service accounts, and the Agent
+      and tray binaries keep the formal name, because they are read in process
+      lists, logs, and OS state where the long name is the point.
+    depends_on: [spr-022]
+    paths:
+      - spec/sparerunner
+      - .claude/skills
+      - README.md
+      - docs
+      - cmd/sprun
+      - .goreleaser.yaml
+      - justfile
+      - scripts
+      - packaging
+      - extensions/raycast
+      - test/live
+      - web
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 23
+    status: in_progress
+    notes:
+      - "`sprun` contracts SPAre RUNner instead of abbreviating it. `spr` was rejected as a common three-letter abbreviation that collides and searches poorly, and `srun` as Slurm's job-launch command."
+      - "Shipping `sprun` as a second binary beside `sparerunner` was rejected. It would not shorten the CLI, only add one, and it would duplicate the controller artifact and its signing and attestation surface on every supported platform. No unit in `packaging/` runs the controller as an OS service, so renaming the binary an operator invokes by hand does not cost process-list clarity; the Agent, which does run as a service, keeps `sparerunner-agent`."
+      - "2026-07-28: `scripts/cross-build.sh` builds `./cmd/$command` from a name list, so it does not contain the literal string `cmd/sparerunner` and was missed by the path search. `just check` does not run the cross-build matrix, so it only failed in CI. `just build-all` now passes for all twelve targets and is part of this task's verification."
+      - "The command surface is unchanged. `invite`, `jobs`, `status`, `doctor`, `dashboard`, and a `machines` vocabulary were raised alongside the short name and deliberately not implemented here: the first four do not exist, and `Machine` conflicts with the Node/GitHub Target/Runner Profile vocabulary that spr-022 settled."
+    acceptance:
+      - The built controller binary is `sprun`, and no build, script, packaging file, or workflow still refers to a `sparerunner` controller binary.
+      - Help output, the join-code instruction the controller prints, and every error that tells the operator what to run next name `sprun`.
+      - The runner label, scale-set name, configuration directory, containment scope, mDNS service, and launchd label are unchanged, so an enrolled node and a configured Target keep working across the rename.
+      - The Raycast extension finds the renamed binary in the standard install locations.
+      - The repository agent skill documents only commands that exist, and its examples run against the real CLI.
