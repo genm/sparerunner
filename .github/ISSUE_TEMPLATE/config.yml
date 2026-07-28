@@ -1,0 +1,15 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/genm/sparerunner/security/advisories/new
+    about: >-
+      Use GitHub private vulnerability reporting. Never disclose a suspected
+      vulnerability in a public issue.
+  - name: Read the specification first
+    url: https://github.com/genm/sparerunner/blob/main/spec/sparerunner/requirements.md
+    about: >-
+      The specification is the project source of truth. Behavior questions are
+      usually answered by the requirements, design, and task graph.
+  - name: Contribution process
+    url: https://github.com/genm/sparerunner/blob/main/CONTRIBUTING.md
+    about: How changes flow from specification to task to pull request.

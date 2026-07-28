@@ -1,0 +1,24 @@
+# Everything committed here is already LF, and .editorconfig asks contributors to
+# keep it that way. Declaring it stops a Windows checkout from reintroducing CRLF
+# into shell scripts, Go sources, or systemd units.
+* text=auto eol=lf
+
+# Binary assets carried by packaging and the Raycast extension.
+*.png binary
+*.ico binary
+*.icns binary
+
+# Generated contracts and embedded build output. These are committed on purpose —
+# scripts/check-generated-api.sh and scripts/check-generated-web.sh prove they
+# match their sources — but they are not hand-written code. Collapsing them in
+# review keeps a regenerated bundle from burying the change that caused it.
+internal/api/gen/openapi.gen.go linguist-generated=true
+web/src/api/generated/schema.ts linguist-generated=true
+internal/webui/assets/** linguist-generated=true
+
+# Lockfiles stay reviewable as text — a lockfile diff is supply-chain evidence —
+# but they are generated, so they are collapsed by default rather than hidden.
+web/pnpm-lock.yaml linguist-generated=true
+api/codegen/pnpm-lock.yaml linguist-generated=true
+extensions/raycast/package-lock.json linguist-generated=true
+go.sum linguist-generated=true
