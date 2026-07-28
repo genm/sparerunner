@@ -1243,21 +1243,17 @@ func (harness *runtimeFaultHarness) killControllerAfterQueueCommit(t *testing.T)
 		}
 		ready <- ""
 	}()
-	select {
-	case line := <-ready:
-		if line != "READY queue-committed" {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			t.Fatalf(
-				"Controller helper failed before pre-ack boundary: line=%q stderr=%q",
-				line,
-				stderr.String(),
-			)
-		}
-	case <-time.After(10 * time.Second):
+	// See killFaultHelper: the readiness wait is bounded by the package timeout
+	// rather than by a fixed deadline, because the helper is this same
+	// race-instrumented binary and its startup cost belongs to the machine.
+	if line := <-ready; line != "READY queue-committed" {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		t.Fatalf("Controller helper did not reach pre-ack boundary: %s", stderr.String())
+		t.Fatalf(
+			"Controller helper failed before pre-ack boundary: line=%q stderr=%q",
+			line,
+			stderr.String(),
+		)
 	}
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)
@@ -1305,21 +1301,17 @@ func runtimeFaultKillAcceptedStartHelper(
 		}
 		ready <- ""
 	}()
-	select {
-	case line := <-ready:
-		if line != "READY start-accepted" {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			t.Fatalf(
-				"Agent helper failed before accepted-Start boundary: line=%q stderr=%q",
-				line,
-				stderr.String(),
-			)
-		}
-	case <-time.After(10 * time.Second):
+	// See killFaultHelper: the readiness wait is bounded by the package timeout
+	// rather than by a fixed deadline, because the helper is this same
+	// race-instrumented binary and its startup cost belongs to the machine.
+	if line := <-ready; line != "READY start-accepted" {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		t.Fatalf("Agent helper did not reach accepted-Start boundary: %s", stderr.String())
+		t.Fatalf(
+			"Agent helper failed before accepted-Start boundary: line=%q stderr=%q",
+			line,
+			stderr.String(),
+		)
 	}
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)

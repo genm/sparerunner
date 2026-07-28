@@ -71,6 +71,13 @@ These instructions supplement the user-scope rules. The closest specification un
   surface once introduced. Capture and self-review screenshots for UI changes.
 - Required pull-request CI uses GitHub-hosted runners only. Real SpareRunner nodes are
   limited to trusted protected-branch and release workflows.
+- Untrusted decoding boundaries carry a fuzz target that asserts a differential
+  property, not only the absence of a panic. Run them with `just fuzz`; the
+  nightly deep-verification workflow runs the same targets far longer, and a
+  target missing from its matrix fails a test.
+- Verification that only needs wall-clock time belongs in
+  `.github/workflows/deep-verification.yml`, not in required CI. It runs on a
+  schedule only, so it never re-checks a pull request's unrelated surface.
 
 ## Security invariants
 
