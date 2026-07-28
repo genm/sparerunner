@@ -90,11 +90,15 @@ type BootstrapRequest struct {
 // require the receiver to be the LocalSystem TewakeAgent service so an
 // installer or interactive account can never become DPAPI authority.
 func ReceiveBootstrapRequest(ctx context.Context) (*BootstrapRequest, error) {
-	return receiveBootstrapRequest(ctx, true)
+	return receiveBootstrapRequest(ctx, BootstrapPipeName, true)
 }
 
+// receiveBootstrapRequest takes the pipe name as a parameter only so tests can
+// give each case its own single-instance pipe. Production always goes through
+// ReceiveBootstrapRequest and therefore always uses BootstrapPipeName.
 func receiveBootstrapRequest(
 	ctx context.Context,
+	pipeName string,
 	requireSystem bool,
 ) (*BootstrapRequest, error) {
 	if ctx == nil || ctx.Err() != nil {
@@ -106,7 +110,7 @@ func receiveBootstrapRequest(
 			return nil, ErrBootstrapIdentity
 		}
 	}
-	name, err := syswindows.UTF16PtrFromString(BootstrapPipeName)
+	name, err := syswindows.UTF16PtrFromString(pipeName)
 	if err != nil {
 		return nil, ErrBootstrapUnavailable
 	}
@@ -137,7 +141,7 @@ func receiveBootstrapRequest(
 	if err != nil {
 		return nil, ErrBootstrapUnavailable
 	}
-	file := os.NewFile(uintptr(handle), BootstrapPipeName)
+	file := os.NewFile(uintptr(handle), pipeName)
 	if file == nil {
 		syswindows.CloseHandle(handle)
 		return nil, ErrBootstrapUnavailable
@@ -279,11 +283,14 @@ func SubmitBootstrapJoin(
 	ctx context.Context,
 	options BootstrapJoinOptions,
 ) (string, error) {
-	return submitBootstrapJoin(ctx, options, true)
+	return submitBootstrapJoin(ctx, BootstrapPipeName, options, true)
 }
 
+// submitBootstrapJoin mirrors receiveBootstrapRequest: the pipe name is a
+// parameter for test isolation, and production always passes BootstrapPipeName.
 func submitBootstrapJoin(
 	ctx context.Context,
+	pipeName string,
 	options BootstrapJoinOptions,
 	verifyServer bool,
 ) (string, error) {
@@ -311,7 +318,7 @@ func submitBootstrapJoin(
 	}
 	connectContext, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	file, handle, err := connectBootstrapPipe(connectContext)
+	file, handle, err := connectBootstrapPipe(connectContext, pipeName)
 	if err != nil {
 		return "", err
 	}
@@ -345,8 +352,11 @@ func submitBootstrapJoin(
 	return response.NodeID, nil
 }
 
-func connectBootstrapPipe(ctx context.Context) (*os.File, syswindows.Handle, error) {
-	name, err := syswindows.UTF16PtrFromString(BootstrapPipeName)
+func connectBootstrapPipe(
+	ctx context.Context,
+	pipeName string,
+) (*os.File, syswindows.Handle, error) {
+	name, err := syswindows.UTF16PtrFromString(pipeName)
 	if err != nil {
 		return nil, 0, ErrBootstrapUnavailable
 	}
@@ -361,7 +371,7 @@ func connectBootstrapPipe(ctx context.Context) (*os.File, syswindows.Handle, err
 			0,
 		)
 		if openErr == nil {
-			file := os.NewFile(uintptr(handle), BootstrapPipeName)
+			file := os.NewFile(uintptr(handle), pipeName)
 			if file == nil {
 				syswindows.CloseHandle(handle)
 				return nil, 0, ErrBootstrapUnavailable

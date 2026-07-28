@@ -145,6 +145,14 @@ jobs:
       - name: Test
         run: go test ./...
 
+      # The Windows enrollment bootstrap pipe is single-instance by design, so a
+      # test that leaks its server makes later tests fail with
+      # ErrBootstrapUnavailable. Repeating the package is what actually exposes
+      # that class of leak; a single pass does not.
+      - name: Stress Windows platform tests
+        if: runner.os == 'Windows'
+        run: go test -count=20 ./internal/platform/windows/
+
       - name: Build controller
         run: go build -trimpath ./cmd/tewake
 
