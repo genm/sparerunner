@@ -618,6 +618,26 @@ func ensurePrivateStateDirectory(directory string) error {
 	return validatePrivateStateDirectoryInfo(directory, info)
 }
 
+// RequireInitializedControllerState reports whether a directory is a controller
+// state directory this host may write private material into. Commands that
+// touch credentials directly — rather than through the management API — call it
+// so an uninitialized or hand-made directory produces the actionable "run
+// tewake init" error instead of a platform credential-store failure, which on
+// Windows is how a missing directory ACL surfaces.
+func RequireInitializedControllerState(directory string) error {
+	absolute, err := absoluteStateDirectory(directory)
+	if err != nil {
+		return err
+	}
+	if err := validatePrivateStateDirectory(absolute); err != nil {
+		return fmt.Errorf("%w: controller state directory: %v", ErrNotInitialized, err)
+	}
+	if _, err := os.Lstat(filepath.Join(absolute, controllerIdentityFile)); err != nil {
+		return fmt.Errorf("%w: controller identity: %v", ErrNotInitialized, err)
+	}
+	return nil
+}
+
 func validatePrivateStateDirectory(directory string) error {
 	info, err := os.Lstat(directory)
 	if err != nil {
