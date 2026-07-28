@@ -27,6 +27,7 @@ type controllerAgentStore interface {
 		string,
 		domain.AvailabilityIntent,
 		*[]domain.TargetID,
+		*bool,
 	) error
 	ReadNodeTargetExclusions(context.Context, domain.NodeID) ([]domain.TargetID, error)
 	RecordAgentExecutionUpdate(context.Context, store.AgentExecutionUpdate) (bool, error)
@@ -104,18 +105,28 @@ func (consumers storeBackedAgentConsumers) HandleAgentOwnerState(
 		set := append([]domain.TargetID{}, record.ExcludedTargets...)
 		exclusions = &set
 	}
+	var sharedRunnerIdentity *bool
+	if record.SharedRunnerIdentity != nil {
+		reported := *record.SharedRunnerIdentity
+		sharedRunnerIdentity = &reported
+	}
 	if err := consumers.store.RecordNodeOwnerState(
 		ctx,
 		record.NodeID,
 		record.SnapshotDigest,
 		record.AvailabilityIntent,
 		exclusions,
+		sharedRunnerIdentity,
 	); err != nil {
 		return err
 	}
 	if consumers.projection == nil {
 		return nil
 	}
+	// The scheduling projection is deliberately not told about the isolation
+	// mode: it is operator-visible observation with no admission consequence, so
+	// giving it a projection input would be the first step toward it gating
+	// something.
 	return consumers.projection.ApplyNodeOwnerState(
 		record.NodeID, record.AvailabilityIntent, record.ExcludedTargets)
 }
@@ -300,15 +311,23 @@ func (consumers storeBackedAgentConsumers) HandleAgentSnapshot(ctx context.Conte
 	if snapshot.ExcludedTargets != nil {
 		excluded = append([]domain.TargetID{}, *snapshot.ExcludedTargets...)
 	}
+	// SharedRunnerIdentity keeps its nil-versus-present distinction for the same
+	// reason: nil is "not reported" and preserves the adopted value.
+	var sharedRunnerIdentity *bool
+	if snapshot.SharedRunnerIdentity != nil {
+		reported := *snapshot.SharedRunnerIdentity
+		sharedRunnerIdentity = &reported
+	}
 	return consumers.store.RecordAgentSnapshot(ctx, store.NodeAgentSnapshot{
-		NodeID:             snapshot.NodeID,
-		OS:                 domain.OperatingSystem(snapshot.OS),
-		Architecture:       domain.Architecture(snapshot.Arch),
-		RunnerVersion:      snapshot.RunnerVersion,
-		NativeRunnerReady:  snapshot.NativeRunnerReady,
-		AvailabilityIntent: snapshot.AvailabilityIntent,
-		ExcludedTargets:    excluded,
-		Journal:            journal,
+		NodeID:               snapshot.NodeID,
+		OS:                   domain.OperatingSystem(snapshot.OS),
+		Architecture:         domain.Architecture(snapshot.Arch),
+		RunnerVersion:        snapshot.RunnerVersion,
+		NativeRunnerReady:    snapshot.NativeRunnerReady,
+		AvailabilityIntent:   snapshot.AvailabilityIntent,
+		ExcludedTargets:      excluded,
+		SharedRunnerIdentity: sharedRunnerIdentity,
+		Journal:              journal,
 	})
 }
 

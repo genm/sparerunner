@@ -1199,6 +1199,7 @@ function NodeStatus({ node }: { readonly node: Schema["Node"] }) {
       {qualifier ? <small>· {qualifier}</small> : null}
       <AvailabilityIntentBadge intent={node.availabilityIntent} />
       <BrokenRunnerBadge node={node} />
+      <SharedRunnerIdentityBadge node={node} />
       <ExcludedTargetsBadge targetIds={node.excludedTargets} />
     </div>
   );
@@ -1221,6 +1222,20 @@ function BrokenRunnerBadge({ node }: { readonly node: Schema["Node"] }) {
   // double-flagged here.
   if (node.observedState !== "online" || node.nativeRunnerReady) return null;
   return <span className="badge badge-runner-broken">Runner unavailable</span>;
+}
+function SharedRunnerIdentityBadge({ node }: { readonly node: Schema["Node"] }) {
+  // Only the weaker mode is flagged. An absent value means the node never
+  // reported the property, which is not a claim of isolation, so it renders
+  // nothing rather than implying the stronger mode.
+  if (node.sharedRunnerIdentity !== true) return null;
+  return (
+    <span
+      className="badge badge-shared-identity"
+      title="Jobs run as the agent user on this node; there is no UID isolation between the agent and the jobs it runs."
+    >
+      Shared runner identity
+    </span>
+  );
 }
 function ExcludedTargetsBadge({
   targetIds,

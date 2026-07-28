@@ -206,7 +206,23 @@ type FileRuntime struct {
 	cgroupRoot string
 	fenceRoot  string
 	launcher   PipeLauncher
+	// owner is the credential every durable fence file and pinned directory must
+	// carry. The privileged Supervisor uses rootFileOwner, which reproduces the
+	// original root-only checks exactly. The opt-in shared-identity runtime uses
+	// the Agent's own credential; it never widens what root mode accepts.
+	owner fileOwner
 }
+
+// fileOwner is the expected uid/gid of the durable state one runtime owns.
+type fileOwner struct{ UID, GID int }
+
+var rootFileOwner = fileOwner{UID: 0, GID: 0}
+
+func (owner fileOwner) owns(info os.FileInfo) bool {
+	return info != nil && ownedBy(info, owner.UID, owner.GID)
+}
+
+func (owner fileOwner) isRoot() bool { return owner.UID == 0 && owner.GID == 0 }
 
 const (
 	finalizedFenceDirectory = ".finalized"
@@ -347,6 +363,10 @@ func unescapeMountInfoPath(value string) (string, error) {
 }
 
 func NewFileRuntime(cgroupRoot, fenceRoot string, launcher PipeLauncher) (*FileRuntime, error) {
+	return newFileRuntime(cgroupRoot, fenceRoot, launcher, rootFileOwner)
+}
+
+func newFileRuntime(cgroupRoot, fenceRoot string, launcher PipeLauncher, owner fileOwner) (*FileRuntime, error) {
 	if runtime.GOOS != "linux" || cgroupRoot == "" || fenceRoot == "" || launcher == nil {
 		return nil, runner.ErrStrongOwnershipUnavailable
 	}
@@ -364,6 +384,7 @@ func NewFileRuntime(cgroupRoot, fenceRoot string, launcher PipeLauncher) (*FileR
 		cgroupRoot: filepath.Clean(cgroupRoot),
 		fenceRoot:  filepath.Clean(fenceRoot),
 		launcher:   launcher,
+		owner:      owner,
 	}
 	if err := nativeRuntime.ValidateAdmission(context.Background()); err != nil {
 		return nil, runner.ErrStrongOwnershipUnavailable
@@ -378,12 +399,12 @@ func (runtime *FileRuntime) ValidateAdmission(ctx context.Context) error {
 		return runner.ErrStrongOwnershipUnavailable
 	}
 	if runtime == nil ||
-		!safeRootedDirectory(runtime.cgroupRoot, 0) ||
+		!runtime.safeCgroupRoot() ||
 		!isCgroupV2(runtime.cgroupRoot) ||
-		!safeRootedDirectory(runtime.fenceRoot, 0o700) {
+		!safeOwnedDirectory(runtime.fenceRoot, 0o700, runtime.owner) {
 		return runner.ErrStrongOwnershipUnavailable
 	}
-	cgroup, err := openPinnedDirectory(runtime.cgroupRoot)
+	cgroup, err := runtime.openPinnedCgroupRoot()
 	if err != nil {
 		return runner.ErrStrongOwnershipUnavailable
 	}
@@ -399,16 +420,40 @@ func (runtime *FileRuntime) ValidateAdmission(ctx context.Context) error {
 		!cgroupControlWritable(cgroup, "cgroup.kill") {
 		return runner.ErrStrongOwnershipUnavailable
 	}
-	fence, err := openPinnedDirectory(runtime.fenceRoot)
+	fence, err := openPinnedDirectoryOwned(runtime.fenceRoot, runtime.owner.owns)
 	if err != nil {
 		return runner.ErrStrongOwnershipUnavailable
 	}
 	return fence.Close()
 }
 
+// safeCgroupRoot keeps the privileged walk unchanged and applies the delegation
+// proof only in shared-identity mode.
+func (runtime *FileRuntime) safeCgroupRoot() bool {
+	if runtime.owner.isRoot() {
+		return safeRootedDirectory(runtime.cgroupRoot, 0)
+	}
+	return safeDelegatedCgroupRoot(runtime.cgroupRoot, runtime.owner.UID)
+}
+
+func (runtime *FileRuntime) openPinnedCgroupRoot() (*os.File, error) {
+	if runtime.owner.isRoot() {
+		return openPinnedDirectory(runtime.cgroupRoot)
+	}
+	uid := runtime.owner.UID
+	return openPinnedDirectoryOwned(runtime.cgroupRoot, func(info os.FileInfo) bool {
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		return ok && uid != 0 && int(stat.Uid) == uid
+	})
+}
+
 func openPinnedDirectory(name string) (*os.File, error) {
+	return openPinnedDirectoryOwned(name, rootOwned)
+}
+
+func openPinnedDirectoryOwned(name string, owned func(os.FileInfo) bool) (*os.File, error) {
 	info, err := os.Lstat(name)
-	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !rootOwned(info) {
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !owned(info) {
 		return nil, runner.ErrStrongOwnershipUnavailable
 	}
 	fd, err := syscall.Open(name, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW, 0)
@@ -468,7 +513,7 @@ func (runtime *FileRuntime) LockFence(ctx context.Context, containment runner.Co
 		return finalizedFence{}, nil
 	}
 	directory := filepath.Join(runtime.fenceRoot, containment.OwnerID)
-	if err := os.MkdirAll(directory, 0o700); err != nil || !safeRootedDirectory(directory, 0o700) {
+	if err := os.MkdirAll(directory, 0o700); err != nil || !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return nil, runner.ErrCleanupFailed
 	}
 	// The lock is owner-scoped rather than token-scoped. A corrupt replay with a
@@ -493,7 +538,7 @@ func (runtime *FileRuntime) LockFence(ctx context.Context, containment runner.Co
 			return nil, runner.ErrCleanupFailed
 		}
 	}
-	if !validFenceFile(lock, lockPath) || !fenceFileHasValue(lock, "tewake-containment-lock-v1\n") {
+	if !validFenceFile(lock, lockPath, runtime.owner) || !fenceFileHasValue(lock, "tewake-containment-lock-v1\n") {
 		closeLock()
 		return nil, runner.ErrCleanupFailed
 	}
@@ -525,7 +570,7 @@ func (runtime *FileRuntime) LockFence(ctx context.Context, containment runner.Co
 		launched: fenceStateContent(containment, fenceStateLaunched),
 		revoked:  fenceStateContent(containment, fenceStateRevoked),
 	}
-	if !validFenceFile(state, statePath) {
+	if !validFenceFile(state, statePath, runtime.owner) {
 		_ = state.Close()
 		closeLock()
 		return nil, runner.ErrCleanupFailed
@@ -564,7 +609,7 @@ func (runtime *FileRuntime) FinalizeFence(ctx context.Context, containment runne
 		return runner.ErrCleanupFailed
 	}
 	directory := filepath.Join(runtime.fenceRoot, containment.OwnerID)
-	if !safeRootedDirectory(directory, 0o700) {
+	if !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	lockPath := filepath.Join(directory, "containment.lock")
@@ -582,9 +627,9 @@ func (runtime *FileRuntime) FinalizeFence(ctx context.Context, containment runne
 		unlockFenceFile(lock)
 		return runner.ErrCleanupFailed
 	}
-	if !validFenceFile(lock, lockPath) ||
+	if !validFenceFile(lock, lockPath, runtime.owner) ||
 		!fenceFileHasValue(lock, "tewake-containment-lock-v1\n") ||
-		!validFenceFile(state, statePath) ||
+		!validFenceFile(state, statePath, runtime.owner) ||
 		!fenceFileHasValue(state, fenceStateContent(containment, fenceStateRevoked)) ||
 		!exactFenceOwnerEntries(directory, containment.FenceToken) {
 		_ = state.Close()
@@ -647,7 +692,7 @@ func (runtime *FileRuntime) GarbageCollectFence(ctx context.Context, containment
 	defer root.Close()
 	name := runtime.finalizedFenceName(containment)
 	pathInfo, err := root.Lstat(name)
-	if err != nil || !safeFinalizedFenceInfo(pathInfo) {
+	if err != nil || !safeFinalizedFenceInfo(pathInfo, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	opened, err := root.Open(name)
@@ -670,7 +715,7 @@ func (runtime *FileRuntime) GarbageCollectFence(ctx context.Context, containment
 // launched runners; Supervisor shutdown revokes and empties every owned cgroup.
 func (runtime *FileRuntime) Shutdown(ctx context.Context) error {
 	if err := ctx.Err(); err != nil || runtime == nil ||
-		!safeRootedDirectory(runtime.fenceRoot, 0o700) {
+		!safeOwnedDirectory(runtime.fenceRoot, 0o700, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	entries, err := os.ReadDir(runtime.fenceRoot)
@@ -720,7 +765,7 @@ func (runtime *FileRuntime) Shutdown(ctx context.Context) error {
 
 func (runtime *FileRuntime) singleFenceToken(owner string) (string, error) {
 	directory := filepath.Join(runtime.fenceRoot, owner)
-	if !safeRootedDirectory(directory, 0o700) {
+	if !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return "", runner.ErrCleanupFailed
 	}
 	entries, err := os.ReadDir(directory)
@@ -800,7 +845,7 @@ func (runtime *FileRuntime) removeFinalizedOwner(ctx context.Context, containmen
 	if _, err := os.Lstat(directory); errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err := ctx.Err(); err != nil || !safeRootedDirectory(directory, 0o700) {
+	if err := ctx.Err(); err != nil || !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	entries, err := os.ReadDir(directory)
@@ -829,7 +874,7 @@ func (runtime *FileRuntime) removeFinalizedOwner(ctx context.Context, containmen
 			_ = lock.Close()
 			return err
 		}
-		if !validFenceFile(lock, lockPath) ||
+		if !validFenceFile(lock, lockPath, runtime.owner) ||
 			!fenceFileHasValue(lock, "tewake-containment-lock-v1\n") {
 			unlockFenceFile(lock)
 			return runner.ErrCleanupFailed
@@ -843,7 +888,7 @@ func (runtime *FileRuntime) removeFinalizedOwner(ctx context.Context, containmen
 			unlockFenceFile(lock)
 			return runner.ErrCleanupFailed
 		}
-		if !validFenceFile(state, statePath) ||
+		if !validFenceFile(state, statePath, runtime.owner) ||
 			!fenceFileHasValue(state, fenceStateContent(containment, fenceStateRevoked)) {
 			_ = state.Close()
 			unlockFenceFile(lock)
@@ -886,7 +931,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
-	if err != nil || !safeRootedDirectory(directory, 0o700) {
+	if err != nil || !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	matchingTemporary := ""
@@ -899,7 +944,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 		}
 		path := filepath.Join(directory, entry.Name())
 		info, err := os.Lstat(path)
-		if err != nil || !safeFinalizingFenceInfo(info) {
+		if err != nil || !safeFinalizingFenceInfo(info, runtime.owner) {
 			return runner.ErrCleanupFailed
 		}
 		file, err := openExistingFenceFile(path)
@@ -930,7 +975,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 	}
 	defer temporary.Close()
 	temporaryInfo, err := temporary.Stat()
-	if err != nil || !safeFinalizingFenceInfo(temporaryInfo) ||
+	if err != nil || !safeFinalizingFenceInfo(temporaryInfo, runtime.owner) ||
 		!fenceFileHasValue(temporary, finalizedFenceContent(containment)) {
 		return runner.ErrCleanupFailed
 	}
@@ -954,7 +999,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 	}
 	defer finalized.Close()
 	openedFinalizedInfo, err := finalized.Stat()
-	if err != nil || !sameTwoLinkFinalizedFiles(
+	if err != nil || !sameTwoLinkFinalizedFiles(runtime.owner,
 		temporaryInfo,
 		finalizedInfo,
 		openedFinalizedInfo,
@@ -966,7 +1011,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 		return runner.ErrCleanupFailed
 	}
 	recoveredInfo, err := os.Lstat(finalizedPath)
-	if err != nil || !safeFinalizedFenceInfo(recoveredInfo) ||
+	if err != nil || !safeFinalizedFenceInfo(recoveredInfo, runtime.owner) ||
 		!os.SameFile(openedFinalizedInfo, recoveredInfo) {
 		return runner.ErrCleanupFailed
 	}
@@ -976,7 +1021,7 @@ func (runtime *FileRuntime) recoverFinalizedPublication(containment runner.Conta
 func (runtime *FileRuntime) publishFinalizedFence(containment runner.ContainmentRef) error {
 	directory := filepath.Join(runtime.fenceRoot, finalizedFenceDirectory)
 	if err := os.MkdirAll(directory, 0o700); err != nil ||
-		!safeRootedDirectory(directory, 0o700) {
+		!safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	finalizedRoot, err := os.OpenRoot(directory)
@@ -1011,7 +1056,7 @@ func (runtime *FileRuntime) publishFinalizedFence(containment runner.Containment
 		return runner.ErrCleanupFailed
 	}
 	info, err := temporary.Stat()
-	if err != nil || !safeFinalizedFenceInfo(info) {
+	if err != nil || !safeFinalizedFenceInfo(info, runtime.owner) {
 		return runner.ErrCleanupFailed
 	}
 	if err := finalizedRoot.Link(temporaryName, name); err != nil {
@@ -1021,7 +1066,7 @@ func (runtime *FileRuntime) publishFinalizedFence(containment runner.Containment
 		return runner.ErrCleanupFailed
 	}
 	pathInfo, err := finalizedRoot.Lstat(name)
-	if err != nil || !safeFinalizedFenceInfo(pathInfo) || !os.SameFile(info, pathInfo) {
+	if err != nil || !safeFinalizedFenceInfo(pathInfo, runtime.owner) || !os.SameFile(info, pathInfo) {
 		return runner.ErrCleanupFailed
 	}
 	return nil
@@ -1033,7 +1078,7 @@ func (runtime *FileRuntime) fenceFinalized(containment runner.ContainmentRef) (b
 	if errors.Is(err, os.ErrNotExist) {
 		return false, nil
 	}
-	if err != nil || !safeRootedDirectory(directory, 0o700) {
+	if err != nil || !safeOwnedDirectory(directory, 0o700, runtime.owner) {
 		return false, runner.ErrCleanupFailed
 	}
 	expectedName := runtime.finalizedFenceName(containment)
@@ -1048,14 +1093,14 @@ func (runtime *FileRuntime) fenceFinalized(containment runner.ContainmentRef) (b
 		found = true
 		path := filepath.Join(directory, entry.Name())
 		info, statErr := os.Lstat(path)
-		if statErr != nil || !safeFinalizedFenceInfo(info) {
+		if statErr != nil || !safeFinalizedFenceInfo(info, runtime.owner) {
 			return false, runner.ErrCleanupFailed
 		}
 		file, openErr := openExistingFenceFile(path)
 		if openErr != nil {
 			return false, runner.ErrCleanupFailed
 		}
-		valid := validFenceFile(file, path) &&
+		valid := validFenceFile(file, path, runtime.owner) &&
 			fenceFileHasValue(file, finalizedFenceContent(containment))
 		closeErr := file.Close()
 		if !valid || closeErr != nil {
@@ -1095,13 +1140,13 @@ func fenceStateContent(containment runner.ContainmentRef, state string) string {
 		"state=" + state + "\n"
 }
 
-func safeFinalizedFenceInfo(info os.FileInfo) bool {
-	return info != nil && info.Mode().IsRegular() && rootOwned(info) &&
+func safeFinalizedFenceInfo(info os.FileInfo, owner fileOwner) bool {
+	return info != nil && info.Mode().IsRegular() && owner.owns(info) &&
 		info.Mode().Perm() == 0o600 && singleLink(info)
 }
 
-func safeFinalizingFenceInfo(info os.FileInfo) bool {
-	if info == nil || !info.Mode().IsRegular() || !rootOwned(info) ||
+func safeFinalizingFenceInfo(info os.FileInfo, owner fileOwner) bool {
+	if info == nil || !info.Mode().IsRegular() || !owner.owns(info) ||
 		info.Mode().Perm() != 0o600 {
 		return false
 	}
@@ -1109,14 +1154,14 @@ func safeFinalizingFenceInfo(info os.FileInfo) bool {
 	return ok && (stat.Nlink == 1 || stat.Nlink == 2)
 }
 
-func sameTwoLinkFinalizedFiles(infos ...os.FileInfo) bool {
+func sameTwoLinkFinalizedFiles(owner fileOwner, infos ...os.FileInfo) bool {
 	if len(infos) == 0 {
 		return false
 	}
 	for _, info := range infos {
 		stat, ok := info.Sys().(*syscall.Stat_t)
 		if !ok || stat.Nlink != 2 || !info.Mode().IsRegular() ||
-			!rootOwned(info) || info.Mode().Perm() != 0o600 ||
+			!owner.owns(info) || info.Mode().Perm() != 0o600 ||
 			!os.SameFile(infos[0], info) {
 			return false
 		}
@@ -1267,11 +1312,11 @@ func initializeFenceFile(file *os.File, value, directory string) error {
 	return syncDirectory(directory)
 }
 
-func validFenceFile(file *os.File, path string) bool {
+func validFenceFile(file *os.File, path string, owner fileOwner) bool {
 	info, err := file.Stat()
 	pathInfo, pathErr := os.Lstat(path)
 	return err == nil && pathErr == nil &&
-		info.Mode().IsRegular() && rootOwned(info) &&
+		info.Mode().IsRegular() && owner.owns(info) &&
 		os.SameFile(info, pathInfo) && info.Mode().Perm() == 0o600
 }
 
@@ -1353,7 +1398,7 @@ func (runtime *FileRuntime) durableFenceRevoked(containment runner.ContainmentRe
 		return false
 	}
 	defer state.Close()
-	return validFenceFile(state, path) &&
+	return validFenceFile(state, path, runtime.owner) &&
 		fenceFileHasValue(state, fenceStateContent(containment, fenceStateRevoked))
 }
 
@@ -1536,13 +1581,63 @@ func currentBootEpoch() (string, error) {
 }
 
 func safeRootedDirectory(value string, finalMode os.FileMode) bool {
+	return safeOwnedDirectory(value, finalMode, rootFileOwner)
+}
+
+// safeOwnedDirectory proves that no identity other than root or the owning
+// credential can rename, replace, or traverse into the durable root. With
+// rootFileOwner it is exactly the original root-only walk: every component,
+// including the leaf, must be root-owned.
+func safeOwnedDirectory(value string, finalMode os.FileMode, owner fileOwner) bool {
 	cleaned := filepath.Clean(value)
 	for current := cleaned; ; current = filepath.Dir(current) {
 		info, err := os.Lstat(current)
-		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || !rootOwned(info) || info.Mode().Perm()&0o022 != 0 {
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm()&0o022 != 0 {
 			return false
 		}
-		if current == cleaned && finalMode != 0 && info.Mode().Perm() != finalMode {
+		if current == cleaned {
+			if !owner.owns(info) {
+				return false
+			}
+			if finalMode != 0 && info.Mode().Perm() != finalMode {
+				return false
+			}
+		} else if !rootOwned(info) && !owner.owns(info) {
+			return false
+		}
+		if current == "/" {
+			return true
+		}
+	}
+}
+
+// safeDelegatedCgroupRoot validates the shared-identity cgroup root. cgroupfs
+// ancestors are root-owned by construction and systemd's user delegation
+// chowns only the leaf's uid, leaving its group implementation defined, so the
+// leaf is proven by uid alone. Write capability is proven separately by
+// ValidateAdmission through cgroup.kill and by EnsureCgroup's mkdir.
+func safeDelegatedCgroupRoot(value string, uid int) bool {
+	cleaned := filepath.Clean(value)
+	if cleaned == "/" || !filepath.IsAbs(cleaned) {
+		return false
+	}
+	for current := cleaned; ; current = filepath.Dir(current) {
+		info, err := os.Lstat(current)
+		if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 ||
+			info.Mode().Perm()&0o022 != 0 {
+			return false
+		}
+		stat, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return false
+		}
+		if current == cleaned {
+			// A delegated subtree the Agent does not own cannot be a containment
+			// boundary: it could not create children or write cgroup.kill.
+			if int(stat.Uid) != uid || uid == 0 {
+				return false
+			}
+		} else if stat.Uid != 0 && int(stat.Uid) != uid {
 			return false
 		}
 		if current == "/" {

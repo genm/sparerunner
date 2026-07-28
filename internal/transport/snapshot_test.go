@@ -101,6 +101,73 @@ func TestAgentSnapshotDigestExcludesExcludedTargets(t *testing.T) {
 	}
 }
 
+// TestAgentSnapshotDigestExcludesSharedRunnerIdentity proves the isolation mode
+// is owner-visible observed state and not journal authority: reporting it, and
+// flipping it, must leave the digest an in-flight readiness lease is keyed to
+// completely unchanged.
+func TestAgentSnapshotDigestExcludesSharedRunnerIdentity(t *testing.T) {
+	snapshot := testAgentSnapshot()
+	digest, err := AgentSnapshotDigest(snapshot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reported := range []bool{false, true} {
+		snapshot.SharedRunnerIdentity = &reported
+		changedDigest, err := AgentSnapshotDigest(snapshot)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if changedDigest != digest {
+			t.Fatalf(
+				"sharedRunnerIdentity=%t changed the readiness-lease-keyed journal digest: %s != %s",
+				reported, changedDigest, digest,
+			)
+		}
+	}
+}
+
+func TestAgentSnapshotSharedRunnerIdentityRoundTrip(t *testing.T) {
+	base := testAgentSnapshot()
+
+	// Absent: the field is omitted entirely and decodes back to nil, so "not
+	// reported" is never silently read as the isolated mode.
+	absentPayload, err := EncodeAgentSnapshot(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(absentPayload), "sharedRunnerIdentity") {
+		t.Fatalf("absent SharedRunnerIdentity was encoded: %s", absentPayload)
+	}
+	decodedAbsent, err := DecodeAgentSnapshot(absentPayload)
+	if err != nil || decodedAbsent.SharedRunnerIdentity != nil {
+		t.Fatalf(
+			"decoded absent SharedRunnerIdentity = %#v, err = %v",
+			decodedAbsent.SharedRunnerIdentity, err,
+		)
+	}
+
+	// Both present values survive the round trip as distinct observations.
+	for _, reported := range []bool{true, false} {
+		present := base
+		present.SharedRunnerIdentity = &reported
+		payload, err := EncodeAgentSnapshot(present)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(payload), "sharedRunnerIdentity") {
+			t.Fatalf("present SharedRunnerIdentity=%t was not encoded: %s", reported, payload)
+		}
+		decoded, err := DecodeAgentSnapshot(payload)
+		if err != nil || decoded.SharedRunnerIdentity == nil ||
+			*decoded.SharedRunnerIdentity != reported {
+			t.Fatalf(
+				"decoded SharedRunnerIdentity = %#v, err = %v, want %t",
+				decoded.SharedRunnerIdentity, err, reported,
+			)
+		}
+	}
+}
+
 func TestAgentSnapshotExcludedTargetsRoundTrip(t *testing.T) {
 	base := testAgentSnapshot()
 

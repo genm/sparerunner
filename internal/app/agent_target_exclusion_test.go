@@ -365,7 +365,7 @@ func TestAgentSnapshotAndHeartbeatCarryTheExclusionSet(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	availability, err := newAgentAvailability(ctx, agentStore, "node-1")
+	availability, err := newAgentAvailability(ctx, agentStore, "node-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -376,7 +376,8 @@ func TestAgentSnapshotAndHeartbeatCarryTheExclusionSet(t *testing.T) {
 
 	state := &AgentState{Store: agentStore, NodeID: "node-1"}
 	snapshot, err := buildAgentSnapshot(
-		ctx, state, runner.OfficialRunnerVersion, true, domain.AvailabilityAccepting, &excluded)
+		ctx, state, runner.OfficialRunnerVersion, true, domain.AvailabilityAccepting,
+		&excluded, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +408,7 @@ func TestAgentStatusJoinsLocalExclusionsAgainstTheControllerEcho(t *testing.T) {
 	agentStore := openAgentCommandStore(t)
 	defer agentStore.Close()
 	ctx := context.Background()
-	availability, err := newAgentAvailability(ctx, agentStore, "node-1")
+	availability, err := newAgentAvailability(ctx, agentStore, "node-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -455,7 +456,7 @@ func TestAgentTargetExclusionCapIsRejectedAsAnInvalidRequest(t *testing.T) {
 	agentStore := openAgentCommandStore(t)
 	defer agentStore.Close()
 	ctx := context.Background()
-	availability, err := newAgentAvailability(ctx, agentStore, "node-1")
+	availability, err := newAgentAvailability(ctx, agentStore, "node-1", false)
 	if err != nil {
 		t.Fatal(err)
 	}

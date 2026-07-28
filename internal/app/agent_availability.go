@@ -51,12 +51,19 @@ type agentAvailability struct {
 	// this type, so the cache is invalidated exactly when the durable set
 	// changes and a heartbeat never pays for a database read.
 	excluded []domain.TargetID
+	// sharedRunnerIdentity is a static process-level fact fixed at construction
+	// from the serve flag: this node's native runner runs jobs under the Agent's
+	// own uid, without uid isolation. It is deliberately not behind the mutex and
+	// has no setter, so no runtime path can flip an operator-visible security
+	// property. It is reported, never inferred, and never gates capacity.
+	sharedRunnerIdentity bool
 }
 
 func newAgentAvailability(
 	ctx context.Context,
 	agentStore *store.AgentStore,
 	nodeID domain.NodeID,
+	sharedRunnerIdentity bool,
 ) (*agentAvailability, error) {
 	record, err := agentStore.ReadAvailability(ctx)
 	if err != nil {
@@ -67,11 +74,23 @@ func newAgentAvailability(
 		return nil, err
 	}
 	return &agentAvailability{
-		store:    agentStore,
-		nodeID:   nodeID,
-		record:   record,
-		excluded: excluded,
+		store:                agentStore,
+		nodeID:               nodeID,
+		record:               record,
+		excluded:             excluded,
+		sharedRunnerIdentity: sharedRunnerIdentity,
 	}, nil
+}
+
+// SharedRunnerIdentity reports whether this node's native runner executes jobs
+// under the Agent's own uid. It is the single read path every observer — local
+// status, snapshot, and heartbeat — shares, so no surface can render a different
+// isolation claim than the one this process was started with.
+func (availability *agentAvailability) SharedRunnerIdentity() bool {
+	if availability == nil {
+		return false
+	}
+	return availability.sharedRunnerIdentity
 }
 
 // ExcludedTargets is the sorted, deduplicated set this Agent reports on every
@@ -266,6 +285,7 @@ func (availability *agentAvailability) Status(ctx context.Context) (nodectl.Stat
 		ControllerConnected:     connected,
 		PendingResume:           record.Intent.Accepts() && confirmed != record.Intent,
 		NativeRunnerReady:       nativeReady,
+		SharedRunnerIdentity:    availability.sharedRunnerIdentity,
 		EligibleTargets:         eligibleTargets,
 		ObservedAtUnixNano:      time.Now().UnixNano(),
 		AgentVersion:            buildinfo.String(),

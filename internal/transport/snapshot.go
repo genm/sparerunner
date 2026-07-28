@@ -12,14 +12,17 @@ import (
 )
 
 // AgentSnapshotDigest binds the complete typed journal snapshot used by
-// Controller reconciliation. NativeRunnerReady, AvailabilityIntent, and
-// ExcludedTargets are deliberately excluded: they are lease-backed liveness
-// and owner-editable observed state, not presence-or-absence authority for
-// commands or runtimes. Like AvailabilityIntent, a change to the exclusion
-// set must not strand the readiness-lease compare-and-swap that is keyed to
-// this digest; the set is still persisted in the snapshot transaction
-// controller-side (a later PR wires that consumption). It contains no JIT
-// body, filesystem path, log, or credential.
+// Controller reconciliation. NativeRunnerReady, AvailabilityIntent,
+// ExcludedTargets, and SharedRunnerIdentity are deliberately excluded: they are
+// lease-backed liveness and owner-visible observed state, not presence-or-absence
+// authority for commands or runtimes. Like AvailabilityIntent, a change to the
+// exclusion set must not strand the readiness-lease compare-and-swap that is
+// keyed to this digest; the set is still persisted in the snapshot transaction
+// controller-side (a later PR wires that consumption). SharedRunnerIdentity is
+// excluded for the same reason and one more: it is a static, operator-facing
+// description of how the node's native runner isolates a job, so it must never
+// invalidate the digest an in-flight readiness lease is keyed to. It contains no
+// JIT body, filesystem path, log, or credential.
 func AgentSnapshotDigest(snapshot AgentSnapshot) (string, error) {
 	if err := snapshot.Validate(); err != nil {
 		return "", err
@@ -75,11 +78,22 @@ type AgentSnapshot struct {
 	// adopted rows, while nil omits the field and means "no change reported" —
 	// a plain slice with omitempty cannot express both, because encoding/json
 	// checks slice length rather than nilness.
-	ExcludedTargets    *[]domain.TargetID          `json:"excludedTargets,omitempty"`
-	MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
-	Commands           []domain.Command            `json:"commands"`
-	Observations       []AgentExecutionObservation `json:"observations"`
-	CleanupTombstones  []AgentCleanupTombstone     `json:"cleanupTombstones"`
+	ExcludedTargets *[]domain.TargetID `json:"excludedTargets,omitempty"`
+	// SharedRunnerIdentity reports that this node's native runner executes jobs
+	// under the Agent's own uid instead of a dedicated per-runner identity, so
+	// the uid isolation between the Agent and the job it runs is absent. It is
+	// observation for operators only: capacity remains gated by
+	// NativeRunnerReady and the owner's intent, so a Controller that ignores
+	// this field can never over-admit because of it.
+	//
+	// It is a pointer for the same reason ExcludedTargets is: nil omits the
+	// field and means "not reported" (an Agent too old to know the property),
+	// while an explicit false is the authoritative "this node does isolate".
+	SharedRunnerIdentity *bool                       `json:"sharedRunnerIdentity,omitempty"`
+	MaxControllerEpoch   domain.ControllerEpoch      `json:"maxControllerEpoch"`
+	Commands             []domain.Command            `json:"commands"`
+	Observations         []AgentExecutionObservation `json:"observations"`
+	CleanupTombstones    []AgentCleanupTombstone     `json:"cleanupTombstones"`
 }
 
 func (snapshot AgentSnapshot) Validate() error {
@@ -166,17 +180,18 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var wire struct {
-		NodeID             domain.NodeID               `json:"nodeId"`
-		OS                 domain.OperatingSystem      `json:"os"`
-		Arch               domain.Architecture         `json:"arch"`
-		RunnerVersion      *string                     `json:"runnerVersion"`
-		NativeRunnerReady  *bool                       `json:"nativeRunnerReady"`
-		AvailabilityIntent *domain.AvailabilityIntent  `json:"availabilityIntent"`
-		ExcludedTargets    *[]domain.TargetID          `json:"excludedTargets"`
-		MaxControllerEpoch domain.ControllerEpoch      `json:"maxControllerEpoch"`
-		Commands           []domain.Command            `json:"commands"`
-		Observations       []AgentExecutionObservation `json:"observations"`
-		CleanupTombstones  []AgentCleanupTombstone     `json:"cleanupTombstones"`
+		NodeID               domain.NodeID               `json:"nodeId"`
+		OS                   domain.OperatingSystem      `json:"os"`
+		Arch                 domain.Architecture         `json:"arch"`
+		RunnerVersion        *string                     `json:"runnerVersion"`
+		NativeRunnerReady    *bool                       `json:"nativeRunnerReady"`
+		AvailabilityIntent   *domain.AvailabilityIntent  `json:"availabilityIntent"`
+		ExcludedTargets      *[]domain.TargetID          `json:"excludedTargets"`
+		SharedRunnerIdentity *bool                       `json:"sharedRunnerIdentity"`
+		MaxControllerEpoch   domain.ControllerEpoch      `json:"maxControllerEpoch"`
+		Commands             []domain.Command            `json:"commands"`
+		Observations         []AgentExecutionObservation `json:"observations"`
+		CleanupTombstones    []AgentCleanupTombstone     `json:"cleanupTombstones"`
 	}
 	if err := decoder.Decode(&wire); err != nil ||
 		wire.RunnerVersion == nil || *wire.RunnerVersion == "" ||
@@ -206,6 +221,13 @@ func DecodeAgentSnapshot(payload []byte) (AgentSnapshot, error) {
 		// caller can distinguish it from "absent" after decode.
 		set := append([]domain.TargetID{}, *wire.ExcludedTargets...)
 		snapshot.ExcludedTargets = &set
+	}
+	if wire.SharedRunnerIdentity != nil {
+		// Copy rather than alias the decode buffer's value so an absent field
+		// stays nil ("not reported") and a present false stays a distinct,
+		// authoritative observation.
+		reported := *wire.SharedRunnerIdentity
+		snapshot.SharedRunnerIdentity = &reported
 	}
 	if err := snapshot.Validate(); err != nil {
 		return AgentSnapshot{}, err

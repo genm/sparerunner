@@ -227,10 +227,35 @@ func (app *trayApp) render(status nodectl.Status, err error) {
 		app.resume.Disable()
 	}
 	app.detail.SetTitle(fmt.Sprintf(
-		"Node %s · controller %s", shortNode(string(status.NodeID)), connectionText(status.ControllerConnected),
+		"Node %s · controller %s%s",
+		shortNode(string(status.NodeID)),
+		connectionText(status.ControllerConnected),
+		isolationDetail(status),
 	))
+	// The tooltip carries the long form: the menu row is width-constrained, and
+	// a desktop user must be able to read what the weaker mode actually drops
+	// rather than a shorthand they have to look up.
+	systray.SetTooltip(isolationTooltip(status))
 	app.running.SetTitle(runningText(status))
 	app.renderTargetPool(status)
+}
+
+// isolationDetail appends the weaker runner-identity mode to the detail row.
+// The isolated mode renders nothing: it is the expectation, and only the drop
+// needs to be visible so nobody mistakes one mode for the other.
+func isolationDetail(status nodectl.Status) string {
+	if !status.SharedRunnerIdentity {
+		return ""
+	}
+	return " · shared runner identity"
+}
+
+func isolationTooltip(status nodectl.Status) string {
+	if !status.SharedRunnerIdentity {
+		return "Tewake node"
+	}
+	return "Tewake node — shared runner identity: jobs run as the agent user, " +
+		"without UID isolation"
 }
 
 // targetPoolEntry is one row the pool can render: a scoped eligible Target or

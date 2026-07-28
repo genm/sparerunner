@@ -178,6 +178,66 @@ func TestHeartbeatAdoptsOwnerStateBeforeAcknowledgement(t *testing.T) {
 	}
 }
 
+// TestHeartbeatSharedRunnerIdentityAdoptsOnceAndOmissionPreservesLastKnown
+// proves the broker treats the isolation mode exactly like availabilityIntent:
+// a first report is adopted, a re-report of the same static fact at 1 Hz is a
+// steady-state repeat rather than a durable write, and a heartbeat that omits
+// the field never resets the last-known value.
+func TestHeartbeatSharedRunnerIdentityAdoptsOnceAndOmissionPreservesLastKnown(t *testing.T) {
+	recorder := &ownerStateRecorder{}
+	consumers := acceptingAgentConsumers(newRecordingUpdateConsumer())
+	consumers.OwnerState = recorder
+	broker := NewAgentBroker(1, consumers)
+	session, serveResult := startReadyBrokerSession(t, broker, "node-1")
+
+	shared := true
+	session.send(brokerEnvelope(t, "heartbeat-1", transport.MessageHeartbeat, transport.AgentHeartbeat{
+		NodeID:               "node-1",
+		NativeRunnerReady:    true,
+		SharedRunnerIdentity: &shared,
+	}))
+	if envelope := receiveBrokerWrite(t, session); envelope.Type != transport.MessageAck {
+		t.Fatalf("message type = %s, want ack", envelope.Type)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("owner state adoptions = %d, want 1", len(recorder.records))
+	}
+	if adopted := recorder.records[0].SharedRunnerIdentity; adopted == nil || !*adopted {
+		t.Fatalf("adopted shared runner identity = %#v, want true", adopted)
+	}
+
+	// The same static fact on the next tick is not a change.
+	session.send(brokerEnvelope(t, "heartbeat-2", transport.MessageHeartbeat, transport.AgentHeartbeat{
+		NodeID:               "node-1",
+		NativeRunnerReady:    true,
+		SharedRunnerIdentity: &shared,
+	}))
+	if envelope := receiveBrokerWrite(t, session); envelope.Type != transport.MessageAck {
+		t.Fatalf("message type = %s, want ack", envelope.Type)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("steady-state heartbeat re-adopted: %#v", recorder.records)
+	}
+
+	// Omitting the field adopts nothing at all, so the last-known true survives
+	// rather than being reset to the stronger isolated claim.
+	session.send(brokerEnvelope(t, "heartbeat-3", transport.MessageHeartbeat, transport.AgentHeartbeat{
+		NodeID:            "node-1",
+		NativeRunnerReady: true,
+	}))
+	if envelope := receiveBrokerWrite(t, session); envelope.Type != transport.MessageAck {
+		t.Fatalf("message type = %s, want ack", envelope.Type)
+	}
+	if len(recorder.records) != 1 {
+		t.Fatalf("omitted shared runner identity triggered adoption: %#v", recorder.records)
+	}
+
+	session.disconnect()
+	if err := <-serveResult; !errors.Is(err, ErrAgentDisconnected) {
+		t.Fatalf("serve result = %v", err)
+	}
+}
+
 // TestHeartbeatOwnerStateAdoptionFailureFailsTheHeartbeat proves a failed
 // adoption is never acknowledged: the owner's change must not appear accepted
 // while no durable record of it exists.

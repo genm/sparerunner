@@ -762,7 +762,7 @@ func validateColumnAllowlist(ctx context.Context, db *sql.DB, role string) error
 		"node_administrative_states":        {"node_id", "administrative_state"},
 		"enrollment_replays":                {"token_id", "secret_digest", "controller_epoch", "public_key_digest", "node_id", "certificate_der", "ca_der"},
 		"agent_commands":                    {"command_id", "node_id", "command_type", "controller_epoch", "execution_id", "expected_state", "payload_digest", "issued_at_unix_nano"},
-		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano", "runner_version", "availability_intent"},
+		"agent_session_snapshots":           {"node_id", "operating_system", "architecture", "native_runner_ready", "max_controller_epoch", "received_at_unix_nano", "runner_version", "availability_intent", "shared_runner_identity"},
 		"node_target_exclusions":            {"node_id", "target_id", "recorded_at_unix_nano"},
 		"agent_snapshot_commands":           {"node_id", "command_id", "controller_epoch", "execution_id", "expected_state", "payload_digest"},
 		"agent_snapshot_observations":       {"node_id", "execution_id", "state", "agent_observed_at_unix_nano", "received_at_unix_nano"},

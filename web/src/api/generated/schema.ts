@@ -516,6 +516,8 @@ export interface components {
        * @enum {string}
        */
       availabilityIntent?: "accepting" | "stopped";
+      /** @description True when this node's native runner executes jobs under the agent's own uid instead of a dedicated per-runner uid, so uid isolation between the agent and the job it runs is absent. Absent means the node has never reported the property; absent is not "isolated" and must not be rendered as the stronger mode. Observation only: it never affects whether the node is admitted work. */
+      sharedRunnerIdentity?: boolean;
       /** @description The controller-adopted set of Target IDs this node owner has excluded. Omitted when the node has never adopted any exclusion; the store cannot distinguish that from an explicit empty set, so an empty adopted set is represented the same way as never reported. */
       excludedTargets?: string[];
     };

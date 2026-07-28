@@ -101,7 +101,9 @@ not justify them.
 A persistent enrolled computer. Stable fields include immutable `NodeID`, display
 name, certificate serial/epoch, OS, architecture, configured `maxRunners`, and
 administrative state. Observed fields include heartbeat time, available memory, CPU
-usage, runner package cache, running executions, and reconciliation status.
+usage, runner package cache, running executions, reconciliation status, and — on a
+Linux node started with `--allow-shared-runner-identity` — `sharedRunnerIdentity`,
+which records that this node runs jobs without uid separation from its Agent.
 
 Node administrative states are:
 
@@ -370,6 +372,60 @@ network-facing process. Losing the Supervisor or failing any peer, filesystem,
 cgroup-v2, or protocol check makes native runner admission unavailable while the
 Agent may remain connected for diagnostics.
 
+That privileged mode depends on a root Supervisor service. A personal computer
+whose owner cannot or will not install one connects and then advertises zero
+capacity forever. That is the correct fail-closed outcome, not a usable one, so
+Linux has a second execution mode selected exclusively by an explicit
+`tewake-agent serve --allow-shared-runner-identity` flag.
+
+The mode drops exactly one property: uid separation between the Agent and the job.
+The official runner executes as the same Unix user as the Agent, so a job can read
+and write everything that user can, including the Agent's own state directory.
+Native mode is already declared a trusted-workflow boundary rather than a sandbox,
+so a second, clearly weaker mode is legitimate — but only while it is explicit,
+visible, and never inferred.
+
+Nothing else is relaxed. Every remaining property is the one already specified for
+the privileged mode and stays fail-closed:
+
+- descendant ownership comes from a per-execution cgroup v2 child terminated
+  through `cgroup.kill`, so a workflow that calls `setsid()` is still killed with
+  its grandchildren;
+- the durable start fence still linearizes `Start` with `Stop`, so a `Start`
+  carrying a revoked fence token can never create a process;
+- workspace identity is still verified at the last instant before exec, and
+  one-shot JIT material is still delivered exactly once immediately before it;
+- cleanup is still verified — the descendant set is proven empty before a
+  workspace is released — and an unprovable cleanup still quarantines.
+
+Construction is the containment gate. It verifies a unified cgroup v2 hierarchy, a
+writable systemd *user* delegated cgroup subtree, the presence of `cgroup.kill`,
+and that the runtime, cache, and fence roots are absolute, owned by the running
+effective uid, mode `0700`, free of symlink components, and free of group- or
+world-writable ancestors. Any failing check returns strong-ownership-unavailable
+and the node advertises zero capacity. The mode never degrades to a weaker
+containment, because a weaker containment would drop a second property silently.
+
+Selection is opt-in only. Without the flag, behavior is byte-for-byte what it is
+today. The mode is never a fallback for a missing privileged Supervisor: an absent
+or unverifiable Supervisor still means zero capacity, exactly as before. Combining
+the flag with the privileged Supervisor options is rejected at startup rather than
+silently preferring one of them.
+
+Because the mode owns no privileged path, its cache, runtime, and fence roots
+default below the user's data directory — `$XDG_DATA_HOME`, else
+`~/.local/share/tewake/…` — instead of `/var/…`. The two modes also use different
+versioned workspace-backend strings, so a workspace created under one mode can
+never be verified or cleaned under the other; a cross-mode workspace fails the
+existing identity check instead of being adopted or repaired.
+
+The mode is reported, not hidden. `sharedRunnerIdentity` is node state on the
+node-local status document, travels on the agent→controller snapshot and
+heartbeat, and is exposed through the management API, the `tewake node status`
+text output, and the tray, so an operator inspecting the fleet can tell which
+nodes lack uid isolation. The field is pure observation: it never grants capacity
+and never relaxes a check.
+
 Every authenticated snapshot carries an explicit `nativeRunnerReady` observation.
 The Controller treats a missing or false value as zero capacity even if the Agent
 transport is online. Eligibility additionally requires a fresh, reconciled
@@ -587,8 +643,9 @@ provides:
   Keychain/DPAPI adapters remain platform-task work; Linux uses the service-user
   private credential file boundary until those adapters land
 - node inventory, join-code creation/cancellation, drain/resume, revoke, the
-  node-reported availability intent with its observation age, and each node's
-  eligible-Target list with its controller-adopted excluded flags
+  node-reported availability intent with its observation age, each node's
+  eligible-Target list with its controller-adopted excluded flags, and each node's
+  reported `sharedRunnerIdentity` state
 - target and runner-profile configuration
 - execution history and audit events
 - controller settings and non-secret YAML export/apply
@@ -997,6 +1054,8 @@ prevents new starts but does not turn known running jobs into an empty state.
 | Agent offline before start | release only after desired state is reconciled; do not create a second runtime blindly |
 | Agent offline during job | continue locally, cleanup locally, reconcile on reconnect |
 | Cleanup failure | `CleanupFailed`, node `Quarantined`, capacity zero |
+| Shared-identity containment unverifiable | construction returns strong-ownership-unavailable, capacity zero; never a weaker containment |
+| `--allow-shared-runner-identity` combined with privileged Supervisor options | explicit startup rejection; neither mode is silently preferred |
 | Secret store failure | runner admission and protected mutations fail closed |
 | Node stopped by its owner | withhold capacity immediately; running job completes and cleans up normally |
 | Availability intent unreported | controller keeps the last reported intent and marks it stale; resume stays pending |
@@ -1040,6 +1099,11 @@ secrets, or raw environment snapshots.
   authorization, and diagnostics redaction
 - Golden-document contract tests for `tewake node --json`, plus launcher tests for
   missing, incompatible, and non-executable CLI resolution
+- Linux shared-runner-identity tests for opt-in-only selection, `setsid` descendant
+  termination through `cgroup.kill`, fail-closed construction without a delegated
+  user cgroup subtree or with an unsafe root, rejection of the flag alongside the
+  privileged Supervisor options, refusal to verify a workspace created under the
+  other mode, and `sharedRunnerIdentity` reaching every reporting surface
 - Availability tests for durable intent across restart, stop during a running job,
   disconnected stop and pending resume, and the precedence of controller `Draining`,
   `Quarantined`, and `Revoked` over a local `Accepting`

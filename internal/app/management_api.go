@@ -217,6 +217,12 @@ func (backend *managementBackend) Nodes(
 				intent := gen.NodeAvailabilityIntent(*ownerState.Intent)
 				node.AvailabilityIntent = &intent
 			}
+			// Absent stays absent: a node that never reported its isolation mode
+			// must not render as the stronger isolated one.
+			if ownerState.SharedRunnerIdentity != nil {
+				shared := *ownerState.SharedRunnerIdentity
+				node.SharedRunnerIdentity = &shared
+			}
 			if len(ownerState.Exclusions) > 0 {
 				excluded := make([]string, len(ownerState.Exclusions))
 				for i, targetID := range ownerState.Exclusions {

@@ -33,15 +33,16 @@ func (adoption nodeOwnerAdoption) audited() bool {
 // digest-guarded style: an authority that has moved on cannot have owner state
 // grafted onto it.
 //
-// intent "" and a nil exclusions pointer both mean "no change reported". A
-// non-nil pointer is the authoritative full set, including an empty one, and
-// replaces the adopted rows wholesale.
+// intent "", a nil exclusions pointer, and a nil sharedRunnerIdentity all mean
+// "no change reported". A non-nil exclusions pointer is the authoritative full
+// set, including an empty one, and replaces the adopted rows wholesale.
 func (s *ControllerStore) RecordNodeOwnerState(
 	ctx context.Context,
 	nodeID domain.NodeID,
 	expectedSnapshotDigest string,
 	intent domain.AvailabilityIntent,
 	exclusions *[]domain.TargetID,
+	sharedRunnerIdentity *bool,
 ) error {
 	if err := s.requireReady(); err != nil {
 		return err
@@ -52,13 +53,18 @@ func (s *ControllerStore) RecordNodeOwnerState(
 	if err := validateNodeOwnerState(intent, exclusions); err != nil {
 		return err
 	}
-	if intent == "" && exclusions == nil {
+	if intent == "" && exclusions == nil && sharedRunnerIdentity == nil {
 		return nil
 	}
-	// Adoption can persist audit evidence, and audit evidence is fail-closed
-	// authority. Refuse before touching durable owner state rather than
-	// silently adopting a change no audit trail can explain.
-	if !s.ManagementAuditHealthy() {
+	// Adoption of an owner decision persists audit evidence, and audit evidence
+	// is fail-closed authority. Refuse before touching durable owner state rather
+	// than silently adopting a change no audit trail can explain.
+	//
+	// The runner-isolation mode is not an owner decision and writes no audit
+	// event, so on its own it does not require audit health; gating it here would
+	// let a degraded audit store silently freeze an operator-visible security
+	// property at a stale value.
+	if (intent != "" || exclusions != nil) && !s.ManagementAuditHealthy() {
 		return ErrManagementAuditPersistence
 	}
 	recordedAt, err := storeUnixNano(s.now())
@@ -87,7 +93,7 @@ func (s *ControllerStore) RecordNodeOwnerState(
 		return err
 	}
 	adoption, err := adoptNodeOwnerState(
-		ctx, tx, nodeID, intent, exclusions, recordedAt)
+		ctx, tx, nodeID, intent, exclusions, sharedRunnerIdentity, recordedAt)
 	if err != nil {
 		return err
 	}
@@ -121,6 +127,10 @@ func (s *ControllerStore) ReadNodeTargetExclusions(
 type NodeOwnerState struct {
 	Intent     *domain.AvailabilityIntent
 	Exclusions []domain.TargetID
+	// SharedRunnerIdentity is the node-reported runner isolation mode, nil when
+	// the node has never reported it. nil is never collapsed into false: an
+	// unreported node must not render as the stronger isolated mode.
+	SharedRunnerIdentity *bool
 }
 
 // ReadNodeOwnerStates returns the adopted intent and exclusion set for every
@@ -135,10 +145,15 @@ func (s *ControllerStore) ReadNodeOwnerStates(
 		return nil, err
 	}
 	states := make(map[domain.NodeID]NodeOwnerState)
+	// Both columns live on agent_session_snapshots, so one scan carries them.
+	// Either may be NULL independently, which is why each is scanned through a
+	// nullable and only a reported value becomes a non-nil field.
 	intentRows, err := s.db.QueryContext(
 		ctx,
-		`SELECT node_id, availability_intent FROM agent_session_snapshots
-		 WHERE availability_intent IS NOT NULL`,
+		`SELECT node_id, availability_intent, shared_runner_identity
+		 FROM agent_session_snapshots
+		 WHERE availability_intent IS NOT NULL
+			OR shared_runner_identity IS NOT NULL`,
 	)
 	if err != nil {
 		return nil, err
@@ -146,13 +161,20 @@ func (s *ControllerStore) ReadNodeOwnerStates(
 	defer intentRows.Close()
 	for intentRows.Next() {
 		var nodeID domain.NodeID
-		var intent string
-		if err := intentRows.Scan(&nodeID, &intent); err != nil {
+		var intent sql.NullString
+		var sharedRunnerIdentity sql.NullBool
+		if err := intentRows.Scan(&nodeID, &intent, &sharedRunnerIdentity); err != nil {
 			return nil, err
 		}
-		reported := domain.AvailabilityIntent(intent)
 		state := states[nodeID]
-		state.Intent = &reported
+		if intent.Valid {
+			reported := domain.AvailabilityIntent(intent.String)
+			state.Intent = &reported
+		}
+		if sharedRunnerIdentity.Valid {
+			reported := sharedRunnerIdentity.Bool
+			state.SharedRunnerIdentity = &reported
+		}
 		states[nodeID] = state
 	}
 	if err := intentRows.Err(); err != nil {
@@ -224,9 +246,19 @@ func adoptNodeOwnerState(
 	nodeID domain.NodeID,
 	intent domain.AvailabilityIntent,
 	exclusions *[]domain.TargetID,
+	sharedRunnerIdentity *bool,
 	recordedAt int64,
 ) (nodeOwnerAdoption, error) {
 	var adoption nodeOwnerAdoption
+	// The runner-isolation mode is reported observation, not an owner decision,
+	// so it is adopted here for locality but is deliberately absent from the
+	// audit accounting below: there is no actor whose choice it records.
+	if sharedRunnerIdentity != nil {
+		if err := adoptNodeSharedRunnerIdentity(
+			ctx, tx, nodeID, *sharedRunnerIdentity); err != nil {
+			return nodeOwnerAdoption{}, err
+		}
+	}
 	if intent != "" {
 		changed, err := adoptNodeAvailabilityIntent(ctx, tx, nodeID, intent)
 		if err != nil {
@@ -320,6 +352,31 @@ func adoptNodeAvailabilityIntent(
 		return false, errors.New("node availability intent did not update exactly one session snapshot")
 	}
 	return true, nil
+}
+
+// adoptNodeSharedRunnerIdentity records the node-reported isolation mode. It is
+// an unconditional write of a reported value rather than a change-detecting one:
+// there is no audit event to suppress, and a plain UPDATE is cheaper than the
+// read it would take to decide whether to skip it.
+func adoptNodeSharedRunnerIdentity(
+	ctx context.Context,
+	tx *sql.Tx,
+	nodeID domain.NodeID,
+	sharedRunnerIdentity bool,
+) error {
+	result, err := tx.ExecContext(
+		ctx,
+		`UPDATE agent_session_snapshots SET shared_runner_identity = ? WHERE node_id = ?`,
+		sharedRunnerIdentity, nodeID,
+	)
+	if err != nil {
+		return err
+	}
+	if affected, rowsErr := result.RowsAffected(); rowsErr != nil || affected != 1 {
+		return errors.New(
+			"node shared runner identity did not update exactly one session snapshot")
+	}
+	return nil
 }
 
 func adoptNodeTargetExclusions(

@@ -208,6 +208,15 @@ func writeAvailabilityText(writer io.Writer, status nodectl.Status) {
 	fmt.Fprintf(writer, "Accepting:  %s\n", availabilityHeadline(status))
 	fmt.Fprintf(writer, "Controller: %s\n", connectionText(status.ControllerConnected))
 	fmt.Fprintf(writer, "Runner:     %s\n", readinessText(status.NativeRunnerReady))
+	// Only the weaker mode prints a line. The isolated mode is the expectation
+	// this tool has always described, so it stays silent; naming the drop
+	// explicitly is what stops an operator from mistaking one for the other.
+	if status.SharedRunnerIdentity {
+		fmt.Fprintln(
+			writer,
+			"Isolation:  shared runner identity (jobs run as the agent user; no UID isolation)",
+		)
+	}
 	if len(status.RunningExecutions) == 0 {
 		fmt.Fprintln(writer, "Running:    none")
 	} else {

@@ -639,3 +639,41 @@ tasks:
       - A missing, incompatible, or non-executable CLI produces an actionable installation error instead of an assumed state.
       - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
       - Removing or never installing the extension changes no fleet behavior, and its build gates no Tewake artifact.
+
+  - id: twk-021
+    title: Add the opt-in shared runner identity Linux mode
+    type: platform
+    description: >
+      Add a second Linux native-runner execution mode that runs the job as the
+      Agent's own Unix user, selected only by an explicit
+      `tewake-agent serve --allow-shared-runner-identity` flag. It drops uid
+      separation between Agent and job and nothing else: per-execution cgroup v2
+      descendant ownership through `cgroup.kill`, the durable start fence,
+      last-instant workspace verification, one-shot JIT delivery, verified
+      cleanup, and quarantine all remain fail-closed. Construction verifies the
+      cgroup v2 and delegated user subtree contract and the private root
+      ownership, uses its own user-data-directory roots and its own versioned
+      workspace-backend identity, and reports `sharedRunnerIdentity` as node state
+      through the agent snapshot and heartbeat, the management API, the CLI status
+      output, and the tray.
+    depends_on: [twk-007, twk-016]
+    paths:
+      - internal/platform/linux
+      - cmd/tewake-agent
+      - internal/nodectl
+      - internal/transport
+      - internal/app
+      - api/openapi.yaml
+      - spec/tewake
+    ci_targets: [lint, typecheck, test, build]
+    pr_order: 21
+    status: in_progress
+    notes:
+      - "2026-07-28: The mode is deliberately weaker than twk-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
+    acceptance:
+      - Without `--allow-shared-runner-identity`, no shared-identity backend is constructed and a missing privileged Supervisor still advertises zero capacity instead of falling back.
+      - Passing the flag together with the privileged Supervisor options is rejected at startup rather than silently preferring one mode.
+      - A job that calls `setsid()` under shared runner identity is still terminated with its descendants, and its workspace is not released until the descendant set is proven empty.
+      - Construction without a unified cgroup v2 hierarchy, without a writable systemd user delegated subtree, without `cgroup.kill`, or with a non-absolute, wrongly-owned, non-0700, symlinked, or group/world-writable-ancestor root returns strong-ownership-unavailable and advertises zero capacity, never a weaker containment.
+      - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
+      - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `tewake node status`, and the tray, and grants no capacity and relaxes no check."

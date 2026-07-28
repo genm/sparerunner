@@ -23,6 +23,13 @@ type AgentHeartbeat struct {
 	// reported"), while a non-nil empty set crosses as [] so removing the last
 	// exclusion still reaches the controller.
 	ExcludedTargets *[]domain.TargetID `json:"excludedTargets,omitempty"`
+	// SharedRunnerIdentity mirrors the AgentSnapshot field at heartbeat cadence:
+	// this node's native runner executes jobs under the Agent's own uid, so the
+	// uid isolation between Agent and job is absent. It is a static process-level
+	// fact reported for operator visibility; capacity is still withheld through
+	// NativeRunnerReady, so it can never admit anything. nil means "not
+	// reported" and keeps the controller's last-known value.
+	SharedRunnerIdentity *bool `json:"sharedRunnerIdentity,omitempty"`
 }
 
 func (heartbeat AgentHeartbeat) Validate() error {
@@ -64,10 +71,11 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 	decoder := json.NewDecoder(bytes.NewReader(payload))
 	decoder.DisallowUnknownFields()
 	var wire struct {
-		NodeID             domain.NodeID              `json:"nodeId"`
-		NativeRunnerReady  *bool                      `json:"nativeRunnerReady"`
-		AvailabilityIntent *domain.AvailabilityIntent `json:"availabilityIntent"`
-		ExcludedTargets    *[]domain.TargetID         `json:"excludedTargets"`
+		NodeID               domain.NodeID              `json:"nodeId"`
+		NativeRunnerReady    *bool                      `json:"nativeRunnerReady"`
+		AvailabilityIntent   *domain.AvailabilityIntent `json:"availabilityIntent"`
+		ExcludedTargets      *[]domain.TargetID         `json:"excludedTargets"`
+		SharedRunnerIdentity *bool                      `json:"sharedRunnerIdentity"`
 	}
 	if err := decoder.Decode(&wire); err != nil {
 		return AgentHeartbeat{}, ErrInvalidCommand
@@ -89,6 +97,10 @@ func DecodeAgentHeartbeat(payload []byte) (AgentHeartbeat, error) {
 	if wire.ExcludedTargets != nil {
 		set := append([]domain.TargetID{}, *wire.ExcludedTargets...)
 		heartbeat.ExcludedTargets = &set
+	}
+	if wire.SharedRunnerIdentity != nil {
+		reported := *wire.SharedRunnerIdentity
+		heartbeat.SharedRunnerIdentity = &reported
 	}
 	if err := heartbeat.Validate(); err != nil {
 		return AgentHeartbeat{}, err

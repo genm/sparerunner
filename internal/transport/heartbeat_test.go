@@ -22,6 +22,50 @@ func TestAgentHeartbeatRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAgentHeartbeatSharedRunnerIdentityRoundTrip(t *testing.T) {
+	// Absent stays nil. An Agent too old to know the property must not be
+	// decoded into a false that would read as a claim of uid isolation.
+	absentPayload, err := EncodeAgentHeartbeat(AgentHeartbeat{
+		NodeID:            "node-1",
+		NativeRunnerReady: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(absentPayload, []byte("sharedRunnerIdentity")) {
+		t.Fatalf("absent SharedRunnerIdentity was encoded: %s", absentPayload)
+	}
+	decodedAbsent, err := DecodeAgentHeartbeat(absentPayload)
+	if err != nil || decodedAbsent.SharedRunnerIdentity != nil {
+		t.Fatalf(
+			"decoded absent SharedRunnerIdentity = %#v, err = %v",
+			decodedAbsent.SharedRunnerIdentity, err,
+		)
+	}
+
+	for _, reported := range []bool{true, false} {
+		payload, err := EncodeAgentHeartbeat(AgentHeartbeat{
+			NodeID:               "node-1",
+			NativeRunnerReady:    true,
+			SharedRunnerIdentity: &reported,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Contains(payload, []byte("sharedRunnerIdentity")) {
+			t.Fatalf("present SharedRunnerIdentity=%t was not encoded: %s", reported, payload)
+		}
+		decoded, err := DecodeAgentHeartbeat(payload)
+		if err != nil || decoded.SharedRunnerIdentity == nil ||
+			*decoded.SharedRunnerIdentity != reported {
+			t.Fatalf(
+				"decoded SharedRunnerIdentity = %#v, err = %v, want %t",
+				decoded.SharedRunnerIdentity, err, reported,
+			)
+		}
+	}
+}
+
 func TestAgentHeartbeatExcludedTargetsRoundTrip(t *testing.T) {
 	// Absent: an Agent that never populates the field omits it entirely, and
 	// decode must report it back as nil rather than an empty-but-present slice.
