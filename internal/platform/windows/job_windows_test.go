@@ -207,9 +207,22 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 	descendantPID := waitForPIDFile(t, pidFile)
 	descendant, err := waitForProcessHandle(t, uint32(descendantPID))
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("descendant pid %d never opened: %v", descendantPID, err)
 	}
 	defer syswindows.CloseHandle(descendant)
+	// The assigned parent and its descendant must both be accounted to the Job
+	// Object, otherwise the termination below would prove nothing about the tree.
+	waitForJobProcesses(t, job, 2)
+	// A descendant that already exited would satisfy the wait below without
+	// TerminateAndWait doing anything, so require it alive at this instant.
+	if result, err := syswindows.WaitForSingleObject(descendant, 0); err != nil ||
+		result != uint32(syswindows.WAIT_TIMEOUT) {
+		t.Fatalf(
+			"descendant exited before containment termination: result=%#x err=%v",
+			result,
+			err,
+		)
+	}
 	if err := runtime.TerminateAndWait(context.Background(), ref); err != nil {
 		t.Fatal(err)
 	}
@@ -250,7 +263,13 @@ func TestWindowsJobHelperProcess(t *testing.T) {
 			os.Exit(72)
 		}
 	}
-	select {}
+	// This binary is executed directly rather than through `go test`, so it
+	// receives no -test.timeout and has no pending runtime timer. Parking in
+	// select{} would make every goroutine asleep, and the runtime deadlock
+	// detector would kill the helper milliseconds after start, before the test
+	// can open the descendant. Sleeping keeps a timer pending; the Job Object
+	// remains the real owner of this process tree's lifetime.
+	time.Sleep(time.Hour)
 }
 
 func TestLockedWorkspaceProducesCleanupFailureUntilLockIsReleased(t *testing.T) {
@@ -396,6 +415,24 @@ func waitForPIDFile(t *testing.T, path string) int {
 	}
 	t.Fatal("descendant pid was not published")
 	return 0
+}
+
+func waitForJobProcesses(t *testing.T, job syswindows.Handle, expected uint32) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	var observed uint32
+	for time.Now().Before(deadline) {
+		active, err := activeJobProcesses(job)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if active == expected {
+			return
+		}
+		observed = active
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("job active processes = %d, want %d", observed, expected)
 }
 
 func waitForProcessHandle(t *testing.T, pid uint32) (syswindows.Handle, error) {
