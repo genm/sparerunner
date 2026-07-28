@@ -14,7 +14,31 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "jsx": "react-jsx"
+    "jsx": "react-jsx",
+
+    // This is a browser project. Without an explicit list it would absorb every
+    // @types/* package installed for the test project, including Node globals.
+    "types": [],
+
+    // Every flag below reports zero errors on the current source, so each one
+    // costs nothing today and stops the next regression rather than describing
+    // an aspiration.
+    //
+    // exactOptionalPropertyTypes is deliberately still off: it reports six
+    // errors (App.tsx 165, 270, 506, 1633; api/client.ts 27;
+    // test/scenario-client.ts 69), all of which need optional prop declarations
+    // widened to `| undefined`. That is a source change, so it belongs to its
+    // own pull request rather than being buried in a config one.
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false
   },
   "include": ["src"]
 }

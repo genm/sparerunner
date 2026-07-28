@@ -60,6 +60,7 @@
   "scripts": {
     "build": "ray build",
     "dev": "ray develop",
-    "lint": "ray lint"
+    "lint": "ray lint",
+    "typecheck": "tsc --noEmit"
   }
 }

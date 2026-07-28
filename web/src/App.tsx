@@ -170,6 +170,9 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
           setSession(next);
           setLoadState("booting");
           setProblem(undefined);
+          // Fire and forget by design — the caller has already committed the
+          // session and must not block on the refresh.
+          // oxlint-disable-next-line promise/always-return
           void refresh().then((refreshed) => {
             if (refreshed) setLoadState("ready");
           });
@@ -1090,6 +1093,10 @@ function JoinCodeDialog({
       deliveryRef.current = undefined;
       if (candidate) cancelRemote(candidate);
       if (dialog?.open) dialog.close();
+      // Reading .current at cleanup time is the intent: focus returns to
+      // whatever the caller last recorded, not to whatever was recorded when
+      // this effect was set up.
+      // oxlint-disable-next-line react-hooks/exhaustive-deps
       returnFocusRef.current?.focus();
     };
   }, [cancelRemote, onClose, returnFocusRef, scrubAndCancel]);

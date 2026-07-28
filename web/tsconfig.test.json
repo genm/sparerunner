@@ -1,0 +1,39 @@
+{
+  // The e2e spec and the Playwright configs were in no TypeScript project, so
+  // the one test that proves the critical management journey against a real
+  // release binary was never typechecked. They run under Node, not in the
+  // browser, which is why they need their own project rather than a wider
+  // `include` on tsconfig.app.json.
+  "compilerOptions": {
+    "composite": true,
+    "target": "ES2023",
+    "lib": ["ES2023", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowJs": false,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    // playwright/index.ts imports a stylesheet for its side effect, which needs
+    // Vite's ambient module declarations.
+    "types": ["node", "vite/client"],
+
+    "strict": true,
+    "forceConsistentCasingInFileNames": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "verbatimModuleSyntax": true,
+    "erasableSyntaxOnly": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "allowUnreachableCode": false,
+    "allowUnusedLabels": false
+  },
+  "include": ["e2e", "playwright", "playwright-ct.config.ts", "playwright-e2e.config.ts"]
+}
