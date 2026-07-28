@@ -35,6 +35,9 @@ const (
 		syswindows.PIPE_REJECT_REMOTE_CLIENTS
 )
 
+// kernel32 is declared alongside the Job Object procedures in job_windows.go.
+var procPeekNamedPipe = kernel32.NewProc("PeekNamedPipe")
+
 var (
 	ErrBootstrapProtocol    = errors.New("invalid Windows enrollment bootstrap protocol")
 	ErrBootstrapIdentity    = errors.New("Windows enrollment bootstrap identity mismatch")
@@ -80,6 +83,7 @@ type BootstrapRequest struct {
 	Options BootstrapJoinOptions
 
 	file         *os.File
+	handle       syswindows.Handle
 	once         sync.Once
 	disconnected chan struct{}
 	finished     chan struct{}
@@ -201,6 +205,7 @@ func receiveBootstrapRequest(
 			ConnectionTimeout: time.Duration(frame.ConnectionTimeoutNanos),
 		},
 		file:         file,
+		handle:       handle,
 		disconnected: make(chan struct{}),
 		finished:     make(chan struct{}),
 		monitorDone:  make(chan struct{}),
@@ -238,10 +243,14 @@ func (request *BootstrapRequest) Complete(nodeID string, enrollmentErr error) er
 		close(request.finished)
 		defer func() {
 			request.Options.JoinCode = ""
+			// The monitor has to stop before the handle is closed, or it would
+			// peek a closed handle that Windows may already have reused. It
+			// observes the closed finished channel within one poll interval, so
+			// this wait is bounded.
+			<-request.monitorDone
 			if err := request.file.Close(); completeErr == nil && err != nil {
 				completeErr = ErrBootstrapUnavailable
 			}
-			<-request.monitorDone
 		}()
 		response := bootstrapResponseFrame{
 			Version: bootstrapProtocolV1,
@@ -265,16 +274,39 @@ func (request *BootstrapRequest) Complete(nodeID string, enrollmentErr error) er
 	return completeErr
 }
 
+// monitorClient polls instead of parking a read on the pipe. The bootstrap pipe
+// is a synchronous handle, and Windows serializes I/O on a synchronous file
+// object: a blocking read left pending here holds off Complete's response write
+// until the client gives up, so a durable enrollment reaches the CLI as a
+// timeout. Polling keeps the disconnect signal without ever owning the handle.
 func (request *BootstrapRequest) monitorClient() {
 	defer close(request.monitorDone)
-	var extra [1]byte
-	_, _ = request.file.Read(extra[:])
-	select {
-	case <-request.finished:
-		return
-	default:
-		close(request.disconnected)
+	for {
+		if !bootstrapClientConnected(request.handle) {
+			select {
+			case <-request.finished:
+			default:
+				close(request.disconnected)
+			}
+			return
+		}
+		timer := time.NewTimer(bootstrapPollDelay)
+		select {
+		case <-request.finished:
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
 	}
+}
+
+// bootstrapClientConnected reports whether the client end is still open. Peeking
+// completes immediately and leaves no pending I/O on the pipe. Any failure counts
+// as a disconnect so the caller aborts rather than committing enrollment against
+// a client that can no longer be told about it.
+func bootstrapClientConnected(handle syswindows.Handle) bool {
+	result, _, _ := procPeekNamedPipe.Call(uintptr(handle), 0, 0, 0, 0, 0)
+	return result != 0
 }
 
 // SubmitBootstrapJoin sends the capability only after verifying that the pipe
