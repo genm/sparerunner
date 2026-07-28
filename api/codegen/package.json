@@ -1,5 +1,5 @@
 {
-  "name": "@tewake/api-codegen",
+  "name": "@sparerunner/api-codegen",
   "version": "0.0.0",
   "private": true,
   "type": "module",

@@ -8,8 +8,8 @@ const baseConfiguration: Schema["Configuration"] = {
   nodes: [{ id: "dell-black", displayName: "dell-black", maxRunners: 2 }],
   runnerProfiles: [
     {
-      id: "tewake",
-      label: "tewake",
+      id: "sparerunner",
+      label: "sparerunner",
       minAvailableMemoryBytes: "0",
       versionPolicy: "auto_update",
       runtime: "native",
@@ -141,9 +141,9 @@ export function createScenarioClient(scenario: ScenarioName): ManagementClient {
                   id: "target-1",
                   installationId: "installation-1",
                   scopeKind: "repository",
-                  scope: "genm/tewake",
-                  scaleSetName: "tewake",
-                  runnerProfileId: "tewake",
+                  scope: "genm/sparerunner",
+                  scaleSetName: "sparerunner",
+                  runnerProfileId: "sparerunner",
                   status: "degraded",
                   freshness: {
                     state: "stale",
