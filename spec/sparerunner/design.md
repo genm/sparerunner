@@ -286,6 +286,25 @@ potentially truncated message list.
 The adapter preserves last-known data on transient errors and exposes staleness
 metadata. It never converts an external 5xx into an empty successful snapshot.
 
+#### Why scale sets rather than webhooks or REST polling
+
+Three ways exist to feed self-hosted capacity from GitHub, and the product
+constraints select exactly one. A `workflow_job` webhook needs an inbound HTTPS
+endpoint that GitHub can reach, so it contradicts the promise that an
+administrator opens no port and configures no relay; hosting a relay to receive
+it would move the control plane off the LAN this release claims. Polling the
+REST API for queued jobs multiplies rate-limited requests by the number of
+private organization and repository scopes one fleet serves, has no assignment
+protocol — it observes queue state without being told which runner GitHub
+expects — and adds latency that competes with the 60-second pickup window a
+warm node must satisfy. The scale-set protocol is the only surface that is
+outbound-only long polling, carries the authoritative assigned-demand
+statistic, and generates JIT runner configuration inside the same
+authenticated session. Its Public Preview status is a recorded risk, not a
+reason to prefer a documented API that cannot satisfy the constraints: the
+pinned client stays behind `internal/github`, and its source-level churn is
+absorbed there.
+
 #### Assigned jobs, not JobAvailable, create runner executions
 
 `Statistics.TotalAssignedJobs` is the demand signal. Desired active executions
@@ -1015,7 +1034,26 @@ recorded beside the implementation.
 The API never returns credential material. Configuration apply uses an optimistic
 revision and fails on stale input rather than silently overwriting newer state.
 
-## Node Availability Control and Desktop Clients
+### Diagnosis command
+
+`sprun doctor` composes the read surfaces that already exist into one fail-closed
+report: the controller state directory and its owner-proof boundary, the loopback
+listener's liveness and readiness endpoints, an owner-bootstrapped session read
+of GitHub App authority and per-Target runtime freshness, and — when this
+computer also runs an agent — the same nodectl status document the tray renders.
+It introduces no new API surface, no new privilege, and no mutation: every check
+is a read the CLI can already perform, and a doctor run changes no admission,
+availability, capacity, or configuration state.
+
+Findings are explicit and three-valued. A check passes, fails with the same
+machine-readable error class its underlying surface already emits, or is
+reported unavailable when its subject is absent — an agent that is not installed
+on this computer is an explicit not-installed finding, never a failure and never
+silence. Missing data is never rendered as healthy. `--json` emits a versioned
+document under the same strict-decode discipline as `sprun node --json`, and the
+process exits non-zero exactly when a required authority fails. A finding names
+authorities and error classes, never credentials, proofs, session material, join
+codes, or JIT state.
 
 The tray and the Raycast extension are presentation surfaces, not new authorities.
 They show the node's own state and control two things: whether this computer
