@@ -15,7 +15,7 @@ for os in linux darwin windows; do
   fi
 
   for arch in amd64 arm64; do
-    for command in sparerunner sparerunner-agent; do
+    for command in sprun sparerunner-agent; do
       target="$output_dir/$command-$os-$arch$extension"
       printf 'Building %s/%s: %s\n' "$os" "$arch" "$command"
       CGO_ENABLED=0 GOOS="$os" GOARCH="$arch" \

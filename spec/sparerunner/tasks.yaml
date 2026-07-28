@@ -43,7 +43,7 @@ tasks:
     acceptance:
       - The requirements, design, and task vocabulary are consistent and executable.
       - "`just check` succeeds and emits machine-readable Go and Vitest results."
-      - "`sparerunner` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
+      - "`sprun` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
       - Required CI always reports and uses only GitHub-hosted runners.
 
   - id: spr-002
@@ -770,6 +770,7 @@ tasks:
     notes:
       - "`sprun` contracts SPAre RUNner instead of abbreviating it. `spr` was rejected as a common three-letter abbreviation that collides and searches poorly, and `srun` as Slurm's job-launch command."
       - "Shipping `sprun` as a second binary beside `sparerunner` was rejected. It would not shorten the CLI, only add one, and it would duplicate the controller artifact and its signing and attestation surface on every supported platform. No unit in `packaging/` runs the controller as an OS service, so renaming the binary an operator invokes by hand does not cost process-list clarity; the Agent, which does run as a service, keeps `sparerunner-agent`."
+      - "2026-07-28: `scripts/cross-build.sh` builds `./cmd/$command` from a name list, so it does not contain the literal string `cmd/sparerunner` and was missed by the path search. `just check` does not run the cross-build matrix, so it only failed in CI. `just build-all` now passes for all twelve targets and is part of this task's verification."
       - "The command surface is unchanged. `invite`, `jobs`, `status`, `doctor`, `dashboard`, and a `machines` vocabulary were raised alongside the short name and deliberately not implemented here: the first four do not exist, and `Machine` conflicts with the Node/GitHub Target/Runner Profile vocabulary that spr-022 settled."
     acceptance:
       - The built controller binary is `sprun`, and no build, script, packaging file, or workflow still refers to a `sparerunner` controller binary.
