@@ -101,9 +101,13 @@ parallelism, and re-registering broken runners.
 
 ### Connect GitHub
 
-1. Start the GitHub App Manifest flow from the Web UI.
-2. Create an App owned by the user and install it into one or more accounts or
-   organizations.
+1. Create a user-owned GitHub App and give the controller its credentials with
+   `tewake github connect`, or start the App Manifest flow from the Web UI,
+   which creates the App and stores the same credentials in one confirmation.
+   Neither path is privileged: both write through the controller-owned platform
+   credential store, and the documented CLI path requires no browser session
+   with the controller.
+2. Install that App into one or more accounts or organizations.
 3. Create a GitHub Target for a private repository or organization scope.
 4. Reject public scopes, unverifiable visibility, unsafe runner-group access, and
    overlapping repository-/organization-level routing.

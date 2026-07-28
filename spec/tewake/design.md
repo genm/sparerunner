@@ -722,6 +722,19 @@ provides:
 - controller settings and non-secret YAML export/apply
 - health, version, and staleness metadata
 
+The App credential has two equal entry points: the `tewake github` CLI, which
+needs no browser and no management session, and the Web UI Manifest flow, which
+creates the App and returns the same credential in one confirmation. Both write
+through the controller-owned platform credential store, so the console is a
+convenience rather than a prerequisite for setup.
+
+A single project-published App shared by every fleet is deliberately not
+offered. Acting as a GitHub App requires signing a JWT with that App's private
+key, so a shared App means either distributing one key to every controller —
+letting any holder mint tokens for every other installation of it — or running a
+hosted key holder, which contradicts the LAN-first boundary this release
+claims. The App is therefore always user-owned.
+
 Setup state separates two questions that a console must never conflate: whether
 the controller can act as the configured GitHub App, and whether each Target's
 GitHub runtime is currently verified. Only the first gates Target creation; the

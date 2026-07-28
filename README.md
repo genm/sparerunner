@@ -59,7 +59,17 @@ Then, on another computer:
 tewake join twk_...
 ```
 
-After connecting private GitHub scopes, workflows select the fleet with:
+Connect a GitHub App you own, then point a Target at a private scope. This needs
+no browser session with the controller — see
+[Connecting a GitHub App](docs/github-app.md):
+
+```bash
+tewake github connect --app-id 1234567 --client-id Iv1.… --private-key-file ./key.pem
+tewake github installations
+tewake config apply fleet.yaml
+```
+
+Workflows then select the fleet with:
 
 ```yaml
 runs-on: tewake
