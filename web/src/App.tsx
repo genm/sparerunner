@@ -780,7 +780,18 @@ function SettingsPage({
   const [problem, setProblem] = useState<Problem>();
   const [yaml, setYAML] = useState<string>();
   const schedulerMaxError = fieldProblem(problem, "scheduler.maxRunners");
+  // `draft`'s initializer above already reads `snapshot.configuration`, so this
+  // effect has nothing to reconcile on its first run — skip it. Running it
+  // anyway is not just redundant: if a passive effect from mount is still
+  // unflushed when the operator's first keystroke lands (they can race in the
+  // same commit under load), this effect's unconditional setDraft(snapshot.
+  // configuration) would win the batch and silently discard that edit.
+  const settingsHydratedRef = useRef(false);
   useEffect(() => {
+    if (!settingsHydratedRef.current) {
+      settingsHydratedRef.current = true;
+      return;
+    }
     if (!dirty && !reloadRequired) {
       setDraft(snapshot.configuration);
       setRemoteChanged(false);
