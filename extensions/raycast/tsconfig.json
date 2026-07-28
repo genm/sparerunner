@@ -11,6 +11,7 @@
     "skipLibCheck": true,
     "jsx": "react-jsx",
     "resolveJsonModule": true,
-    "moduleResolution": "node"
+    "moduleResolution": "bundler",
+    "types": ["node"]
   }
 }
