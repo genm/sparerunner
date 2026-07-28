@@ -46,8 +46,8 @@ func runContext(ctx context.Context, args []string, stdout, stderr io.Writer) in
 
 func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "tewake-agent",
-		Short:         "Run a Tewake node agent",
+		Use:           "sparerunner-agent",
+		Short:         "Run a SpareRunner node agent",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       buildinfo.String(),
@@ -158,5 +158,5 @@ func resolveAgentStateDirectory(explicit string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve OS user configuration directory: %w", err)
 	}
-	return filepath.Join(config, "tewake", "agent"), nil
+	return filepath.Join(config, "sparerunner", "agent"), nil
 }

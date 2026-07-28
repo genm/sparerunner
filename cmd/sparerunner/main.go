@@ -57,13 +57,13 @@ func runContextWithInput(
 
 func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "tewake",
+		Use:           "sparerunner",
 		Short:         "Orchestrate trusted GitHub Actions runners across computers you own",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		Version:       buildinfo.String(),
 		RunE: func(*cobra.Command, []string) error {
-			return errors.New("a Tewake command is required")
+			return errors.New("a SpareRunner command is required")
 		},
 	}
 	root.SetOut(stdout)
@@ -118,7 +118,7 @@ func newInitCommand() *cobra.Command {
 	var hints []string
 	command := &cobra.Command{
 		Use:   "init",
-		Short: "Initialize a Tewake controller",
+		Short: "Initialize a SpareRunner controller",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			directory, err := resolveStateDirectory(stateDirectory, "controller")
@@ -130,7 +130,7 @@ func newInitCommand() *cobra.Command {
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Controller initialized in %s\n", directory)
-			fmt.Fprintf(command.OutOrStdout(), "tewake join %s\n", code)
+			fmt.Fprintf(command.OutOrStdout(), "sparerunner join %s\n", code)
 			return nil
 		},
 	}
@@ -145,7 +145,7 @@ func newServeCommand() *cobra.Command {
 	var readHeaderTimeout time.Duration
 	command := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the Tewake controller and embedded Web UI",
+		Short: "Run the SpareRunner controller and embedded Web UI",
 		Args:  cobra.NoArgs,
 		RunE: func(command *cobra.Command, _ []string) error {
 			directory, err := resolveStateDirectory(stateDirectory, "controller")
@@ -205,7 +205,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 	var discoveryTimeout, connectionTimeout time.Duration
 	command := &cobra.Command{
 		Use:   "join [join-code]",
-		Short: "Enroll this computer with a Tewake controller",
+		Short: "Enroll this computer with a SpareRunner controller",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(command *cobra.Command, args []string) error {
 			directory, err := resolveStateDirectoryForPlatform(stateDirectory, "agent", goos)
@@ -238,7 +238,7 @@ func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
 	const macOSServiceState = "/Library/Application Support/Tewake/agent"
 	switch {
 	case goos == "windows":
-		fmt.Fprintln(output, "TewakeAgent service is enrolled and running.")
+		fmt.Fprintln(output, "SpareRunnerAgent service is enrolled and running.")
 	case goos == "darwin" && stateDirectory == macOSServiceState:
 		// The path is a platform contract, not a host path to normalize. Comparing
 		// it verbatim keeps cross-compiled CLI tests from treating a macOS path as a
@@ -248,7 +248,7 @@ func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
 			"launchd manages this Agent. Activate it with: sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent",
 		)
 	default:
-		fmt.Fprintf(output, "Start it with: tewake-agent serve --state-dir %s\n", stateDirectory)
+		fmt.Fprintf(output, "Start it with: sparerunner-agent serve --state-dir %s\n", stateDirectory)
 	}
 }
 
@@ -270,7 +270,7 @@ func newNodeCommand() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				fmt.Fprintf(command.OutOrStdout(), "tewake join %s\n", code)
+				fmt.Fprintf(command.OutOrStdout(), "sparerunner join %s\n", code)
 				return nil
 			})
 		},
@@ -309,7 +309,7 @@ func newUICommand() *cobra.Command {
 				}
 				fmt.Fprintln(
 					command.OutOrStdout(),
-					"Browser authorized. Return to Tewake in the browser.",
+					"Browser authorized. Return to SpareRunner in the browser.",
 				)
 				return nil
 			})
@@ -411,7 +411,7 @@ func resolveStateDirectory(explicit, role string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve OS user configuration directory: %w", err)
 	}
-	return filepath.Join(config, "tewake", role), nil
+	return filepath.Join(config, "sparerunner", role), nil
 }
 
 func resolveStateDirectoryForPlatform(explicit, role, goos string) (string, error) {

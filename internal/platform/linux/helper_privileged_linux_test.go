@@ -1,4 +1,4 @@
-//go:build linux && tewake_privileged
+//go:build linux && sparerunner_privileged
 
 package linux
 

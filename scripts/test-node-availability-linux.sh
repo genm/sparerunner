@@ -21,9 +21,9 @@ case "${target_arch}" in
 esac
 
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
-  go build -trimpath -o "${test_root}/tewake" "${repo_root}/cmd/tewake"
+  go build -trimpath -o "${test_root}/sparerunner" "${repo_root}/cmd/sparerunner"
 CGO_ENABLED=0 GOOS=linux GOARCH="${target_arch}" \
-  go build -trimpath -o "${test_root}/tewake-agent" "${repo_root}/cmd/tewake-agent"
+  go build -trimpath -o "${test_root}/sparerunner-agent" "${repo_root}/cmd/sparerunner-agent"
 
 docker run --rm \
   --network none \
@@ -33,8 +33,8 @@ docker run --rm \
   --user 65532:65532 \
   --tmpfs /state:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
   --tmpfs /tmp:rw,noexec,nosuid,nodev,mode=0700,uid=65532,gid=65532 \
-  --mount "type=bind,src=${test_root}/tewake,dst=/opt/tewake,readonly" \
-  --mount "type=bind,src=${test_root}/tewake-agent,dst=/opt/tewake-agent,readonly" \
+  --mount "type=bind,src=${test_root}/sparerunner,dst=/opt/sparerunner,readonly" \
+  --mount "type=bind,src=${test_root}/sparerunner-agent,dst=/opt/sparerunner-agent,readonly" \
   alpine@sha256:14358309a308569c32bdc37e2e0e9694be33a9d99e68afb0f5ff33cc1f695dce \
   /bin/sh -eu -c '
     controller_pid=
@@ -62,7 +62,7 @@ docker run --rm \
     }
 
     status_field() {
-      /opt/tewake node status --state-dir /state/agent --json | field "$1"
+      /opt/sparerunner node status --state-dir /state/agent --json | field "$1"
     }
 
     await_endpoint() {
@@ -70,7 +70,7 @@ docker run --rm \
       # restart in the offline part of this test is waited on directly.
       i=0
       while [ "${i}" -lt 100 ]; do
-        if /opt/tewake node status --state-dir /state/agent --json >/dev/null 2>&1; then
+        if /opt/sparerunner node status --state-dir /state/agent --json >/dev/null 2>&1; then
           return 0
         fi
         i=$((i + 1))
@@ -87,7 +87,7 @@ docker run --rm \
     await_eligible_targets_empty() {
       i=0
       while [ "${i}" -lt 100 ]; do
-        if /opt/tewake node status --state-dir /state/agent --json 2>/dev/null \
+        if /opt/sparerunner node status --state-dir /state/agent --json 2>/dev/null \
           | grep -q "\"eligibleTargets\": \[\]"; then
           return 0
         fi
@@ -95,7 +95,7 @@ docker run --rm \
         sleep 0.1
       done
       echo "timed out waiting for an empty eligibleTargets heartbeat echo" >&2
-      /opt/tewake node status --state-dir /state/agent --json >&2 || true
+      /opt/sparerunner node status --state-dir /state/agent --json >&2 || true
       return 1
     }
 
@@ -111,17 +111,17 @@ docker run --rm \
         sleep 0.1
       done
       echo "timed out waiting for ${name}=${want}" >&2
-      /opt/tewake node status --state-dir /state/agent --json >&2 || true
+      /opt/sparerunner node status --state-dir /state/agent --json >&2 || true
       return 1
     }
 
-    init_output="$(/opt/tewake init \
+    init_output="$(/opt/sparerunner init \
       --state-dir /state/controller \
       --hint https://127.0.0.1:17443)"
-    join_code="$(printf "%s\n" "${init_output}" | awk "/^tewake join / { print \$3 }")"
+    join_code="$(printf "%s\n" "${init_output}" | awk "/^sparerunner join / { print \$3 }")"
     test -n "${join_code}"
 
-    /opt/tewake serve \
+    /opt/sparerunner serve \
       --state-dir /state/controller \
       --agent-listen 127.0.0.1:17443 \
       --admin-listen "" \
@@ -139,19 +139,19 @@ docker run --rm \
     done
     test "${ready}" = true
 
-    /opt/tewake join "${join_code}" \
+    /opt/sparerunner join "${join_code}" \
       --state-dir /state/agent \
       --controller https://127.0.0.1:17443 >/tmp/join.log 2>&1
 
     # An agent without the local control surface must refuse desktop clients
     # rather than answering from an implicit endpoint.
-    /opt/tewake-agent serve \
+    /opt/sparerunner-agent serve \
       --state-dir /state/agent \
       --connection-timeout 2s \
       --reconnect-delay 50ms >/tmp/agent-nocontrol.log 2>&1 &
     agent_pid=$!
     sleep 0.5
-    if /opt/tewake node status --state-dir /state/agent --json >/tmp/nocontrol.json 2>/dev/null; then
+    if /opt/sparerunner node status --state-dir /state/agent --json >/tmp/nocontrol.json 2>/dev/null; then
       echo "status succeeded without --local-control" >&2
       exit 1
     fi
@@ -161,7 +161,7 @@ docker run --rm \
     test "$(field errorClass </tmp/nocontrol.json)" = endpoint_unavailable
     stop_agent
 
-    /opt/tewake-agent serve \
+    /opt/sparerunner-agent serve \
       --state-dir /state/agent \
       --local-control \
       --connection-timeout 2s \
@@ -178,18 +178,18 @@ docker run --rm \
     # targets for this node" from "no refresh yet", and confirms the empty
     # list alone never breaks status rendering.
     await_eligible_targets_empty
-    /opt/tewake node status --state-dir /state/agent --json >/tmp/status-first.json
+    /opt/sparerunner node status --state-dir /state/agent --json >/tmp/status-first.json
     grep -q "\"eligibleTargets\": \[\]" /tmp/status-first.json
 
     # Stopping withholds capacity and records the requesting surface.
-    /opt/tewake node pause --state-dir /state/agent --source raycast --json >/tmp/pause.json
+    /opt/sparerunner node pause --state-dir /state/agent --source raycast --json >/tmp/pause.json
     test "$(field intent </tmp/pause.json)" = stopped
     test "$(field intentChangedBy </tmp/pause.json)" = raycast
     test "$(field intentExplicit </tmp/pause.json)" = true
 
     # A stopped computer stays stopped across an agent service restart.
     stop_agent
-    /opt/tewake-agent serve \
+    /opt/sparerunner-agent serve \
       --state-dir /state/agent \
       --local-control \
       --connection-timeout 2s \
@@ -200,7 +200,7 @@ docker run --rm \
 
     # Resuming adds capacity, so it is pending until the controller confirms it,
     # and then becomes effective.
-    /opt/tewake node resume --state-dir /state/agent --source tray --json >/tmp/resume.json
+    /opt/sparerunner node resume --state-dir /state/agent --source tray --json >/tmp/resume.json
     test "$(field intent </tmp/resume.json)" = accepting
     test "$(field pendingResume </tmp/resume.json)" = true
     await_field pendingResume false
@@ -212,14 +212,14 @@ docker run --rm \
     controller_pid=
     await_field controllerConnected false
     test "$(status_field pendingResume)" = true
-    /opt/tewake node pause --state-dir /state/agent --source cli --json >/tmp/offline-pause.json
+    /opt/sparerunner node pause --state-dir /state/agent --source cli --json >/tmp/offline-pause.json
     test "$(field intent </tmp/offline-pause.json)" = stopped
 
     # Per-Target exclusion. No GitHub target exists in this offline rig, so the
     # scenarios below are exactly the ones that do not need one: excluding an
     # unknown Target is a deliberate safe no-op rendered as not-currently-
     # eligible, and it must be just as durable as the global intent.
-    /opt/tewake node targets --state-dir /state/agent \
+    /opt/sparerunner node targets --state-dir /state/agent \
       --exclude twk-e2e-unknown-target --source tray --json >/tmp/exclude.json
     grep -q "unknownExclusions" /tmp/exclude.json
     grep -q "twk-e2e-unknown-target" /tmp/exclude.json
@@ -227,24 +227,24 @@ docker run --rm \
     # Excluding is subtractive, so it is durable the instant it is recorded and
     # survives an agent service restart exactly like a stop.
     stop_agent
-    /opt/tewake-agent serve \
+    /opt/sparerunner-agent serve \
       --state-dir /state/agent \
       --local-control \
       --connection-timeout 2s \
       --reconnect-delay 50ms >/tmp/agent-targets.log 2>&1 &
     agent_pid=$!
     await_endpoint
-    /opt/tewake node targets --state-dir /state/agent --json >/tmp/targets.json
+    /opt/sparerunner node targets --state-dir /state/agent --json >/tmp/targets.json
     grep -q "twk-e2e-unknown-target" /tmp/targets.json
 
     # The text surface renders it as not-currently-eligible rather than as an
     # error, because the owner may legitimately exclude a Target this node has
     # never been told about.
-    /opt/tewake node targets --state-dir /state/agent >/tmp/targets.txt
+    /opt/sparerunner node targets --state-dir /state/agent >/tmp/targets.txt
     grep -q "not currently eligible" /tmp/targets.txt
 
     # Including removes it again.
-    /opt/tewake node targets --state-dir /state/agent \
+    /opt/sparerunner node targets --state-dir /state/agent \
       --include twk-e2e-unknown-target --source cli --json >/tmp/include.json
     if grep -q "twk-e2e-unknown-target" /tmp/include.json; then
       echo "include did not remove the exclusion" >&2
@@ -252,7 +252,7 @@ docker run --rm \
     fi
 
     # An ambiguous invocation is refused rather than silently resolved.
-    if /opt/tewake node targets --state-dir /state/agent \
+    if /opt/sparerunner node targets --state-dir /state/agent \
       --exclude --include twk-e2e-unknown-target >/tmp/ambiguous.log 2>&1; then
       echo "ambiguous exclude/include invocation was accepted" >&2
       exit 1
@@ -260,7 +260,7 @@ docker run --rm \
 
     # A malformed identifier is rejected at the control boundary with a
     # machine-readable class, so garbage never reaches SQLite or the wire.
-    if /opt/tewake node targets --state-dir /state/agent \
+    if /opt/sparerunner node targets --state-dir /state/agent \
       --exclude " padded-target " --json >/tmp/bad-target.json 2>/dev/null; then
       echo "a malformed target identifier was accepted" >&2
       exit 1
@@ -271,11 +271,11 @@ docker run --rm \
     # silently truncating the owner deny-list.
     i=0
     while [ "${i}" -lt 256 ]; do
-      /opt/tewake node targets --state-dir /state/agent \
+      /opt/sparerunner node targets --state-dir /state/agent \
         --exclude "twk-e2e-cap-${i}" >/dev/null
       i=$((i + 1))
     done
-    if /opt/tewake node targets --state-dir /state/agent \
+    if /opt/sparerunner node targets --state-dir /state/agent \
       --exclude twk-e2e-cap-overflow --json >/tmp/cap.json 2>/dev/null; then
       echo "a full exclusion set accepted another entry" >&2
       exit 1

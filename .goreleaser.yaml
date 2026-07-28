@@ -1,6 +1,6 @@
 version: 2
 
-project_name: tewake
+project_name: sparerunner
 
 before:
   hooks:
@@ -9,8 +9,8 @@ before:
 
 builds:
   - id: controller
-    main: ./cmd/tewake
-    binary: tewake
+    main: ./cmd/sparerunner
+    binary: sparerunner
     goos:
       - linux
       - darwin
@@ -27,8 +27,8 @@ builds:
       - -X github.com/genm/sparerunner/internal/buildinfo.date={{ .Date }}
 
   - id: agent
-    main: ./cmd/tewake-agent
-    binary: tewake-agent
+    main: ./cmd/sparerunner-agent
+    binary: sparerunner-agent
     goos:
       - linux
       - darwin
@@ -94,10 +94,10 @@ changelog:
 release:
   github:
     owner: genm
-    name: tewake
+    name: sparerunner
   draft: true
   prerelease: auto
-  name_template: "Tewake {{ .Tag }}"
+  name_template: "SpareRunner {{ .Tag }}"
   header: |
     This is a draft release. Publish only after the real three-OS and two-installation
     live evidence gate, platform signing, and clean-machine install checks pass.

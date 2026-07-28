@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# -ne 1 ]]; then
-  printf 'usage: %s <tewake-binary>\n' "$0" >&2
+  printf 'usage: %s <sparerunner-binary>\n' "$0" >&2
   exit 2
 fi
 
@@ -17,14 +17,14 @@ if [[ -z "${runtime_parent}" || "${runtime_parent}" != /* || ! -d "${runtime_par
   printf 'temporary directory parent is invalid\n' >&2
   exit 1
 fi
-sensitive_output="$(mktemp -d "${runtime_parent}/tewake-management-e2e-output.XXXXXX")"
+sensitive_output="$(mktemp -d "${runtime_parent}/sparerunner-management-e2e-output.XXXXXX")"
 
 cleanup() {
   # Playwright can create an automatic DOM context even when trace, screenshot,
   # and video are disabled. Never retain that credential-bearing directory.
   if [[ -d "${sensitive_output}" ]]; then
     case "${sensitive_output}" in
-      "${runtime_parent}"/tewake-management-e2e-output.*)
+      "${runtime_parent}"/sparerunner-management-e2e-output.*)
         find "${sensitive_output}" -depth -delete
         ;;
     esac
@@ -39,7 +39,7 @@ if [[ "$(uname -s)" != Linux ]]; then
   exit 1
 fi
 if [[ ! -x "${binary}" ]]; then
-  printf 'tewake binary is not executable\n' >&2
+  printf 'sparerunner binary is not executable\n' >&2
   exit 1
 fi
 playwright="${repo_root}/web/node_modules/.bin/playwright"

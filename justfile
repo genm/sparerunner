@@ -60,26 +60,26 @@ check-release-artifacts dist='dist':
   ./scripts/check-release-artifacts.sh "{{dist}}"
 
 test-management-ui-linux: build
-  ./scripts/test-management-ui-linux.sh bin/tewake
+  ./scripts/test-management-ui-linux.sh bin/sparerunner
 
 build:
   mkdir -p bin
   pnpm --dir web build
-  go build -trimpath -o bin/tewake ./cmd/tewake
-  go build -trimpath -o bin/tewake-agent ./cmd/tewake-agent
+  go build -trimpath -o bin/sparerunner ./cmd/sparerunner
+  go build -trimpath -o bin/sparerunner-agent ./cmd/sparerunner-agent
 
 # The optional desktop tray needs cgo and a native toolchain, so it stays out of
 # `just build` and the cross-build matrix.
 build-tray:
   mkdir -p bin
-  CGO_ENABLED=1 go build -trimpath -o bin/tewake-tray ./cmd/tewake-tray
+  CGO_ENABLED=1 go build -trimpath -o bin/sparerunner-tray ./cmd/sparerunner-tray
 
 build-all:
   ./scripts/cross-build.sh
 
 smoke-embedded-ui-linux: build
   test "$(go env GOOS)" = linux
-  ./scripts/smoke-embedded-ui.sh bin/tewake
+  ./scripts/smoke-embedded-ui.sh bin/sparerunner
 
 check: generate-api-check generate-web-check fmt-check lint test test-platform-linux build
 

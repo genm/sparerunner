@@ -28,7 +28,7 @@ func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	if exitCode := run([]string{"--version"}, &stdout, &stderr); exitCode != 0 {
 		t.Fatalf("run(--version) exit code = %d, want 0", exitCode)
 	}
-	if !strings.Contains(stdout.String(), "tewake ") {
+	if !strings.Contains(stdout.String(), "sparerunner ") {
 		t.Fatalf("version output = %q, want build information", stdout.String())
 	}
 	if stderr.Len() != 0 {

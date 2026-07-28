@@ -247,7 +247,7 @@ func userDataRoot() (string, error) {
 		if !filepath.IsAbs(explicit) {
 			return "", errors.New("XDG_DATA_HOME must be an absolute path")
 		}
-		return filepath.Join(filepath.Clean(explicit), "tewake"), nil
+		return filepath.Join(filepath.Clean(explicit), "sparerunner"), nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil || !filepath.IsAbs(home) {

@@ -1,5 +1,5 @@
-// Command tewake-tray is the optional, unprivileged desktop presentation of
-// this computer's Tewake node. It renders what the local Agent reports and
+// Command sparerunner-tray is the optional, unprivileged desktop presentation of
+// this computer's SpareRunner node. It renders what the local Agent reports and
 // toggles exactly one value: whether this computer accepts new jobs.
 //
 // It is not an authority. It holds no controller credential, speaks only the
@@ -56,7 +56,7 @@ func main() {
 }
 
 func fail(err error) {
-	fmt.Fprintf(os.Stderr, "tewake-tray: %v\n", err)
+	fmt.Fprintf(os.Stderr, "sparerunner-tray: %v\n", err)
 	// A desktop without a usable tray host, or an unusable endpoint, is an
 	// explicit unsupported environment. The CLI remains the supported path.
 	os.Exit(1)
@@ -70,7 +70,7 @@ func resolveStateDirectory(explicit string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve OS user configuration directory: %w", err)
 	}
-	return filepath.Join(config, "tewake", "agent"), nil
+	return filepath.Join(config, "sparerunner", "agent"), nil
 }
 
 type trayApp struct {
@@ -100,7 +100,7 @@ type trayApp struct {
 
 func (app *trayApp) onReady() {
 	systray.SetTitle(titleUnknown)
-	systray.SetTooltip("Tewake node")
+	systray.SetTooltip("SpareRunner node")
 
 	app.headline = systray.AddMenuItem("Checking this computer…", "")
 	app.headline.Disable()
@@ -181,10 +181,10 @@ func (app *trayApp) refresh() {
 }
 
 const (
-	titleAccepting = "● Tewake"
-	titleStopped   = "○ Tewake"
-	titlePending   = "◐ Tewake"
-	titleUnknown   = "⚠ Tewake"
+	titleAccepting = "● SpareRunner"
+	titleStopped   = "○ SpareRunner"
+	titlePending   = "◐ SpareRunner"
+	titleUnknown   = "⚠ SpareRunner"
 )
 
 // render never collapses an error, a stale observation, or a pending resume
@@ -252,9 +252,9 @@ func isolationDetail(status nodectl.Status) string {
 
 func isolationTooltip(status nodectl.Status) string {
 	if !status.SharedRunnerIdentity {
-		return "Tewake node"
+		return "SpareRunner node"
 	}
-	return "Tewake node — shared runner identity: jobs run as the agent user, " +
+	return "SpareRunner node — shared runner identity: jobs run as the agent user, " +
 		"without UID isolation"
 }
 

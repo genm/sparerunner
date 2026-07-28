@@ -9,11 +9,11 @@ if [[ -z "${runtime_parent}" || "${runtime_parent}" != /* || ! -d "${runtime_par
   echo "temporary directory parent is invalid" >&2
   exit 1
 fi
-scratch_dir="$(mktemp -d "${runtime_parent}/tewake-generated-web.XXXXXX")"
+scratch_dir="$(mktemp -d "${runtime_parent}/sparerunner-generated-web.XXXXXX")"
 
 cleanup() {
   case "${scratch_dir}" in
-    "${runtime_parent}"/tewake-generated-web.*)
+    "${runtime_parent}"/sparerunner-generated-web.*)
       if [[ -d "${scratch_dir}" ]]; then
         find "${scratch_dir}" -depth -delete
       fi

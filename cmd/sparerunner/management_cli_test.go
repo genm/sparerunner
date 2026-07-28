@@ -65,7 +65,7 @@ func TestUIAuthorizeUsesOwnerSessionAndDoesNotTreatCodeAsAuthority(t *testing.T)
 	if err != nil {
 		t.Fatalf("ui authorize: %v", err)
 	}
-	if stdout.String() != "Browser authorized. Return to Tewake in the browser.\n" {
+	if stdout.String() != "Browser authorized. Return to SpareRunner in the browser.\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -145,7 +145,7 @@ func TestNodeAddUsesManagementAPISessionCookieOriginAndCSRF(t *testing.T) {
 	if operationCalls != 1 {
 		t.Fatalf("operation calls = %d, want 1", operationCalls)
 	}
-	if stdout.String() != "tewake join "+joinCode+"\n" {
+	if stdout.String() != "sparerunner join "+joinCode+"\n" {
 		t.Fatalf("stdout = %q", stdout.String())
 	}
 	if stderr.Len() != 0 {

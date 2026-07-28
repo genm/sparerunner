@@ -22,7 +22,7 @@
 *.tsbuildinfo
 
 # Local runtime state
-/.tewake/
+/.sparerunner/
 /data/
 /output/
 

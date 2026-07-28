@@ -17,7 +17,7 @@ func TestRunVersionPrintsBuildInformation(t *testing.T) {
 	if err := run([]string{"version"}, &stdout, &stderr); err != nil {
 		t.Fatalf("run(version) returned error: %v", err)
 	}
-	if !strings.Contains(stdout.String(), "tewake ") {
+	if !strings.Contains(stdout.String(), "sparerunner ") {
 		t.Fatalf("version output = %q, want build information", stdout.String())
 	}
 	if stderr.Len() != 0 {
@@ -67,7 +67,7 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 		) {
 		t.Fatalf("packaged macOS join output = %q", output)
 	}
-	if strings.Contains(output, "tewake-agent serve") {
+	if strings.Contains(output, "sparerunner-agent serve") {
 		t.Fatalf("packaged macOS join suggested a second Agent process: %q", output)
 	}
 	if stderr.Len() != 0 {

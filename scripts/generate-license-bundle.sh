@@ -7,7 +7,7 @@ if [[ -e "$output_dir" ]]; then
   exit 1
 fi
 
-temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/tewake-licenses.XXXXXX")"
+temporary_root="$(mktemp -d "${TMPDIR:-/tmp}/sparerunner-licenses.XXXXXX")"
 trap 'rm -rf "$temporary_root"' EXIT
 
 module="github.com/google/go-licenses/v2@v2.0.1"
@@ -16,9 +16,9 @@ go run "$module" report ./... > "$temporary_root/bundle/THIRD_PARTY_LICENSES.csv
 go run "$module" save ./... --save_path="$temporary_root/bundle/THIRD_PARTY_LICENSES"
 
 {
-  printf 'Tewake third-party notices\n'
+  printf 'SpareRunner third-party notices\n'
   printf '================================\n\n'
-  printf 'The following project license applies to Tewake itself:\n\n'
+  printf 'The following project license applies to SpareRunner itself:\n\n'
   cat LICENSE
   printf '\n\nThird-party dependency license files are under THIRD_PARTY_LICENSES/.\n'
   printf 'The machine-readable dependency report is THIRD_PARTY_LICENSES.csv.\n'

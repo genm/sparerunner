@@ -80,7 +80,7 @@ func newGitHubConnectCommand() *cobra.Command {
 			fmt.Fprintf(
 				command.OutOrStdout(),
 				"Connected GitHub App %d. Install it into your organizations, then run: "+
-					"tewake github installations\n",
+					"sparerunner github installations\n",
 				credential.AppID,
 			)
 			fmt.Fprintf(
@@ -124,7 +124,7 @@ func newGitHubInstallationsCommand() *cobra.Command {
 			if err != nil {
 				if errors.Is(err, github.ErrGitHubNotConnected) {
 					return errors.New(
-						"no GitHub App is connected; run tewake github connect first")
+						"no GitHub App is connected; run sparerunner github connect first")
 				}
 				return err
 			}
@@ -153,7 +153,7 @@ func newGitHubInstallationsCommand() *cobra.Command {
 	return command
 }
 
-// resolveControllerStateDirectory refuses a directory that tewake init has not
+// resolveControllerStateDirectory refuses a directory that sparerunner init has not
 // prepared. Writing App credentials into an arbitrary directory would otherwise
 // fail deep inside the platform credential store, whose error names neither the
 // directory nor the missing step.
@@ -164,7 +164,7 @@ func resolveControllerStateDirectory(explicit string) (string, error) {
 	}
 	if err := app.RequireInitializedControllerState(directory); err != nil {
 		return "", fmt.Errorf(
-			"%s is not an initialized controller state directory; run tewake init first: %w",
+			"%s is not an initialized controller state directory; run sparerunner init first: %w",
 			directory, err,
 		)
 	}
