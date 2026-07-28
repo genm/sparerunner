@@ -1,7 +1,7 @@
-# Tewake security contract
+# SpareRunner security contract
 
 This is the operator-visible security contract for the first release. It
-defines what Tewake guarantees and what it deliberately does not guarantee.
+defines what SpareRunner guarantees and what it deliberately does not guarantee.
 
 ## Guarantees
 
@@ -29,7 +29,7 @@ dedicated service account, process-group ownership, workspace deletion, and
 ephemeral runner identity reduce accidental persistence but do not provide a
 security boundary against malicious workflow code. Do not enroll a machine
 containing secrets that the workflow account does not need, and do not route
-public or unreviewed code to `runs-on: tewake`.
+public or unreviewed code to `runs-on: sparerunner`.
 
 ## Reporting a vulnerability
 

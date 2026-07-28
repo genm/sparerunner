@@ -1,9 +1,13 @@
 # Release runbook
 
 The release workflow is intentionally tag-driven and creates a GitHub draft. A
-draft is not a supported release: publish it only after the TWK-014 live gate
+draft is not a supported release: publish it only after the SPR-014 live gate
 has accepted a real Linux, macOS, and Windows node plus two private GitHub App
 installations.
+
+Task IDs merged before the SpareRunner rename (spr-022) use the older `twk-NNN`
+prefix, including in commit messages and pull request titles. The mapping is
+positional: `twk-014` is `spr-014`.
 
 ## Local artifact check
 
@@ -36,10 +40,10 @@ Pushing `v*` runs [.github/workflows/release.yml](../.github/workflows/release.y
 4. A failed check uploads `dist/` for three days only.
 
 Before pushing the tag, the release owner must validate the separately captured
-TWK-014 manifest from the trusted Linux/macOS/Windows sandbox:
+SPR-014 manifest from the trusted Linux/macOS/Windows sandbox:
 
 ```bash
-just validate-release-evidence output/release-evidence/twk-014.json
+just validate-release-evidence output/release-evidence/spr-014.json
 ```
 
 This command must return zero on the exact trusted commit that will be tagged.
@@ -58,5 +62,5 @@ prerequisite. On Windows, Authenticode signing is likewise external. Until
 those signatures and the real-machine evidence exist, the repository must keep
 the release as a draft and document the unsupported combinations.
 
-The workflow uses only GitHub-hosted runners. Tewake nodes must never execute
+The workflow uses only GitHub-hosted runners. SpareRunner nodes must never execute
 release or fork-PR jobs.

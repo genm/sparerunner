@@ -1,10 +1,10 @@
-# Tewake threat model
+# SpareRunner threat model
 
 Status: design contract for the first release. This document is not proof that a live gate has passed.
 
 ## Scope and trust boundary
 
-Tewake is a host-centric runner fleet for computers owned by the operator. The
+SpareRunner is a host-centric runner fleet for computers owned by the operator. The
 Controller, its SQLite database, and the enrolled Agents are inside the
 operator's trust boundary. GitHub is the external authority for workflow job
 assignment, scale sets, runner registration, and installation scope.
@@ -48,7 +48,7 @@ sandbox.
 ## Evidence requirement
 
 The threat model is satisfied only when a trusted live harness produces a
-`tewake.cross-platform-security.v1` manifest and
-`tewake evidence validate --file <manifest>` accepts it. Missing, partial, or
+`sparerunner.cross-platform-security.v1` manifest and
+`sparerunner evidence validate --file <manifest>` accepts it. Missing, partial, or
 locally mocked evidence must fail the gate; it must not be replaced with a
 default `passed` value.

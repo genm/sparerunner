@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // The controller database records only token HMAC digests and credential

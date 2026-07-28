@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const gibibyte = uint64(1024 * 1024 * 1024)
@@ -802,12 +802,12 @@ func testTargetSpec(id domain.TargetID, operatingSystem *domain.OperatingSystem,
 			Scope:                 "owner/" + string(id),
 			Visibility:            domain.TargetPrivate,
 			RunnerGroupAccessSafe: true,
-			ScaleSetName:          "tewake-" + string(id),
+			ScaleSetName:          "sparerunner-" + string(id),
 			RunnerProfileID:       profileID,
 		},
 		Profile: domain.RunnerProfile{
 			ID:            profileID,
-			Label:         "tewake-" + string(id),
+			Label:         "sparerunner-" + string(id),
 			OS:            operatingSystem,
 			Architecture:  architecture,
 			VersionPolicy: domain.RunnerVersionPinned,

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func sharedTestIdentity(t *testing.T) RunnerIdentity {
@@ -35,7 +35,7 @@ func safeUserDirectory(t *testing.T, owner RunnerIdentity) string {
 	if err != nil || !filepath.IsAbs(home) {
 		t.Skip("no usable home directory for a private runtime root")
 	}
-	directory, err := os.MkdirTemp(home, "tewake-shared-test-")
+	directory, err := os.MkdirTemp(home, "sparerunner-shared-test-")
 	if err != nil {
 		t.Skip("cannot create a private directory under the home directory")
 	}

@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
@@ -47,7 +47,7 @@ type IdentityResolver interface {
 	ResolveRunnerIdentity(runner.ContainmentRef) (RunnerIdentity, error)
 }
 
-// StaticIdentity is the safe twk-007 default for slot 0. It is deliberately a
+// StaticIdentity is the safe spr-007 default for slot 0. It is deliberately a
 // single identity, not a claim that maxRunners greater than one is isolated.
 type StaticIdentity RunnerIdentity
 
@@ -115,7 +115,7 @@ type Runtime interface {
 	Alive(context.Context, runner.ContainmentRef, int) (bool, error)
 }
 
-// SlotAdmission is required by the privileged helper to enforce the twk-007
+// SlotAdmission is required by the privileged helper to enforce the spr-007
 // single-slot account boundary across executions and helper restarts.
 type SlotAdmission interface {
 	SlotBusy(context.Context, runner.ContainmentRef) (bool, error)
@@ -254,7 +254,7 @@ func (adapter *Adapter) PrepareContainment(ctx context.Context, executionID stri
 	}
 	owner := containmentOwner(executionID)
 	cgroup, err := adapter.runtime.EnsureCgroup(ctx, owner)
-	if err != nil || cgroup.Scope != path.Join("tewake", owner) ||
+	if err != nil || cgroup.Scope != path.Join("sparerunner", owner) ||
 		cgroup.HostEpoch == "" || cgroup.InvocationID != "" {
 		return runner.ContainmentRef{}, runner.ErrStrongOwnershipUnavailable
 	}
@@ -387,7 +387,7 @@ func (adapter *Adapter) FinalizeCleanup(
 	finalizer, ok := adapter.runtime.(RuntimeCleanupFinalizer)
 	if !ok || ctx.Err() != nil || !adapter.validContainment(process.Containment) ||
 		root == nil || !validAdapterWorkspaceName(name) ||
-		process.Containment.OwnerID != "tewake-"+name ||
+		process.Containment.OwnerID != "sparerunner-"+name ||
 		expected.Backend != WorkspaceBackend || expected.OwnerID == "" {
 		return runner.ErrCleanupFailed
 	}
@@ -484,7 +484,7 @@ func (adapter *Adapter) launchWithPipe(ctx context.Context, request runner.Start
 func (adapter *Adapter) validContainment(ref runner.ContainmentRef) bool {
 	return ref.Backend == containmentBackend &&
 		ref.OwnerID != "" &&
-		ref.Scope == path.Join("tewake", ref.OwnerID) &&
+		ref.Scope == path.Join("sparerunner", ref.OwnerID) &&
 		ref.HostEpoch != "" &&
 		ref.InvocationID == "" &&
 		canonicalToken(ref.FenceToken)
@@ -492,7 +492,7 @@ func (adapter *Adapter) validContainment(ref runner.ContainmentRef) bool {
 
 func containmentOwner(executionID string) string {
 	sum := sha256.Sum256([]byte(executionID))
-	return "tewake-" + hex.EncodeToString(sum[:])
+	return "sparerunner-" + hex.EncodeToString(sum[:])
 }
 
 func canonicalToken(value string) bool {

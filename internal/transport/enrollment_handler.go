@@ -7,7 +7,7 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // EnrollmentBodyLimit is derived from the transport's established 1 MiB GitHub

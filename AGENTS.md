@@ -1,33 +1,37 @@
-# Tewake repository instructions
+# SpareRunner repository instructions
 
 These instructions supplement the user-scope rules. The closest specification under
-`spec/tewake/` is authoritative for product behavior.
+`spec/sparerunner/` is authoritative for product behavior.
 
 ## Language
 
 - Write all repository content in English: source code, identifiers, comments,
-  commit messages, `spec/tewake/` documents, other Markdown docs, and GitHub-facing
+  commit messages, `spec/sparerunner/` documents, other Markdown docs, and GitHub-facing
   content such as issue titles/bodies, pull request titles/descriptions, and review
   comments.
 - This applies regardless of the contributor's or reviewer's working language.
 
 ## Product boundary
 
-- Tewake schedules official GitHub Actions runner processes on persistent computers
+- SpareRunner schedules official GitHub Actions runner processes on persistent computers
   that the administrator already owns.
+- Spare describes where the capacity comes from, not how long it lasts. A lent
+  daily-use computer and a full-time surplus computer are the same product, with
+  the same concepts and the same install.
 - Native mode is for private, trusted workflows. It is not a sandbox. Never weaken
   public-scope rejection or describe ephemeral runner identity as an ephemeral host.
+  Any wording that invites lending a personal computer carries that boundary with it.
 - Keep the user-facing concepts limited to Node, GitHub Target, and Runner Profile
-  unless the requirements change.
+  unless the requirements change. `Machine` is prose for a Node, never an identifier.
 - Do not add arbitrary node, payload, history, or concurrency limits. Follow
   the product-constraint rule that every limit needs a platform contract,
   demonstrated security/integrity risk, or measured resource boundary.
 
 ## Source of truth and task flow
 
-- Requirements: `spec/tewake/requirements.md`
-- Design and ownership boundaries: `spec/tewake/design.md`
-- Dependency graph and executable acceptance: `spec/tewake/tasks.yaml`
+- Requirements: `spec/sparerunner/requirements.md`
+- Design and ownership boundaries: `spec/sparerunner/design.md`
+- Dependency graph and executable acceptance: `spec/sparerunner/tasks.yaml`
 - Update upstream spec files before changing downstream task behavior.
 - Implement one task as one mergeable Draft PR. Merge bottom-up by `depends_on`.
 - Mark a task `done` only after its acceptance evidence passes.
@@ -39,7 +43,7 @@ These instructions supplement the user-scope rules. The closest specification un
 - Only `internal/store` owns SQLite schemas and migrations.
 - Controller SQLite owns desired state; the agent journal and OS runtime own observed
   local state. Reconciliation must not silently overwrite either authority.
-- JIT configuration is an opaque transit secret. Tewake never persists or logs the
+- JIT configuration is an opaque transit secret. SpareRunner never persists or logs the
   body. The official runner receives it through `--jitconfig` and materializes
   configuration files in its execution-specific root; Agent cleanup must remove and
   verify those files before releasing capacity.
@@ -57,7 +61,7 @@ These instructions supplement the user-scope rules. The closest specification un
   failure, invalid-input, timeout, permission, or degraded-path test.
 - UI components use Playwright Component Testing as the primary visual behavior
   surface once introduced. Capture and self-review screenshots for UI changes.
-- Required pull-request CI uses GitHub-hosted runners only. Real Tewake nodes are
+- Required pull-request CI uses GitHub-hosted runners only. Real SpareRunner nodes are
   limited to trusted protected-branch and release workflows.
 
 ## Security invariants

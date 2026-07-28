@@ -1,5 +1,5 @@
 // Package releaseevidence validates the machine-readable evidence required by
-// the first cross-platform Tewake release. A manifest is an assertion about
+// the first cross-platform SpareRunner release. A manifest is an assertion about
 // observations made by a trusted live harness; this package never creates a
 // passing manifest or substitutes local mocks for missing observations.
 package releaseevidence
@@ -19,7 +19,7 @@ import (
 
 const (
 	ManifestVersion = 1
-	ManifestKind    = "tewake.cross-platform-security.v1"
+	ManifestKind    = "sparerunner.cross-platform-security.v1"
 	maxManifestSize = 512 << 10
 )
 
@@ -29,7 +29,7 @@ var (
 	commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40,64}$`)
 )
 
-// Manifest is the only accepted aggregate format for the TWK-014 live gate.
+// Manifest is the only accepted aggregate format for the SPR-014 live gate.
 // It deliberately contains observations and identifiers, never credentials,
 // tokens, JIT material, or free-form diagnostic payloads.
 type Manifest struct {

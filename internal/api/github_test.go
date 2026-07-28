@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/auth"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/auth"
 )
 
 type githubAPIBackend struct {
@@ -21,7 +21,7 @@ type githubAPIBackend struct {
 }
 
 func (backend *githubAPIBackend) StartGitHubAppManifest(context.Context, string, string) (gen.GitHubManifestStart, error) {
-	return gen.GitHubManifestStart{ActionUrl: "https://github.com/settings/apps/new", Manifest: `{"name":"Tewake"}`, State: "twm1_test", ExpiresAt: testManifestExpiry()}, nil
+	return gen.GitHubManifestStart{ActionUrl: "https://github.com/settings/apps/new", Manifest: `{"name":"SpareRunner"}`, State: "twm1_test", ExpiresAt: testManifestExpiry()}, nil
 }
 
 func (backend *githubAPIBackend) CompleteGitHubAppManifest(context.Context, string, string) error {
@@ -64,7 +64,7 @@ func TestGitHubManagementRoutesKeepAuthAndCallbackStateBoundaries(t *testing.T) 
 	start := httptest.NewRequest(http.MethodPost, apiTestOrigin+"/api/v1/github/app/manifest", bytes.NewReader(manifestBody))
 	start.Header.Set("Origin", apiTestOrigin)
 	start.Header.Set("Content-Type", "application/json")
-	start.Header.Set("X-Tewake-CSRF", csrf)
+	start.Header.Set("X-SpareRunner-CSRF", csrf)
 	start.AddCookie(cookie)
 	startResponse := httptest.NewRecorder()
 	handler.ServeHTTP(startResponse, start)

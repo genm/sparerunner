@@ -21,20 +21,20 @@ cleanup() {
   fi
   if [[ -n "$injector_config" ]]; then
     if [[ "$injector_armed" == true ]]; then
-      "$live_build_dir/tewake-live-linux" exec-injector \
+      "$live_build_dir/sparerunner-live-linux" exec-injector \
         --config "$injector_config" \
         --operation disarm
       cleanup_status=$?
     fi
-    "$live_build_dir/tewake-live-linux" cleanup-injector \
+    "$live_build_dir/sparerunner-live-linux" cleanup-injector \
       --config "$injector_config"
     injector_config=""
     injector_armed=false
   fi
-  if [[ -n "$live_build_dir" && "$live_build_dir" == /run/tewake-live-linux.* && -d "$live_build_dir" ]]; then
+  if [[ -n "$live_build_dir" && "$live_build_dir" == /run/sparerunner-live-linux.* && -d "$live_build_dir" ]]; then
     rm -rf -- "$live_build_dir"
   fi
-  if [[ -n "$live_source_dir" && "$live_source_dir" == /run/tewake-live-source.* && -d "$live_source_dir" ]]; then
+  if [[ -n "$live_source_dir" && "$live_source_dir" == /run/sparerunner-live-source.* && -d "$live_source_dir" ]]; then
     rm -rf -- "$live_source_dir"
   fi
   if (( original_status != 0 )); then
@@ -45,7 +45,7 @@ cleanup() {
 trap cleanup EXIT
 
 fail() {
-  printf 'tewake Linux live acceptance: %s\n' "$1" >&2
+  printf 'sparerunner Linux live acceptance: %s\n' "$1" >&2
   exit 1
 }
 
@@ -80,7 +80,7 @@ build_harness() {
     # the parent checkout's unrelated HEAD while still reporting
     # vcs.modified=false. Build from a detached, non-hardlinked local clone so
     # the embedded provenance is the exact clean worktree commit.
-    live_source_dir="$(mktemp -d /run/tewake-live-source.XXXXXX)"
+    live_source_dir="$(mktemp -d /run/sparerunner-live-source.XXXXXX)"
     git clone --quiet --no-hardlinks --no-checkout "$repo_root" "$live_source_dir" ||
       fail "could not create isolated live-build source"
     git -C "$live_source_dir" checkout --quiet --detach "$source_head" ||
@@ -93,21 +93,21 @@ build_harness() {
   go_binary="$(cd "$repo_root" && mise which go)"
   [[ "$go_binary" == /* && -x "$go_binary" ]] ||
     fail "mise did not resolve the pinned Go executable"
-  live_build_dir="$(mktemp -d /run/tewake-live-linux.XXXXXX)"
+  live_build_dir="$(mktemp -d /run/sparerunner-live-linux.XXXXXX)"
   chmod 0700 "$live_build_dir"
   (
     cd "$source_root"
-    "$go_binary" build -trimpath -o "$live_build_dir/tewake-live-linux" ./test/live/linux
+    "$go_binary" build -trimpath -o "$live_build_dir/sparerunner-live-linux" ./test/live/linux
   )
   build_revision="$(
-    "$go_binary" version -m "$live_build_dir/tewake-live-linux" |
+    "$go_binary" version -m "$live_build_dir/sparerunner-live-linux" |
       awk '$1 == "build" && $2 ~ /^vcs.revision=/ {
         sub(/^vcs.revision=/, "", $2)
         print $2
       }'
   )"
   build_modified="$(
-    "$go_binary" version -m "$live_build_dir/tewake-live-linux" |
+    "$go_binary" version -m "$live_build_dir/sparerunner-live-linux" |
       awk '$1 == "build" && $2 ~ /^vcs.modified=/ {
         sub(/^vcs.modified=/, "", $2)
         print $2
@@ -197,10 +197,10 @@ prepare_scenario() {
   build_harness
   # The shell must not derive or mutate any path from the config until the Go
   # boundary has opened it through the trusted-owner/non-writable path policy.
-  "$live_build_dir/tewake-live-linux" validate-config --config "$config"
+  "$live_build_dir/sparerunner-live-linux" validate-config --config "$config"
   prepare_private_repository_proof "$config"
   require_fresh_scenario_evidence "$config"
-  "$live_build_dir/tewake-live-linux" capture-authority \
+  "$live_build_dir/sparerunner-live-linux" capture-authority \
     --config "$config" \
     --repo-root "$repo_root"
 }
@@ -208,13 +208,13 @@ prepare_scenario() {
 run_controller_process() {
   local mode="$1"
   local config="$2"
-  "$live_build_dir/tewake-live-linux" controller --config "$config" --mode "$mode"
+  "$live_build_dir/sparerunner-live-linux" controller --config "$config" --mode "$mode"
 }
 
 validate_scenario_evidence() {
   local mode="$1"
   local config="$2"
-  "$live_build_dir/tewake-live-linux" validate-evidence --config "$config" --mode "$mode"
+  "$live_build_dir/sparerunner-live-linux" validate-evidence --config "$config" --mode "$mode"
 }
 
 scenario_preflight() {
@@ -244,7 +244,7 @@ run_commit_before_ack() {
   evidence_dir="$(config_value "$config" '.evidenceDirectory')"
   replay_file="$evidence_dir/controller-replay.json"
 
-  "$live_build_dir/tewake-live-linux" controller \
+  "$live_build_dir/sparerunner-live-linux" controller \
     --config "$config" \
     --mode commit-before-ack &
   controller_pid=$!
@@ -276,7 +276,7 @@ run_commit_before_ack() {
   live_controller_pid=""
   [[ "$status" -eq 137 ]] ||
     fail "controller did not terminate through the expected SIGKILL boundary"
-  "$live_build_dir/tewake-live-linux" record-ack-gate-kill --config "$config"
+  "$live_build_dir/sparerunner-live-linux" record-ack-gate-kill --config "$config"
   jq -e \
     '.version == 1 and
      .phase == "killed_before_ack" and
@@ -298,39 +298,39 @@ run_cleanup_failure() {
   local injector="$2"
   prepare_scenario "$config"
   scenario_preflight "$config"
-  "$live_build_dir/tewake-live-linux" prepare-injector \
+  "$live_build_dir/sparerunner-live-linux" prepare-injector \
     --config "$config" \
     --source "$injector"
   injector_config="$config"
-  if ! "$live_build_dir/tewake-live-linux" exec-injector \
+  if ! "$live_build_dir/sparerunner-live-linux" exec-injector \
     --config "$config" \
     --operation arm; then
     fail "cleanup-failure injector could not be armed"
   fi
   injector_armed=true
   run_controller_process cleanup-failure "$config"
-  if ! "$live_build_dir/tewake-live-linux" exec-injector \
+  if ! "$live_build_dir/sparerunner-live-linux" exec-injector \
     --config "$config" \
     --operation disarm; then
     fail "cleanup-failure injector could not be disarmed"
   fi
   injector_armed=false
   validate_scenario_evidence cleanup-failure "$config"
-  "$live_build_dir/tewake-live-linux" cleanup-injector --config "$config"
+  "$live_build_dir/sparerunner-live-linux" cleanup-injector --config "$config"
   injector_config=""
 }
 
 capture_running_processes() {
   local phase="$1"
   local config="$2"
-  "$live_build_dir/tewake-live-linux" capture-node \
+  "$live_build_dir/sparerunner-live-linux" capture-node \
     --phase "$phase" \
     --config "$config"
 }
 
 node_cleanup_postflight() {
   local config="$1"
-  "$live_build_dir/tewake-live-linux" capture-node \
+  "$live_build_dir/sparerunner-live-linux" capture-node \
     --phase after \
     --config "$config"
 }
@@ -363,15 +363,15 @@ run_agent_restart() {
     fail "timed out waiting for the JobStarted marker"
 
   capture_running_processes running-before-restart "$config"
-  systemctl restart tewake-agent.service
+  systemctl restart sparerunner-agent.service
   for _ in $(seq 1 60); do
-    if systemctl is-active --quiet tewake-agent.service; then
+    if systemctl is-active --quiet sparerunner-agent.service; then
       break
     fi
     sleep 0.5
   done
-  systemctl is-active --quiet tewake-agent.service ||
-    fail "tewake-agent did not recover while the job was running"
+  systemctl is-active --quiet sparerunner-agent.service ||
+    fail "sparerunner-agent did not recover while the job was running"
   capture_running_processes running-after-restart "$config"
 
   local before_agent after_agent before_supervisor after_supervisor before_listener after_listener
@@ -403,29 +403,29 @@ node_preflight() {
   local config="$1"
   [[ "$(stat -fc '%T' /sys/fs/cgroup)" == "cgroup2fs" ]] ||
     fail "cgroup v2 is required"
-  systemctl is-active --quiet tewake-agent.service
-  systemctl is-active --quiet tewake-supervisor.service
-  [[ -S /run/tewake-supervisor/supervisor.sock ]] ||
+  systemctl is-active --quiet sparerunner-agent.service
+  systemctl is-active --quiet sparerunner-supervisor.service
+  [[ -S /run/sparerunner-supervisor/supervisor.sock ]] ||
     fail "native supervisor socket is unavailable"
   build_harness
-  "$live_build_dir/tewake-live-linux" capture-node \
+  "$live_build_dir/sparerunner-live-linux" capture-node \
     --phase before \
     --config "$config"
 }
 
 node_postflight() {
   local config="$1"
-  systemctl restart tewake-agent.service
+  systemctl restart sparerunner-agent.service
   for _ in $(seq 1 60); do
-    if systemctl is-active --quiet tewake-agent.service; then
+    if systemctl is-active --quiet sparerunner-agent.service; then
       break
     fi
     sleep 0.5
   done
-  systemctl is-active --quiet tewake-agent.service ||
-    fail "tewake-agent did not recover after restart"
+  systemctl is-active --quiet sparerunner-agent.service ||
+    fail "sparerunner-agent did not recover after restart"
   build_harness
-  "$live_build_dir/tewake-live-linux" capture-node \
+  "$live_build_dir/sparerunner-live-linux" capture-node \
     --phase after \
     --config "$config"
 }

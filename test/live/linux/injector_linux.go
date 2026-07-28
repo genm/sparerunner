@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const injectorRunParent = "/run/tewake-live-injectors"
+const injectorRunParent = "/run/sparerunner-live-injectors"
 
 type injectorFileEvidence struct {
 	Path   string `json:"path"`

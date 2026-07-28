@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func TestControllerRestartSnapshotIsCoherentSecretFreeAndSurvivesReopen(t *testing.T) {
@@ -167,8 +167,8 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 		// A job canceled before any runner picked it up arrives with no runner
 		// identity either. Rejecting it wedged the queue the same way.
 		GitHubJobEvent{Type: GitHubJobCompleted, RunnerRequestID: 0, Result: "canceled"},
-		GitHubJobEvent{Type: GitHubJobStarted, RunnerRequestID: 503, RunnerID: 33, RunnerName: "tewake-existing"},
-		GitHubJobEvent{Type: GitHubJobCompleted, RunnerRequestID: 504, RunnerID: 34, RunnerName: "tewake-complete", Result: "succeeded"},
+		GitHubJobEvent{Type: GitHubJobStarted, RunnerRequestID: 503, RunnerID: 33, RunnerName: "sparerunner-existing"},
+		GitHubJobEvent{Type: GitHubJobCompleted, RunnerRequestID: 504, RunnerID: 34, RunnerName: "sparerunner-complete", Result: "succeeded"},
 	)
 
 	committed, err := controller.CommitGitHubQueueMessage(ctx, message, binding)
@@ -426,7 +426,7 @@ func TestGitHubWorkAdmissionRechecksActiveNodeAtEachExternalIntentBoundary(t *te
 			t.Fatal(err)
 		}
 		if _, _, err := controller.BeginGitHubJITAttempt(
-			ctx, 32, 1702, epoch, "tewake-jit-admission",
+			ctx, 32, 1702, epoch, "sparerunner-jit-admission",
 		); !errors.Is(err, ErrGitHubClaimState) {
 			t.Fatalf("draining JIT admission error = %v", err)
 		}
@@ -438,7 +438,7 @@ func TestGitHubWorkAdmissionRechecksActiveNodeAtEachExternalIntentBoundary(t *te
 		defer controller.Close()
 		nodeID, epoch := prepareGitHubClaimForJITTest(t, controller, 3, 33, 703, 1703)
 		attempt, replayed, err := controller.BeginGitHubJITAttempt(
-			ctx, 33, 1703, epoch, "tewake-start-admission")
+			ctx, 33, 1703, epoch, "sparerunner-start-admission")
 		if err != nil || replayed {
 			t.Fatalf("begin JIT = (%#v, %t, %v)", attempt, replayed, err)
 		}
@@ -556,7 +556,7 @@ func TestGitHubClaimAndJITAttemptSurviveRestartWithoutSecretBody(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempt, replayed, err := controller.BeginGitHubJITAttempt(
-		ctx, 9, 701, epoch, "tewake-deterministic")
+		ctx, 9, 701, epoch, "sparerunner-deterministic")
 	if err != nil || replayed {
 		t.Fatalf("begin JIT = (%#v, %t, %v)", attempt, replayed, err)
 	}
@@ -642,7 +642,7 @@ func TestGitHubAcquireAndGenerationAmbiguityRemainNonActionable(t *testing.T) {
 		t.Fatal(err)
 	}
 	attempt, _, err := controller2.BeginGitHubJITAttempt(
-		ctx, 12, 802, epoch2, "tewake-ambiguous")
+		ctx, 12, 802, epoch2, "sparerunner-ambiguous")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -653,7 +653,7 @@ func TestGitHubAcquireAndGenerationAmbiguityRemainNonActionable(t *testing.T) {
 		t.Fatalf("ambiguous JIT actionable = (%t, %v)", found, err)
 	}
 	replayed, replay, err := controller2.BeginGitHubJITAttempt(
-		ctx, 12, 802, epoch2, "tewake-ambiguous")
+		ctx, 12, 802, epoch2, "sparerunner-ambiguous")
 	if err != nil || !replay || replayed.State != GitHubJITGenerationAmbiguous {
 		t.Fatalf("ambiguous JIT replay = (%#v, %t, %v)", replayed, replay, err)
 	}
@@ -4012,7 +4012,7 @@ func prepareGitHubStartDispatchForArchTest(
 	}
 
 	attempt, replayed, err := controller.BeginGitHubJITAttempt(
-		ctx, scaleSetID, claimKey, epoch, "tewake-fast-terminal")
+		ctx, scaleSetID, claimKey, epoch, "sparerunner-fast-terminal")
 	if err != nil || replayed {
 		t.Fatalf("begin JIT = (%#v, %t, %v)", attempt, replayed, err)
 	}

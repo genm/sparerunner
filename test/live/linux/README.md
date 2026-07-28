@@ -1,13 +1,13 @@
 # Linux private-sandbox acceptance
 
-This directory owns the TWK-007 live release gate. It is deliberately separate
-from `tewake serve`: the harness composes the real Controller, Agent broker,
+This directory owns the SPR-007 live release gate. It is deliberately separate
+from `sparerunner serve`: the harness composes the real Controller, Agent broker,
 GitHub App client, pinned scale-set adapter, message session, JIT lifecycle, and
-single-slot coordinator in one process without introducing the future TWK-012
+single-slot coordinator in one process without introducing the future SPR-012
 Target/config API early.
 
 The gate requires a protected trusted commit, a private repository, an installed
-GitHub App, a pre-created `tewake-linux` scale set, and one real
+GitHub App, a pre-created `sparerunner-linux` scale set, and one real
 systemd+cgroup-v2 Linux node. It must never run for a public fork pull request.
 
 ## Safety boundary
@@ -26,7 +26,7 @@ never final authority.
 
 - The versioned config is non-secret and rejects unknown fields, duplicate
   fields, trailing JSON, organization-level targets, non-canonical paths, and
-  labels other than exactly `tewake-linux`.
+  labels other than exactly `sparerunner-linux`.
 - The driver uses `gh api --hostname github.com` immediately before each
   Controller start, rejoins the returned repository name and URL to the
   configured target, and emits a mode-`0600`, five-minute proof that the exact
@@ -77,7 +77,7 @@ execution/listener detection unambiguous.
 Copy [`config.example.json`](./config.example.json) to an absolute path outside
 the repository and replace every placeholder. Important values:
 
-- `controllerStateDirectory`: state created by `tewake init`.
+- `controllerStateDirectory`: state created by `sparerunner init`.
 - `agentListenAddress`: the exact stable endpoint already used by the enrolled
   Agent.
 - `evidenceDirectory`: a dedicated absolute mode-`0700` directory.
@@ -86,7 +86,7 @@ the repository and replace every placeholder. Important values:
 - `provenance.expectedCommitSha`: the exact clean `HEAD` used to build the
   harness. Untracked files and every staged or unstaged change fail the gate.
 - `provenance.expectedInstalledAgentSha256`: SHA-256 of the installed
-  `/usr/local/bin/tewake-agent`. Both this binary and the harness must contain
+  `/usr/local/bin/sparerunner-agent`. Both this binary and the harness must contain
   Go build metadata whose `vcs.revision` equals `expectedCommitSha` and whose
   `vcs.modified` is false.
 - `provenance.expectedAgentUnitFragmentPath` and
@@ -99,7 +99,7 @@ the repository and replace every placeholder. Important values:
   and drop-in.
 - `provenance.expectedRunnerPackageSha256`: the pinned checksum for the current
   OS/architecture. The path is not configurable: the harness derives
-  `<runtimeRoot>/.tewake-official/<official-cache-key>/archive` and requires a
+  `<runtimeRoot>/.sparerunner-official/<official-cache-key>/archive` and requires a
   root-owned, mode-`0400`, single-link file with the pinned size and SHA-256.
   The example contains the Linux `amd64` checksum; use the pinned `arm64`
   checksum from `internal/runner/package.go` on an ARM node.
@@ -124,8 +124,8 @@ command argument, or the evidence directory.
 The existing GitHub object must match all of these fields exactly:
 
 ```text
-name:          tewake-linux
-labels:        [tewake-linux]
+name:          sparerunner-linux
+labels:        [sparerunner-linux]
 runnerGroupId: config value
 disableUpdate: config value
 ```
@@ -158,10 +158,10 @@ Populate the explicit provenance values immediately before a protected run:
 ```bash
 git rev-parse --verify HEAD
 git status --porcelain=v1 --untracked-files=all
-sha256sum /usr/local/bin/tewake-agent
-go version -m /usr/local/bin/tewake-agent
-systemctl cat --no-pager tewake-agent.service | sha256sum
-systemctl cat --no-pager tewake-supervisor.service | sha256sum
+sha256sum /usr/local/bin/sparerunner-agent
+go version -m /usr/local/bin/sparerunner-agent
+systemctl cat --no-pager sparerunner-agent.service | sha256sum
+systemctl cat --no-pager sparerunner-supervisor.service | sha256sum
 ```
 
 The second command must produce no output. The live harness independently
@@ -236,7 +236,7 @@ Exercise Agent service recovery while a real runner owns the job:
 
 This scenario waits for the durable JobStarted marker, captures exactly one
 Agent, Supervisor, and `Runner.Listener`, restarts only
-`tewake-agent.service`, and captures the running state again. It requires a new
+`sparerunner-agent.service`, and captures the running state again. It requires a new
 Agent PID, the same Supervisor PID, and the same single runner-listener PID.
 The job must then complete successfully and the final capture must contain no
 runner listener. The Supervisor is deliberately not restarted because it owns
@@ -244,13 +244,13 @@ the native runner process.
 
 The listener identity must be proved without trusting its argv basename.
 `authority.json` supplies the root Supervisor `ControlGroup` and the numeric
-`tewake-runner-0` UID. For a running scenario, `/proc/<listener-pid>/cgroup`
+`sparerunner-runner-0` UID. For a running scenario, `/proc/<listener-pid>/cgroup`
 must contain exactly one unified entry whose path is
-`<Supervisor ControlGroup>/tewake/tewake-<64 lowercase hex>`, and the real UID
+`<Supervisor ControlGroup>/sparerunner/sparerunner-<64 lowercase hex>`, and the real UID
 from `/proc/<listener-pid>/status` must equal `authority.json.runnerUid`.
 Both captures around an Agent-only restart must retain that exact PID, UID, and
 cgroup path. A Supervisor shutdown instead must leave no process in any owned
-`tewake/tewake-*` child cgroup.
+`sparerunner/sparerunner-*` child cgroup.
 The same-PID requirement is live proof that the listener remained running; it
 is not the durable ownership primitive. Recovery authority is the exact fence
 token plus cgroup. If that cgroup is already empty, or only descendants remain
@@ -265,10 +265,10 @@ The standalone capture commands remain available only for diagnostics:
 ```
 
 The normal and commit-before-ack commands automatically restart
-`tewake-agent.service`, then verify one non-root Agent, one root Supervisor, no
+`sparerunner-agent.service`, then verify one non-root Agent, one root Supervisor, no
 idle `Runner.Listener`, an empty execution root, and absence of `_work`,
 `.runner`, `.credentials`, `.credentials_rsaparams`, symlinks, and the fixed
-`.tewake-jit-canary` filename. The intentionally quarantined cleanup-failure
+`.sparerunner-jit-canary` filename. The intentionally quarantined cleanup-failure
 scenario does not run this cleanup-success postflight.
 
 ## Pass criteria and evidence

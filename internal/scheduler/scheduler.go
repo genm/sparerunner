@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // Error is a stable, machine-readable scheduler input or ownership error.

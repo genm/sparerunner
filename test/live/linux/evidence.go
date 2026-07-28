@@ -15,9 +15,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 const (
@@ -315,7 +315,7 @@ func liveExecutionID(scaleSetID github.ScaleSetID, claimKey int64) domain.Execut
 		strconv.FormatInt(claimKey, 10)
 	digest := sha256.Sum256([]byte(value))
 	token := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])
-	return domain.ExecutionID("twk-exec-" + strings.ToLower(token))
+	return domain.ExecutionID("spr-exec-" + strings.ToLower(token))
 }
 
 func (evidence *evidenceStore) validateScenarioStart(
@@ -365,7 +365,7 @@ func (evidence *evidenceStore) writeJSON(name string, value any) error {
 		return errEvidenceInvalid
 	}
 	payload = append(payload, '\n')
-	temporary, err := os.CreateTemp(evidence.directory, ".tewake-live-evidence-")
+	temporary, err := os.CreateTemp(evidence.directory, ".sparerunner-live-evidence-")
 	if err != nil {
 		return errEvidenceInvalid
 	}

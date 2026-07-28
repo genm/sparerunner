@@ -3,7 +3,7 @@ package agentstate
 import (
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func TestDigestCanonicalizesNilAndEmptyJournalCollections(t *testing.T) {

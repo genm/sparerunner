@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/api/gen"
-	"github.com/genm/tewake/internal/auth"
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/api/gen"
+	"github.com/genm/sparerunner/internal/auth"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 const apiTestOrigin = "http://127.0.0.1:7442"
@@ -1030,7 +1030,7 @@ func TestJoinCodeIsDeliveredOnceAndUnknownFieldsFailClosed(t *testing.T) {
 	if response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("join-code Cache-Control = %q", response.Header().Get("Cache-Control"))
 	}
-	if !strings.Contains(response.Body.String(), "twk_one-time-canary") {
+	if !strings.Contains(response.Body.String(), "spr_one-time-canary") {
 		t.Fatalf("one-time response omitted code: %s", response.Body.String())
 	}
 
@@ -1304,7 +1304,7 @@ func TestProblemInstanceNeverReflectsCredentialBearingPath(t *testing.T) {
 	t.Parallel()
 
 	handler, backend := newAPITestHandler(t)
-	const canary = "twk_secret-canary"
+	const canary = "spr_secret-canary"
 
 	unauthorized := httptest.NewRequest(
 		http.MethodDelete,
@@ -1516,7 +1516,7 @@ func (backend *apiTestBackend) CreateJoinCode(
 	[]string,
 	string,
 ) (string, string, error) {
-	return strings.Repeat("a", 32), "twk_one-time-canary", nil
+	return strings.Repeat("a", 32), "spr_one-time-canary", nil
 }
 
 func (backend *apiTestBackend) CancelJoinCode(context.Context, string, string) error {
@@ -1785,7 +1785,7 @@ func assertSecretFreeProblem(
 		t.Fatal(err)
 	}
 	requestID := response.Header().Get("X-Request-ID")
-	if problem.Instance != "urn:tewake:request:"+requestID {
+	if problem.Instance != "urn:sparerunner:request:"+requestID {
 		t.Fatalf("problem instance = %q, request ID = %q", problem.Instance, requestID)
 	}
 }

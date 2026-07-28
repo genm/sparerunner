@@ -6,7 +6,7 @@ import (
 	"context"
 )
 
-const privateMaterialProbeArgument = "--tewake-live-private-material-probe"
+const privateMaterialProbeArgument = "--sparerunner-live-private-material-probe"
 
 func captureMacOSNode(
 	context.Context,

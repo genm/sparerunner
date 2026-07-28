@@ -1,18 +1,18 @@
 {
   "version": 1,
-  "controllerStateDirectory": "/var/lib/tewake-controller",
+  "controllerStateDirectory": "/var/lib/sparerunner-controller",
   "agentListenAddress": "0.0.0.0:7443",
-  "evidenceDirectory": "/var/lib/tewake-live-evidence",
-  "runtimeRoot": "/var/lib/tewake-runtime",
+  "evidenceDirectory": "/var/lib/sparerunner-live-evidence",
+  "runtimeRoot": "/var/lib/sparerunner-runtime",
   "nodeReadyTimeoutSeconds": 120,
   "runTimeoutSeconds": 1800,
   "agentRestartMinimumRunningSeconds": 30,
   "provenance": {
     "expectedCommitSha": "0000000000000000000000000000000000000000",
     "expectedInstalledAgentSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "expectedAgentUnitFragmentPath": "/usr/lib/systemd/system/tewake-agent.service",
+    "expectedAgentUnitFragmentPath": "/usr/lib/systemd/system/sparerunner-agent.service",
     "expectedAgentUnitSha256": "0000000000000000000000000000000000000000000000000000000000000000",
-    "expectedSupervisorUnitFragmentPath": "/usr/lib/systemd/system/tewake-supervisor.service",
+    "expectedSupervisorUnitFragmentPath": "/usr/lib/systemd/system/sparerunner-supervisor.service",
     "expectedSupervisorUnitSha256": "0000000000000000000000000000000000000000000000000000000000000000",
     "expectedRunnerPackageSha256": "04cf0be1aff4c3ec3554466c39124ca250e3effd8873bb7e8d68535aa9505d5d"
   },
@@ -20,10 +20,10 @@
     "configUrl": "https://github.com/YOUR-ORG/YOUR-PRIVATE-REPOSITORY",
     "clientId": "YOUR-GITHUB-APP-CLIENT-ID",
     "installationId": 12345678,
-    "privateKeyFile": "/run/credentials/tewake-github-app-private-key.pem",
-    "privateRepositoryProofFile": "/var/lib/tewake-live-evidence/private-repository-proof.json",
+    "privateKeyFile": "/run/credentials/sparerunner-github-app-private-key.pem",
+    "privateRepositoryProofFile": "/var/lib/sparerunner-live-evidence/private-repository-proof.json",
     "runnerGroupId": 1,
-    "scaleSetName": "tewake-linux",
+    "scaleSetName": "sparerunner-linux",
     "disableUpdate": true
   },
   "nodeId": "0123456789abcdef0123456789abcdef"

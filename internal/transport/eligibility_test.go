@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 func validEligibleTarget(id string) EligibleTarget {

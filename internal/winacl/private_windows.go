@@ -1,7 +1,7 @@
 //go:build windows
 
 // Package winacl owns the exact Windows ACL and reparse-point contract used by
-// Tewake credential locators. It intentionally has no dependency on higher
+// SpareRunner credential locators. It intentionally has no dependency on higher
 // application packages so both enrollment and state initialization share one
 // authority.
 package winacl
@@ -22,7 +22,7 @@ const fileFullControl = 0x001f01ff
 var ErrUnsafePrivatePath = errors.New("Windows private material path is unsafe")
 
 func privatePathError(reason string) error {
-	if os.Getenv("TEWAKE_WINDOWS_DEBUG") == "1" {
+	if os.Getenv("SPARERUNNER_WINDOWS_DEBUG") == "1" {
 		return fmt.Errorf("%w: %s", ErrUnsafePrivatePath, reason)
 	}
 	return ErrUnsafePrivatePath

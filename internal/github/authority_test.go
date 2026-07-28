@@ -148,12 +148,12 @@ func TestAuthorityRejectsUnknownAndPublicTargetsBeforeScaleSetCreation(t *testin
 	scaleSetCalls := 0
 	authority, err := NewAuthority(AuthorityOptions{CredentialStore: store, HTTPClient: &http.Client{Transport: transport}, CreateScaleSet: func(context.Context, AppClientConfig, ScaleSet) (ScaleSet, error) {
 		scaleSetCalls++
-		return ScaleSet{ID: 99, Name: "tewake", RunnerGroupID: 7, Labels: []string{"tewake"}}, nil
+		return ScaleSet{ID: 99, Name: "sparerunner", RunnerGroupID: 7, Labels: []string{"sparerunner"}}, nil
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := TargetRequest{TargetID: "target-private", InstallationID: "42", ScopeKind: "repository", Scope: "acme/private", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"}
+	request := TargetRequest{TargetID: "target-private", InstallationID: "42", ScopeKind: "repository", Scope: "acme/private", ScaleSetName: "sparerunner", RunnerProfileID: "profile-sparerunner", RunnerProfileLabel: "sparerunner"}
 	if _, err := authority.VerifyAndProvisionTarget(context.Background(), request); !errors.Is(err, ErrGitHubTargetNotPrivate) {
 		t.Fatalf("public target error = %v", err)
 	}
@@ -177,7 +177,7 @@ func TestAuthorityCreatesPrivateOrganizationGroupAndScaleSet(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"})
+	result, err := authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "sparerunner", RunnerProfileID: "profile-sparerunner", RunnerProfileLabel: "sparerunner"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -189,7 +189,7 @@ func TestAuthorityCreatesPrivateOrganizationGroupAndScaleSet(t *testing.T) {
 // TestAuthorityRemovesTheGroupWhenTheCreateEchoIsUnsafe pins the live-found
 // leak: GitHub accepted the create (201) but echoed attributes the verifier
 // refuses, and the old path returned unsafe while leaving the freshly created
-// Tewake-named group behind in the organization on every rejected attempt.
+// SpareRunner-named group behind in the organization on every rejected attempt.
 func TestAuthorityRemovesTheGroupWhenTheCreateEchoIsUnsafe(t *testing.T) {
 	credential := testCredential(t)
 	store := &MemoryAppCredentialStore{}
@@ -202,7 +202,7 @@ func TestAuthorityRemovesTheGroupWhenTheCreateEchoIsUnsafe(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "tewake", RunnerProfileID: "profile-tewake", RunnerProfileLabel: "tewake"})
+	_, err = authority.VerifyAndProvisionTarget(context.Background(), TargetRequest{TargetID: "org", InstallationID: "42", ScopeKind: "organization", Scope: "acme", ScaleSetName: "sparerunner", RunnerProfileID: "profile-sparerunner", RunnerProfileLabel: "sparerunner"})
 	if !errors.Is(err, ErrGitHubRunnerGroupUnsafe) {
 		t.Fatalf("unsafe echo error = %v", err)
 	}
@@ -235,7 +235,7 @@ func TestAuthorityPaginatesRunnerGroupsBeforeProvisioning(t *testing.T) {
 		private: true,
 		runnerGroupPages: map[string]string{
 			"1": string(pageOneJSON),
-			"2": `{"runner_groups":[{"id":777,"name":"tewake-target","visibility":"private","allows_public_repositories":false}]}`,
+			"2": `{"runner_groups":[{"id":777,"name":"sparerunner-target","visibility":"private","allows_public_repositories":false}]}`,
 		},
 	}
 	authority, err := NewAuthority(AuthorityOptions{
@@ -243,7 +243,7 @@ func TestAuthorityPaginatesRunnerGroupsBeforeProvisioning(t *testing.T) {
 		HTTPClient:      &http.Client{Transport: transport},
 		CreateScaleSet: func(context.Context, AppClientConfig, ScaleSet) (ScaleSet, error) {
 			transport.scaleSetCalls++
-			return ScaleSet{ID: 99, Name: "tewake", RunnerGroupID: 777, Labels: []string{"tewake"}}, nil
+			return ScaleSet{ID: 99, Name: "sparerunner", RunnerGroupID: 777, Labels: []string{"sparerunner"}}, nil
 		},
 	})
 	if err != nil {
@@ -254,9 +254,9 @@ func TestAuthorityPaginatesRunnerGroupsBeforeProvisioning(t *testing.T) {
 		InstallationID:     "42",
 		ScopeKind:          "organization",
 		Scope:              "acme",
-		ScaleSetName:       "tewake",
-		RunnerProfileID:    "profile-tewake",
-		RunnerProfileLabel: "tewake",
+		ScaleSetName:       "sparerunner",
+		RunnerProfileID:    "profile-sparerunner",
+		RunnerProfileLabel: "sparerunner",
 	})
 	if !errors.Is(err, ErrGitHubTargetConflict) {
 		t.Fatalf("paginated conflict error = %v", err)

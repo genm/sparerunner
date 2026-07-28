@@ -19,7 +19,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 	"golang.org/x/sys/unix"
 )
 
@@ -31,7 +31,7 @@ const (
 	fenceStateFinal    = "finalized"
 
 	maxJITMaterialBytes = 256 << 10
-	helperModeArgument  = "--tewake-macos-launcher-helper"
+	helperModeArgument  = "--sparerunner-macos-launcher-helper"
 )
 
 type FileRuntime struct {
@@ -188,7 +188,7 @@ func (nativeRuntime *FileRuntime) EnsureProcessGroup(
 		return ProcessGroup{}, runner.ErrStrongOwnershipUnavailable
 	}
 	return ProcessGroup{
-		Scope:     filepath.ToSlash(filepath.Join("tewake", owner)),
+		Scope:     filepath.ToSlash(filepath.Join("sparerunner", owner)),
 		HostEpoch: nativeRuntime.hostEpoch,
 	}, nil
 }
@@ -766,7 +766,7 @@ func (nativeRuntime *FileRuntime) validContainment(
 	return containment.Backend == containmentBackend &&
 		validOwner(containment.OwnerID) &&
 		containment.Scope == filepath.ToSlash(
-			filepath.Join("tewake", containment.OwnerID),
+			filepath.Join("sparerunner", containment.OwnerID),
 		) &&
 		containment.HostEpoch != "" &&
 		containment.InvocationID == "" &&
@@ -774,11 +774,11 @@ func (nativeRuntime *FileRuntime) validContainment(
 }
 
 func validOwner(owner string) bool {
-	if !strings.HasPrefix(owner, "tewake-") ||
-		len(owner) != len("tewake-")+sha256.Size*2 {
+	if !strings.HasPrefix(owner, "sparerunner-") ||
+		len(owner) != len("sparerunner-")+sha256.Size*2 {
 		return false
 	}
-	for _, character := range owner[len("tewake-"):] {
+	for _, character := range owner[len("sparerunner-"):] {
 		if !(character >= '0' && character <= '9') &&
 			!(character >= 'a' && character <= 'f') {
 			return false
@@ -808,7 +808,7 @@ func helperArguments(arguments []string) []string {
 }
 
 func fixedRunnerEnvironment(directory string) []string {
-	home := filepath.Join(directory, ".tewake-home")
+	home := filepath.Join(directory, ".sparerunner-home")
 	return []string{
 		"HOME=" + home,
 		"XDG_CONFIG_HOME=" + filepath.Join(home, ".config"),
@@ -850,7 +850,7 @@ func RunExecLauncherHelper(args []string) (bool, error) {
 }
 
 func reportHelperFailure() {
-	status := os.NewFile(uintptr(3), "tewake-launch-status")
+	status := os.NewFile(uintptr(3), "sparerunner-launch-status")
 	if status == nil {
 		return
 	}
@@ -948,7 +948,7 @@ func writeNoClobberJSON(path string, value any) error {
 	}
 	encoded = append(encoded, '\n')
 	parent := filepath.Dir(path)
-	temporary, err := os.CreateTemp(parent, ".tewake-json-*")
+	temporary, err := os.CreateTemp(parent, ".sparerunner-json-*")
 	if err != nil {
 		return err
 	}
@@ -985,7 +985,7 @@ func replaceJSON(path string, value any) error {
 	}
 	encoded = append(encoded, '\n')
 	parent := filepath.Dir(path)
-	temporary, err := os.CreateTemp(parent, ".tewake-state-*")
+	temporary, err := os.CreateTemp(parent, ".sparerunner-state-*")
 	if err != nil {
 		return err
 	}

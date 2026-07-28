@@ -10,4 +10,4 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 # Resolve the module from the script location so the release gate remains
 # executable when an operator invokes it from a separate evidence directory.
 cd "$repo_root"
-exec go run ./cmd/tewake evidence validate --file "$1"
+exec go run ./cmd/sparerunner evidence validate --file "$1"

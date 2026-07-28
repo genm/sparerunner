@@ -7,8 +7,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/genm/tewake/internal/agentstate"
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/agentstate"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // AgentSnapshotDigest binds the complete typed journal snapshot used by

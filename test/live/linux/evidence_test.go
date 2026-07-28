@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 func TestAckGateWritesDurableAllowlistBeforeRefusingDelete(t *testing.T) {
@@ -234,7 +234,7 @@ func TestResultEvidenceAlwaysEmitsWarmLatencyForPassingZeroMillis(t *testing.T) 
 		Mode:                     string(modeNormal),
 		Status:                   "passed",
 		TargetID:                 "target",
-		PrivateRepository:        "genm/tewake-private",
+		PrivateRepository:        "genm/sparerunner-private",
 		NodeID:                   "0123456789abcdef0123456789abcdef",
 		ScaleSetID:               41,
 		ControllerEpoch:          2,

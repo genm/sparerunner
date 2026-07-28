@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // MaxNodeTargetExclusions bounds one adopted exclusion set. It mirrors the

@@ -44,7 +44,7 @@ type RunnerReleaseObserver struct {
 }
 
 // NewRunnerReleaseObserver returns the production observer. The underlying
-// transport applies Tewake's GitHub endpoint and DNS checks, ignores environment
+// transport applies SpareRunner's GitHub endpoint and DNS checks, ignores environment
 // proxies, rejects redirects, and does not retry the read behind the caller.
 func NewRunnerReleaseObserver() *RunnerReleaseObserver {
 	client := newHardenedRetryableClient().StandardClient()
@@ -83,7 +83,7 @@ func (observer *RunnerReleaseObserver) Latest(ctx context.Context) (RunnerReleas
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
 	request.Header.Set("X-GitHub-Api-Version", "2022-11-28")
-	request.Header.Set("User-Agent", "tewake-runner-release-observer")
+	request.Header.Set("User-Agent", "sparerunner-runner-release-observer")
 
 	response, err := observer.client.Do(request)
 	if err != nil {

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func testCommandMetadata() CommandMetadata {

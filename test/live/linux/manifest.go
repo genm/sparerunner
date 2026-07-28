@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
 )
 
 const finalEvidenceMaxDelay = 5 * time.Minute
@@ -272,8 +272,8 @@ func validateAuthorityManifest(
 	if authority.Version != evidenceVersion || authority.Status != "passed" ||
 		authority.RuntimeRoot != config.RuntimeRoot || authority.BootID == "" ||
 		authority.RunnerUID <= 0 ||
-		authority.Agent.Unit != "tewake-agent.service" ||
-		authority.Supervisor.Unit != "tewake-supervisor.service" ||
+		authority.Agent.Unit != "sparerunner-agent.service" ||
+		authority.Supervisor.Unit != "sparerunner-supervisor.service" ||
 		authority.Agent.RuntimeRoot != config.RuntimeRoot ||
 		authority.Supervisor.RuntimeRoot != config.RuntimeRoot ||
 		authority.Agent.MainPID <= 0 || authority.Supervisor.MainPID <= 0 ||
@@ -318,12 +318,12 @@ func validateProvenanceManifest(
 		provenance.HarnessVCSRevision != config.Provenance.ExpectedCommitSHA ||
 		provenance.HarnessVCSModified ||
 		!canonicalAbsolutePath(provenance.HarnessPath) ||
-		provenance.InstalledAgentPath != "/usr/local/bin/tewake-agent" ||
+		provenance.InstalledAgentPath != "/usr/local/bin/sparerunner-agent" ||
 		provenance.InstalledAgentSHA256 !=
 			config.Provenance.ExpectedInstalledAgentSHA256 ||
 		provenance.InstalledAgentVCSRevision != config.Provenance.ExpectedCommitSHA ||
 		provenance.InstalledAgentVCSModified ||
-		provenance.AgentUnit.Unit != "tewake-agent.service" ||
+		provenance.AgentUnit.Unit != "sparerunner-agent.service" ||
 		provenance.AgentUnit.FragmentPath !=
 			config.Provenance.ExpectedAgentUnitFragmentPath ||
 		provenance.AgentUnit.SHA256 != config.Provenance.ExpectedAgentUnitSHA256 ||
@@ -331,7 +331,7 @@ func validateProvenanceManifest(
 			provenance.AgentUnit.ExecStartArgv,
 			expectedServiceArgv("serve", config.RuntimeRoot),
 		) ||
-		provenance.SupervisorUnit.Unit != "tewake-supervisor.service" ||
+		provenance.SupervisorUnit.Unit != "sparerunner-supervisor.service" ||
 		provenance.SupervisorUnit.FragmentPath !=
 			config.Provenance.ExpectedSupervisorUnitFragmentPath ||
 		provenance.SupervisorUnit.SHA256 !=
@@ -397,8 +397,8 @@ func validateProcessAuthority(
 			digest := sha256.Sum256([]byte(executionID))
 			expected := filepath.Join(
 				authority.Supervisor.ControlGroup,
-				"tewake",
-				"tewake-"+hex.EncodeToString(digest[:]),
+				"sparerunner",
+				"sparerunner-"+hex.EncodeToString(digest[:]),
 			)
 			if process.UID != authority.RunnerUID ||
 				process.ControlGroup != expected ||
@@ -437,7 +437,7 @@ func validateProcessManifest(evidence processEvidence, phase string) error {
 			if process.UID == 0 {
 				return errEvidenceInvalid
 			}
-			if process.SystemdUnit != "tewake-agent.service" {
+			if process.SystemdUnit != "sparerunner-agent.service" {
 				return errEvidenceInvalid
 			}
 		case "supervisor":
@@ -445,7 +445,7 @@ func validateProcessManifest(evidence processEvidence, phase string) error {
 			if process.UID != 0 {
 				return errEvidenceInvalid
 			}
-			if process.SystemdUnit != "tewake-supervisor.service" {
+			if process.SystemdUnit != "sparerunner-supervisor.service" {
 				return errEvidenceInvalid
 			}
 		case "runner_listener":

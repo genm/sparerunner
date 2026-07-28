@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 var errAgentCommandExpectedState = errors.New("agent command expected state mismatch")

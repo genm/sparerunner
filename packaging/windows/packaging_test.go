@@ -25,9 +25,9 @@ func TestInstallerPinsServiceIdentityRecoveryAndFilesystemBoundary(t *testing.T)
 		`"failureflag", $AgentService, "1"`,
 		`--require-native-runner`,
 		`Install-FileNoClobber`,
-		`Assert-TewakeNoReparsePath`,
-		`New-TewakeOwnedRoot`,
-		`Assert-TewakeOwnershipMarker`,
+		`Assert-SpareRunnerNoReparsePath`,
+		`New-SpareRunnerOwnedRoot`,
+		`Assert-SpareRunnerOwnershipMarker`,
 		`the first release does not support upgrades`,
 	}
 	for _, fragment := range required {
@@ -49,7 +49,7 @@ func TestInstallerPinsServiceIdentityRecoveryAndFilesystemBoundary(t *testing.T)
 		installer,
 		`the first release does not support upgrades`,
 	)
-	claimRoot := strings.Index(installer, `[void] (New-TewakeOwnedRoot`)
+	claimRoot := strings.Index(installer, `[void] (New-SpareRunnerOwnedRoot`)
 	if rejectExisting < 0 || claimRoot < 0 || rejectExisting > claimRoot {
 		t.Fatal("installer can claim a root before rejecting existing roots")
 	}
@@ -68,11 +68,11 @@ func TestUninstallerPreservesDataUnlessExplicitlyPurged(t *testing.T) {
 		`$PrimaryActions`,
 		`stop and delete the listed services`,
 		`remove the listed install root`,
-		`Get-TewakeUninstallAuthority`,
-		`Assert-TewakeNoReparsePath -Path $DataRoot`,
-		`Assert-TewakeNoReparseTree -Root $DataRoot`,
-		`Remove-TewakeTreeNoReparse -Root $DataRoot`,
-		`Tewake data was preserved`,
+		`Get-SpareRunnerUninstallAuthority`,
+		`Assert-SpareRunnerNoReparsePath -Path $DataRoot`,
+		`Assert-SpareRunnerNoReparseTree -Root $DataRoot`,
+		`Remove-SpareRunnerTreeNoReparse -Root $DataRoot`,
+		`SpareRunner data was preserved`,
 	}
 	for _, fragment := range required {
 		if !strings.Contains(uninstaller, fragment) {
@@ -85,7 +85,7 @@ func TestUninstallerPreservesDataUnlessExplicitlyPurged(t *testing.T) {
 	}
 	preflight := strings.Index(
 		uninstaller,
-		`Assert-TewakeNoReparseTree -Root $DataRoot`,
+		`Assert-SpareRunnerNoReparseTree -Root $DataRoot`,
 	)
 	mutation := strings.Index(
 		uninstaller,
@@ -94,7 +94,7 @@ func TestUninstallerPreservesDataUnlessExplicitlyPurged(t *testing.T) {
 	if preflight < 0 || mutation < 0 || preflight > mutation {
 		t.Fatal("data-tree preflight does not precede SCM mutation")
 	}
-	authority := strings.Index(uninstaller, `Get-TewakeUninstallAuthority`)
+	authority := strings.Index(uninstaller, `Get-SpareRunnerUninstallAuthority`)
 	if authority < 0 || authority > mutation {
 		t.Fatal("ownership authority validation does not precede SCM mutation")
 	}
@@ -130,17 +130,17 @@ func TestPowerShellPackagingParsesOnWindows(t *testing.T) {
 
 func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
 	t.Helper()
-	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
-	prefix := "$args = @(0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") })\n"
+	scriptPath := filepath.Join(t.TempDir(), "sparerunner-test.ps1")
+	prefix := "$args = @(0..([int]$env:SPARERUNNER_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"SPARERUNNER_TEST_PS_ARG_$_\") })\n"
 	if err := os.WriteFile(scriptPath, []byte(prefix+script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
 	commandArguments = append(commandArguments, arguments...)
 	command := exec.Command("powershell.exe", commandArguments...)
-	command.Env = append(os.Environ(), fmt.Sprintf("TEWAKE_TEST_PS_ARG_COUNT=%d", len(arguments)))
+	command.Env = append(os.Environ(), fmt.Sprintf("SPARERUNNER_TEST_PS_ARG_COUNT=%d", len(arguments)))
 	for index, argument := range arguments {
-		command.Env = append(command.Env, fmt.Sprintf("TEWAKE_TEST_PS_ARG_%d=%s", index, argument))
+		command.Env = append(command.Env, fmt.Sprintf("SPARERUNNER_TEST_PS_ARG_%d=%s", index, argument))
 	}
 	return command
 }
@@ -214,9 +214,9 @@ function Get-TreeSnapshot([string] $root) {
 $validInstall = Join-Path $base "valid-install"
 $validData = Join-Path $base "valid-data"
 $validId = [Guid]::NewGuid().ToString("D")
-[void] (New-TewakeOwnedRoot -Path $validInstall -Role install -InstallationId $validId -OwnerSid $owner)
-[void] (New-TewakeOwnedRoot -Path $validData -Role data -InstallationId $validId -OwnerSid $owner)
-$valid = Get-TewakeUninstallAuthority -InstallRoot $validInstall -DataRoot $validData -ServicesPresent $true -OwnerSid $owner
+[void] (New-SpareRunnerOwnedRoot -Path $validInstall -Role install -InstallationId $validId -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $validData -Role data -InstallationId $validId -OwnerSid $owner)
+$valid = Get-SpareRunnerUninstallAuthority -InstallRoot $validInstall -DataRoot $validData -ServicesPresent $true -OwnerSid $owner
 if ($valid.InstallationId -cne $validId) { exit 20 }
 
 $foreign = Join-Path $base "foreign"
@@ -226,32 +226,32 @@ $foreignCanary = Join-Path $foreign "foreign-canary.txt"
 $foreignSddl = Get-Sddl $foreign
 $foreignTree = Get-TreeSnapshot $foreign
 try {
-    [void] (Get-TewakeUninstallAuthority -InstallRoot $foreign -DataRoot (Join-Path $base "absent-data") -ServicesPresent $false -OwnerSid $owner)
+    [void] (Get-SpareRunnerUninstallAuthority -InstallRoot $foreign -DataRoot (Join-Path $base "absent-data") -ServicesPresent $false -OwnerSid $owner)
     $mutations++
 }
 catch {}
 try {
-    [void] (New-TewakeOwnedRoot -Path $foreign -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+    [void] (New-SpareRunnerOwnedRoot -Path $foreign -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
     $mutations++
 }
 catch {}
 
 $crossRole = Join-Path $base "cross-role"
-[void] (New-TewakeOwnedRoot -Path $crossRole -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $crossRole -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
 $crossRoleCanary = Join-Path $crossRole "cross-role-canary.txt"
 [System.IO.File]::WriteAllText($crossRoleCanary, "cross-role.example.test")
 $crossRoleSddl = Get-Sddl $crossRole
 $crossRoleTree = Get-TreeSnapshot $crossRole
 try {
-    [void] (Get-TewakeUninstallAuthority -InstallRoot (Join-Path $base "absent-install") -DataRoot $crossRole -ServicesPresent $false -PurgeData -OwnerSid $owner)
+    [void] (Get-SpareRunnerUninstallAuthority -InstallRoot (Join-Path $base "absent-install") -DataRoot $crossRole -ServicesPresent $false -PurgeData -OwnerSid $owner)
     $mutations++
 }
 catch {}
 
 $crossInstall = Join-Path $base "cross-install"
 $crossData = Join-Path $base "cross-data"
-[void] (New-TewakeOwnedRoot -Path $crossInstall -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
-[void] (New-TewakeOwnedRoot -Path $crossData -Role data -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $crossInstall -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $crossData -Role data -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
 $crossInstallCanary = Join-Path $crossInstall "cross-install-canary.txt"
 [System.IO.File]::WriteAllText($crossInstallCanary, "cross-install.example.test")
 $crossInstallSddl = Get-Sddl $crossInstall
@@ -259,7 +259,7 @@ $crossInstallTree = Get-TreeSnapshot $crossInstall
 $crossDataSddl = Get-Sddl $crossData
 $crossDataTree = Get-TreeSnapshot $crossData
 try {
-    [void] (Get-TewakeUninstallAuthority -InstallRoot $crossInstall -DataRoot $crossData -ServicesPresent $true -OwnerSid $owner)
+    [void] (Get-SpareRunnerUninstallAuthority -InstallRoot $crossInstall -DataRoot $crossData -ServicesPresent $true -OwnerSid $owner)
     $mutations++
 }
 catch {}
@@ -267,17 +267,17 @@ catch {}
 $tamperedInstall = Join-Path $base "tampered-install"
 $tamperedData = Join-Path $base "tampered-data"
 $tamperedId = [Guid]::NewGuid().ToString("D")
-[void] (New-TewakeOwnedRoot -Path $tamperedInstall -Role install -InstallationId $tamperedId -OwnerSid $owner)
-[void] (New-TewakeOwnedRoot -Path $tamperedData -Role data -InstallationId $tamperedId -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $tamperedInstall -Role install -InstallationId $tamperedId -OwnerSid $owner)
+[void] (New-SpareRunnerOwnedRoot -Path $tamperedData -Role data -InstallationId $tamperedId -OwnerSid $owner)
 $tamperedCanary = Join-Path $tamperedInstall "tampered-canary.txt"
 [System.IO.File]::WriteAllText($tamperedCanary, "tampered.example.test")
-[System.IO.File]::AppendAllText((Join-Path $tamperedInstall ".tewake-ownership.json"), " ")
+[System.IO.File]::AppendAllText((Join-Path $tamperedInstall ".sparerunner-ownership.json"), " ")
 $tamperedInstallSddl = Get-Sddl $tamperedInstall
 $tamperedInstallTree = Get-TreeSnapshot $tamperedInstall
 $tamperedDataSddl = Get-Sddl $tamperedData
 $tamperedDataTree = Get-TreeSnapshot $tamperedData
 try {
-    [void] (Get-TewakeUninstallAuthority -InstallRoot $tamperedInstall -DataRoot $tamperedData -ServicesPresent $true -OwnerSid $owner)
+    [void] (Get-SpareRunnerUninstallAuthority -InstallRoot $tamperedInstall -DataRoot $tamperedData -ServicesPresent $true -OwnerSid $owner)
     $mutations++
 }
 catch {}
@@ -322,11 +322,11 @@ func TestOwnedRootPostPublishFailureRollsBackOnlyVerifiedPublication(
 $ErrorActionPreference = "Stop"
 $base = $args[2]
 $owner = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
-$script:originalAssert = ${function:Assert-TewakeOwnershipMarker}
+$script:originalAssert = ${function:Assert-SpareRunnerOwnershipMarker}
 
 $rollbackRoot = Join-Path $base "rollback-root"
 $script:assertCalls = 0
-function Assert-TewakeOwnershipMarker {
+function Assert-SpareRunnerOwnershipMarker {
     param(
         [string] $ActualRoot,
         [string] $ExpectedBoundRoot,
@@ -340,7 +340,7 @@ function Assert-TewakeOwnershipMarker {
     return & $script:originalAssert @PSBoundParameters
 }
 try {
-    [void] (New-TewakeOwnedRoot -Path $rollbackRoot -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+    [void] (New-SpareRunnerOwnedRoot -Path $rollbackRoot -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
     exit 30
 }
 catch {}
@@ -349,13 +349,13 @@ if ($script:assertCalls -ne 3 -or
     exit 31
 }
 if (Get-ChildItem -LiteralPath $base -Force |
-    Where-Object { $_.Name -like ".tewake-owned-*.staging" }) {
+    Where-Object { $_.Name -like ".sparerunner-owned-*.staging" }) {
     exit 32
 }
 
 $changedRoot = Join-Path $base "changed-root"
 $script:assertCalls = 0
-function Assert-TewakeOwnershipMarker {
+function Assert-SpareRunnerOwnershipMarker {
     param(
         [string] $ActualRoot,
         [string] $ExpectedBoundRoot,
@@ -365,7 +365,7 @@ function Assert-TewakeOwnershipMarker {
     $script:assertCalls++
     if ($script:assertCalls -eq 2) {
         [System.IO.File]::AppendAllText(
-            (Join-Path $ActualRoot ".tewake-ownership.json"),
+            (Join-Path $ActualRoot ".sparerunner-ownership.json"),
             " "
         )
         throw "injected changed publication"
@@ -373,7 +373,7 @@ function Assert-TewakeOwnershipMarker {
     return & $script:originalAssert @PSBoundParameters
 }
 try {
-    [void] (New-TewakeOwnedRoot -Path $changedRoot -Role data -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+    [void] (New-SpareRunnerOwnedRoot -Path $changedRoot -Role data -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
     exit 33
 }
 catch {}
@@ -384,7 +384,7 @@ if ($script:assertCalls -ne 3 -or
 
 $foreignContentRoot = Join-Path $base "foreign-content-root"
 $script:assertCalls = 0
-function Assert-TewakeOwnershipMarker {
+function Assert-SpareRunnerOwnershipMarker {
     param(
         [string] $ActualRoot,
         [string] $ExpectedBoundRoot,
@@ -402,7 +402,7 @@ function Assert-TewakeOwnershipMarker {
     return & $script:originalAssert @PSBoundParameters
 }
 try {
-    [void] (New-TewakeOwnedRoot -Path $foreignContentRoot -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
+    [void] (New-SpareRunnerOwnedRoot -Path $foreignContentRoot -Role install -InstallationId ([Guid]::NewGuid().ToString("D")) -OwnerSid $owner)
     exit 35
 }
 catch {}
@@ -451,7 +451,7 @@ func TestSafeTreePurgeRejectsNestedJunctionWithoutDeletingExternalCanary(t *test
 	if err != nil {
 		t.Fatalf("create test junction: %v\n%s", err, output)
 	}
-	command := powershellFileCommand(t, `. $args[0]; try { Remove-TewakeTreeNoReparse -Root $args[1]; exit 10 } catch { if (Test-Path -LiteralPath $args[2]) { exit 0 }; exit 11 }`,
+	command := powershellFileCommand(t, `. $args[0]; try { Remove-SpareRunnerTreeNoReparse -Root $args[1]; exit 10 } catch { if (Test-Path -LiteralPath $args[2]) { exit 0 }; exit 11 }`,
 		packagingPath(t, "safe-tree.ps1"),
 		root,
 		canary,

@@ -9,10 +9,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/scheduler"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/scheduler"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 // ControllerAuthority is the exact durable startup boundary. AdvanceEpoch must
@@ -591,7 +591,7 @@ func (controller *Controller) restoreFences(fences []GitHubFence) error {
 }
 
 func validateGitHubFence(fence GitHubFence) error {
-	// The claim key is Tewake-owned and negative for a claim created from
+	// The claim key is SpareRunner-owned and negative for a claim created from
 	// assigned demand, so only zero is a missing identity.
 	if fence.ExecutionID == "" || fence.ScaleSetID == 0 ||
 		fence.ClaimKey == 0 {

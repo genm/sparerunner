@@ -9,8 +9,8 @@ cross-build is not a substitute for service or runner evidence.
 | Controller binary | supported target | supported target | supported target |
 | Agent binary | supported target | supported target | supported target |
 | Native ephemeral runner | systemd + service account | launchd + Keychain | Windows Service + DPAPI/Job Object |
-| Generic `tewake` profile | live evidence required | live evidence required | live evidence required |
-| OS-specific profile | `tewake-linux` | `tewake-macos` | `tewake-windows` |
+| Generic `sparerunner` profile | live evidence required | live evidence required | live evidence required |
+| OS-specific profile | `sparerunner-linux` | `sparerunner-macos` | `sparerunner-windows` |
 | Automatic restart/reconnect | live evidence required | reboot/sleep evidence required | reboot/recovery evidence required |
 | Credential storage | service-user credential file/systemd credential | Keychain | DPAPI/CNG |
 | Docker runner | not in first release | not in first release | not in first release |

@@ -8,11 +8,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/genm/tewake/internal/buildinfo"
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/nodectl"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/buildinfo"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/nodectl"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 // agentAvailability owns the node-local half of availability. The Controller

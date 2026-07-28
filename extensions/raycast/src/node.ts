@@ -77,11 +77,11 @@ interface Preferences {
 }
 
 const STANDARD_CLI_PATHS = [
-  "/opt/homebrew/bin/tewake",
-  "/usr/local/bin/tewake",
-  "/usr/bin/tewake",
-  join(homedir(), ".local", "bin", "tewake"),
-  join(homedir(), "go", "bin", "tewake"),
+  "/opt/homebrew/bin/sparerunner",
+  "/usr/local/bin/sparerunner",
+  "/usr/bin/sparerunner",
+  join(homedir(), ".local", "bin", "sparerunner"),
+  join(homedir(), "go", "bin", "sparerunner"),
 ];
 
 // Raycast does not ship the agent, so a missing or unusable CLI is an
@@ -101,8 +101,8 @@ export function resolveCLI(): string {
   throw new NodeControlError(
     "cli_not_found",
     preferences.cliPath
-      ? `No executable Tewake CLI at ${preferences.cliPath}.`
-      : "No executable Tewake CLI found. Install Tewake or set the CLI path in this extension's preferences.",
+      ? `No executable SpareRunner CLI at ${preferences.cliPath}.`
+      : "No executable SpareRunner CLI found. Install SpareRunner or set the CLI path in this extension's preferences.",
   );
 }
 
@@ -141,7 +141,7 @@ export async function callNode(operation: "status" | "pause" | "resume"): Promis
     if (status.protocolVersion !== PROTOCOL_VERSION) {
       throw new NodeControlError(
         "protocol_mismatch",
-        "The installed Tewake CLI speaks a different node control protocol version.",
+        "The installed SpareRunner CLI speaks a different node control protocol version.",
       );
     }
     return status;
@@ -164,7 +164,7 @@ export async function callNodeTarget(action: "exclude" | "include", targetId: st
     if (status.protocolVersion !== PROTOCOL_VERSION) {
       throw new NodeControlError(
         "protocol_mismatch",
-        "The installed Tewake CLI speaks a different node control protocol version.",
+        "The installed SpareRunner CLI speaks a different node control protocol version.",
       );
     }
     return status;
@@ -199,7 +199,7 @@ function toNodeControlError(error: unknown): NodeControlError {
 export function explain(errorClass: string): string {
   switch (errorClass) {
     case "cli_not_found":
-      return "Install the Tewake CLI, or set its path in the extension preferences.";
+      return "Install the SpareRunner CLI, or set its path in the extension preferences.";
     case "endpoint_unavailable":
       return "The agent service is not running, or it was started without --local-control.";
     case "unauthorized_peer":
@@ -211,7 +211,7 @@ export function explain(errorClass: string): string {
     case "agent_degraded":
       return "The agent could not read or record availability state.";
     default:
-      return "The Tewake CLI could not complete the request.";
+      return "The SpareRunner CLI could not complete the request.";
   }
 }
 

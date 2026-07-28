@@ -1,20 +1,20 @@
 Set-StrictMode -Version Latest
 
-function Get-TewakeSafeTreeInventory {
+function Get-SpareRunnerSafeTreeInventory {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Root
     )
 
     if (-not [System.IO.Path]::IsPathRooted($Root)) {
-        throw "A Tewake removal root must be absolute."
+        throw "A SpareRunner removal root must be absolute."
     }
     $Root = [System.IO.Path]::GetFullPath($Root).TrimEnd(
         [System.IO.Path]::DirectorySeparatorChar,
         [System.IO.Path]::AltDirectorySeparatorChar
     )
     if ($null -eq [System.IO.Directory]::GetParent($Root)) {
-        throw "A filesystem volume root cannot be a Tewake removal root."
+        throw "A filesystem volume root cannot be a SpareRunner removal root."
     }
     if (-not [System.IO.Directory]::Exists($Root)) {
         return [pscustomobject]@{
@@ -32,14 +32,14 @@ function Get-TewakeSafeTreeInventory {
         $Attributes = [System.IO.File]::GetAttributes($Directory)
         if (($Attributes -band [System.IO.FileAttributes]::Directory) -eq 0 -or
             ($Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "A Tewake removal tree contains a reparse point or non-directory root."
+            throw "A SpareRunner removal tree contains a reparse point or non-directory root."
         }
         $Directories.Add($Directory)
         foreach ($Entry in [System.IO.Directory]::EnumerateFileSystemEntries($Directory)) {
             $EntryPath = [System.IO.Path]::GetFullPath($Entry)
             $EntryAttributes = [System.IO.File]::GetAttributes($EntryPath)
             if (($EntryAttributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                throw "A Tewake removal tree contains a reparse point."
+                throw "A SpareRunner removal tree contains a reparse point."
             }
             if (($EntryAttributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
                 $Pending.Push($EntryPath)
@@ -55,27 +55,27 @@ function Get-TewakeSafeTreeInventory {
     }
 }
 
-function Assert-TewakeNoReparseTree {
+function Assert-SpareRunnerNoReparseTree {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Root
     )
 
-    [void] (Get-TewakeSafeTreeInventory -Root $Root)
+    [void] (Get-SpareRunnerSafeTreeInventory -Root $Root)
 }
 
-function Remove-TewakeTreeNoReparse {
+function Remove-SpareRunnerTreeNoReparse {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Root
     )
 
-    $Inventory = Get-TewakeSafeTreeInventory -Root $Root
+    $Inventory = Get-SpareRunnerSafeTreeInventory -Root $Root
     foreach ($File in $Inventory.Files) {
         $Attributes = [System.IO.File]::GetAttributes($File)
         if (($Attributes -band [System.IO.FileAttributes]::Directory) -ne 0 -or
             ($Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "A Tewake removal file changed identity after preflight."
+            throw "A SpareRunner removal file changed identity after preflight."
         }
         [System.IO.File]::Delete($File)
     }
@@ -84,7 +84,7 @@ function Remove-TewakeTreeNoReparse {
         $Attributes = [System.IO.File]::GetAttributes($Directory)
         if (($Attributes -band [System.IO.FileAttributes]::Directory) -eq 0 -or
             ($Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-            throw "A Tewake removal directory changed identity after preflight."
+            throw "A SpareRunner removal directory changed identity after preflight."
         }
         # Never pass recursive=true. A raced-in entry makes this fail closed
         # instead of being followed or deleted.

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -284,7 +284,7 @@ func TestSubmitRejectsPipeServerThatIsNotLocalSystemService(t *testing.T) {
 
 func validBootstrapJoinOptions(t *testing.T) BootstrapJoinOptions {
 	t.Helper()
-	t.Setenv("TEWAKE_WINDOWS_DEBUG", "1")
+	t.Setenv("SPARERUNNER_WINDOWS_DEBUG", "1")
 	var fingerprint [sha256.Size]byte
 	if _, err := rand.Read(fingerprint[:]); err != nil {
 		t.Fatal(err)

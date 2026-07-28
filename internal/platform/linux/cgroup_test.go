@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 func testContainment(t *testing.T) runner.ContainmentRef {
@@ -22,7 +22,7 @@ func testContainment(t *testing.T) runner.ContainmentRef {
 	return runner.ContainmentRef{
 		Backend:    containmentBackend,
 		OwnerID:    containmentOwner("linux-fence-test"),
-		Scope:      filepath.Join("tewake", containmentOwner("linux-fence-test")),
+		Scope:      filepath.Join("sparerunner", containmentOwner("linux-fence-test")),
 		HostEpoch:  epoch,
 		FenceToken: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 	}
@@ -108,7 +108,7 @@ func privilegedFenceRoot(t *testing.T) string {
 	if os.Geteuid() != 0 {
 		t.Skip("durable root-owned fence test requires the root Supervisor identity")
 	}
-	root, err := os.MkdirTemp("/var/lib", "tewake-fence-test-")
+	root, err := os.MkdirTemp("/var/lib", "sparerunner-fence-test-")
 	if err != nil {
 		t.Fatal(err)
 	}

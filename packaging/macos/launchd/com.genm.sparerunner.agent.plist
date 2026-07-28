@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.genm.sparerunner.agent</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/libexec/sparerunner-agent</string>
+    <string>serve</string>
+    <string>--state-dir=/Library/Application Support/SpareRunner/agent</string>
+    <string>--cache-root=/Library/Caches/com.genm.sparerunner/runner</string>
+    <string>--runtime-root=/Library/Application Support/SpareRunner/runtime</string>
+    <string>--require-native-runner</string>
+  </array>
+
+  <!-- A system LaunchDaemon gives the platform adapter the narrow privilege
+       needed to enter the dedicated runner UID and enumerate that UID's
+       processes. The official runner is never left under UID 0. -->
+  <key>UserName</key>
+  <string>root</string>
+  <key>GroupName</key>
+  <string>wheel</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>Umask</key>
+  <string>0077</string>
+
+  <!-- Each runner receives its own process group. launchd may therefore clean
+       the Agent's group on restart without claiming a still-running slot group
+       was successfully cleaned. -->
+  <key>AbandonProcessGroup</key>
+  <false/>
+</dict>
+</plist>

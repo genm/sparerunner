@@ -14,8 +14,8 @@ import (
 	"time"
 	"unsafe"
 
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/winacl"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/winacl"
 	syswindows "golang.org/x/sys/windows"
 )
 
@@ -52,7 +52,7 @@ func TestJobRuntimeRejectsRunnerTokenFromAgentIdentity(t *testing.T) {
 
 func TestJobRuntimeBindsExactlyOneCoreFenceAfterContainmentPreparation(t *testing.T) {
 	epoch := "0123456789abcdef0123456789abcdef"
-	owner := "tewake-" + strings.Repeat("a", sha256HexLength)
+	owner := "sparerunner-" + strings.Repeat("a", sha256HexLength)
 	runtime := &JobRuntime{
 		runtimeRoot: t.TempDir(),
 		hostEpoch:   epoch,
@@ -76,19 +76,19 @@ func TestJobRuntimeBindsExactlyOneCoreFenceAfterContainmentPreparation(t *testin
 		t.Fatal(err)
 	}
 	if err := winacl.ValidatePrivateDirectory(
-		filepath.Join(runtime.runtimeRoot, ".tewake-fences"),
+		filepath.Join(runtime.runtimeRoot, ".sparerunner-fences"),
 	); err != nil {
 		t.Fatalf("fence root authority: %v", err)
 	}
 	if err := winacl.ValidatePrivateDirectory(
-		filepath.Join(runtime.runtimeRoot, ".tewake-fences", owner),
+		filepath.Join(runtime.runtimeRoot, ".sparerunner-fences", owner),
 	); err != nil {
 		t.Fatalf("execution fence authority: %v", err)
 	}
 	if err := winacl.ValidatePrivateFile(
 		filepath.Join(
 			runtime.runtimeRoot,
-			".tewake-fences",
+			".sparerunner-fences",
 			owner,
 			ref.FenceToken+".fence",
 		),
@@ -132,8 +132,8 @@ func TestJobObjectTerminationOwnsDescendantTree(t *testing.T) {
 	}
 	ref := runner.ContainmentRef{
 		Backend:      containmentBackend,
-		OwnerID:      "tewake-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
-		Scope:        jobObjectName(runtime.hostEpoch, "tewake-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
+		OwnerID:      "sparerunner-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+		Scope:        jobObjectName(runtime.hostEpoch, "sparerunner-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"),
 		HostEpoch:    runtime.hostEpoch,
 		FenceToken:   "abcdef0123456789abcdef0123456789",
 		InvocationID: "",
@@ -323,7 +323,7 @@ func TestLockedWorkspaceProducesCleanupFailureUntilLockIsReleased(t *testing.T) 
 }
 
 func TestDisposableRunnerEnvironmentDoesNotInheritAgentSecrets(t *testing.T) {
-	t.Setenv("TEWAKE_AGENT_SECRET_CANARY", "must-not-cross-identity.example.test")
+	t.Setenv("SPARERUNNER_AGENT_SECRET_CANARY", "must-not-cross-identity.example.test")
 	root := t.TempDir()
 	var token syswindows.Token
 	if err := syswindows.OpenProcessToken(
@@ -340,17 +340,17 @@ func TestDisposableRunnerEnvironmentDoesNotInheritAgentSecrets(t *testing.T) {
 	}
 	defer clear(block)
 	entries := decodeEnvironmentBlock(block)
-	if _, found := entries["TEWAKE_AGENT_SECRET_CANARY"]; found {
+	if _, found := entries["SPARERUNNER_AGENT_SECRET_CANARY"]; found {
 		t.Fatal("Agent process environment crossed into the runner")
 	}
 	for name, expected := range map[string]string{
-		"HOME":         filepath.Join(root, "_tewake-home"),
-		"USERPROFILE":  filepath.Join(root, "_tewake-home"),
-		"TEMP":         filepath.Join(root, "_tewake-tmp"),
-		"TMP":          filepath.Join(root, "_tewake-tmp"),
-		"RUNNER_TEMP":  filepath.Join(root, "_tewake-tmp"),
-		"APPDATA":      filepath.Join(root, "_tewake-home", "AppData", "Roaming"),
-		"LOCALAPPDATA": filepath.Join(root, "_tewake-home", "AppData", "Local"),
+		"HOME":         filepath.Join(root, "_sparerunner-home"),
+		"USERPROFILE":  filepath.Join(root, "_sparerunner-home"),
+		"TEMP":         filepath.Join(root, "_sparerunner-tmp"),
+		"TMP":          filepath.Join(root, "_sparerunner-tmp"),
+		"RUNNER_TEMP":  filepath.Join(root, "_sparerunner-tmp"),
+		"APPDATA":      filepath.Join(root, "_sparerunner-home", "AppData", "Roaming"),
+		"LOCALAPPDATA": filepath.Join(root, "_sparerunner-home", "AppData", "Local"),
 	} {
 		if entries[name] != expected {
 			t.Fatalf("%s = %q, want %q", name, entries[name], expected)

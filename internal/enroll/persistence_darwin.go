@@ -24,11 +24,11 @@ import (
 const (
 	darwinLocatorVersion  = 1
 	darwinLocatorBackend  = "macos-keychain"
-	darwinKeychainService = "com.genm.tewake.private-material.v1"
-	darwinKeychainLabel   = "Tewake private material"
+	darwinKeychainService = "com.genm.sparerunner.private-material.v1"
+	darwinKeychainLabel   = "SpareRunner private material"
 	darwinLocatorMaxBytes = 2048
 	darwinAccountBytes    = 32
-	darwinRecoveryPrefix  = ".tewake-keychain-recovery-v1-"
+	darwinRecoveryPrefix  = ".sparerunner-keychain-recovery-v1-"
 )
 
 var (
@@ -56,7 +56,7 @@ type nativeDarwinCredentialStore struct {
 
 func newNativeDarwinCredentialStore() nativeDarwinCredentialStore {
 	// TrustAll deliberately gives every process in the same Keychain user
-	// context access; it does not bind access to Tewake's path or code-signing
+	// context access; it does not bind access to SpareRunner's path or code-signing
 	// identity. The packaged boundary is the root service user versus the
 	// separate runner UID. A compromised root context is outside the native
 	// trusted-workflow threat model.

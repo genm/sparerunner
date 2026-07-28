@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 type testWorkspace struct{}
@@ -84,7 +84,7 @@ type testRuntime struct {
 func newTestRuntime() *testRuntime { return &testRuntime{fences: make(map[string]*testFence)} }
 
 func (*testRuntime) EnsureCgroup(_ context.Context, owner string) (Cgroup, error) {
-	return Cgroup{Scope: "tewake/" + owner, HostEpoch: "boot-test"}, nil
+	return Cgroup{Scope: "sparerunner/" + owner, HostEpoch: "boot-test"}, nil
 }
 func (runtime *testRuntime) LockFence(_ context.Context, containment runner.ContainmentRef) (Fence, error) {
 	runtime.mu.Lock()

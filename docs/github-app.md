@@ -1,20 +1,20 @@
 # Connecting a GitHub App
 
-Tewake acts as a GitHub App that **you own**. This page is the primary setup
+SpareRunner acts as a GitHub App that **you own**. This page is the primary setup
 path: it needs no browser session with the controller and no management UI.
 
 ## Why the App is yours
 
 A GitHub App mints installation tokens by signing a JWT with the App's private
-key, so whatever acts as the App must hold that key. Tewake keeps the key on
+key, so whatever acts as the App must hold that key. SpareRunner keeps the key on
 your controller host, in the platform credential store, and never sends it
 anywhere.
 
-That is also why there is no shared "Tewake App" to install. One shared App
+That is also why there is no shared "SpareRunner App" to install. One shared App
 would mean one shared private key distributed to every controller, and whoever
 held it could mint tokens for every other installation of that App — every other
 user's organizations. A hosted service could hold the key instead, but that
-would contradict Tewake's LAN-first boundary: no cloud dependency, credentials
+would contradict SpareRunner's LAN-first boundary: no cloud dependency, credentials
 never leave the machine.
 
 ## 1. Create the App
@@ -25,9 +25,9 @@ organization own it. Either works; ownership only decides who administers it.
 
 Set:
 
-- **GitHub App name**: anything unique, for example `tewake-<your-fleet>`
+- **GitHub App name**: anything unique, for example `sparerunner-<your-fleet>`
 - **Homepage URL**: anything, for example your repository URL
-- **Webhook**: **uncheck Active**. Tewake polls scale sets and needs no webhook
+- **Webhook**: **uncheck Active**. SpareRunner polls scale sets and needs no webhook
   delivery.
 - **Repository permissions**
   - Administration: **Read-only**
@@ -50,7 +50,7 @@ After creating the App:
 ## 2. Connect it to the controller
 
 ```bash
-tewake github connect \
+sparerunner github connect \
   --app-id 1234567 \
   --client-id Iv1.0123456789abcdef \
   --private-key-file ~/Downloads/your-app.private-key.pem
@@ -77,7 +77,7 @@ allows installation elsewhere and does not publish your key or code.
 Then confirm what the controller can see:
 
 ```bash
-tewake github installations
+sparerunner github installations
 # 149442642   your-org   Organization   all
 ```
 
@@ -88,15 +88,15 @@ The first column is the installation ID a Target refers to.
 Targets are ordinary configuration, so the same CLI completes the setup:
 
 ```bash
-tewake config export > fleet.yaml
+sparerunner config export > fleet.yaml
 ```
 
 Add a runner profile and a Target, keeping the installation ID from above:
 
 ```yaml
 runnerProfiles:
-  - id: profile-tewake
-    label: tewake
+  - id: profile-sparerunner
+    label: sparerunner
     minAvailableMemoryBytes: 0
     versionPolicy: auto_update
     runtime: native
@@ -105,17 +105,17 @@ targets:
     installationId: "149442642"
     scopeKind: organization
     scope: your-org
-    scaleSetName: tewake
-    runnerProfileId: profile-tewake
+    scaleSetName: sparerunner
+    runnerProfileId: profile-sparerunner
 ```
 
 ```bash
-tewake config apply fleet.yaml
+sparerunner config apply fleet.yaml
 ```
 
 Applying verifies the scope against GitHub before anything is committed: a
 public scope, an unverifiable visibility, or unsafe runner-group access is
-rejected, and the runner group and scale set Tewake owns are created only after
+rejected, and the runner group and scale set SpareRunner owns are created only after
 that check passes.
 
 ## The Web UI path

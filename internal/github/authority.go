@@ -2,7 +2,7 @@ package github
 
 // This file owns the small amount of GitHub REST API surface needed by the
 // management UI. It deliberately stays below the app package: provider
-// responses are validated here before they become Tewake authority.
+// responses are validated here before they become SpareRunner authority.
 
 import (
 	"bytes"
@@ -251,7 +251,7 @@ func (authority *Authority) VerifyAndProvisionTarget(ctx context.Context, reques
 		ClientID:        credential.ClientID,
 		InstallationID:  installationID,
 		PrivateKey:      credential.PrivateKey(),
-		System:          "tewake",
+		System:          "sparerunner",
 		Version:         "dev",
 		Subsystem:       "controller",
 	}, requested)
@@ -347,7 +347,7 @@ func (authority *Authority) InstallationClient(
 		ClientID:        credential.ClientID,
 		InstallationID:  installationID,
 		PrivateKey:      credential.PrivateKey(),
-		System:          "tewake",
+		System:          "sparerunner",
 		Version:         version,
 		CommitSHA:       commitSHA,
 		Subsystem:       "controller",
@@ -453,7 +453,7 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 	if err != nil {
 		return 0, false, err
 	}
-	ownedName := "tewake-" + request.TargetID
+	ownedName := "sparerunner-" + request.TargetID
 	for _, group := range runnerGroups {
 		// The owned name is claimed regardless of the group's attributes: a
 		// same-named group with different settings is still someone else's
@@ -473,7 +473,7 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 	// group and silently coerces any other value, so requesting "private" used
 	// to come back as "all" and fail verification on every real organization.
 	// "all" matches the organization Target's own semantics — the whole private
-	// scope routes here — and the safety property Tewake actually needs is that
+	// scope routes here — and the safety property SpareRunner actually needs is that
 	// public repositories can never reach the group.
 	var created runnerGroup
 	body := bytes.NewReader([]byte(`{"name":"` + ownedName + `","visibility":"all","allows_public_repositories":false,"restricted_to_workflows":false}`))
@@ -484,7 +484,7 @@ func (authority *Authority) verifyRunnerGroup(ctx context.Context, request Targe
 		created.Visibility != "all" || created.AllowsPublicRepositories {
 		// The provider accepted the create but echoed different attributes.
 		// The group exists, so failing without removing it would leak a
-		// Tewake-named object into the organization on every rejected attempt.
+		// SpareRunner-named object into the organization on every rejected attempt.
 		if created.ID > 0 {
 			if cleanupErr := authority.deleteRunnerGroup(ctx, request, token, created.ID); cleanupErr != nil {
 				return 0, false, ErrGitHubProvisioningAmbiguous
@@ -538,7 +538,7 @@ func (authority *Authority) doJSON(ctx context.Context, method, path, bearer str
 		return ErrGitHubProviderFailure
 	}
 	request.Header.Set("Accept", "application/vnd.github+json")
-	request.Header.Set("User-Agent", "tewake")
+	request.Header.Set("User-Agent", "sparerunner")
 	if body != nil {
 		request.Header.Set("Content-Type", "application/json")
 	}

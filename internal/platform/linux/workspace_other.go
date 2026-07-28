@@ -6,7 +6,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // OSWorkspace is intentionally unavailable outside Linux.  Keeping the stub

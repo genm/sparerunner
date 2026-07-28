@@ -7,7 +7,7 @@ import (
 	"io"
 	"os"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // The shared-identity mode depends on cgroup-v2 delegation and Linux stat

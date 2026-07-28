@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 type GitHubJobEventType string
@@ -142,7 +142,7 @@ const (
 	GitHubClaimFromAssignedDemand GitHubClaimOrigin = "assigned_demand"
 )
 
-// GitHubJobClaim is one runner lifecycle. ClaimKey is its Tewake-owned durable
+// GitHubJobClaim is one runner lifecycle. ClaimKey is its SpareRunner-owned durable
 // identity and the key every child table references; it equals RunnerRequestID
 // for an offered job and is negative for assigned demand, so the two namespaces
 // can never collide. RunnerRequestID is provider correlation only and is zero
@@ -804,7 +804,7 @@ func resolveGitHubAvailableClaim(
 		return resolved, resolvedRequeue, false, nil
 	}
 	if len(unclaimed) > 1 {
-		// The TWK-007 vertical owns one concrete slot and may not partially
+		// The SPR-007 vertical owns one concrete slot and may not partially
 		// acknowledge a message containing more independent availability than it
 		// can durably claim. The pinned poll requests capacity one, so this is a
 		// fail-closed preview-contract violation.
@@ -1150,7 +1150,7 @@ func githubDemandExecutionID(
 ) domain.ExecutionID {
 	digest := sha256.Sum256(fmt.Appendf(
 		nil, "execution\x00assigned_demand\x00%d\x00%d", scaleSetID, claimKey))
-	return domain.ExecutionID("twk-exec-" + strings.ToLower(
+	return domain.ExecutionID("spr-exec-" + strings.ToLower(
 		base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(digest[:])))
 }
 

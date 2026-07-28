@@ -17,17 +17,19 @@ type ControllerRuntime = {
 let runtime: ControllerRuntime;
 
 test.beforeAll(async () => {
-  const configuredBinary = process.env.TEWAKE_E2E_BINARY;
+  const configuredBinary = process.env.SPARERUNNER_E2E_BINARY;
   if (!configuredBinary) {
-    throw new Error("TEWAKE_E2E_BINARY is required for the release-binary management journey.");
+    throw new Error(
+      "SPARERUNNER_E2E_BINARY is required for the release-binary management journey.",
+    );
   }
   const binary = resolve(configuredBinary);
-  const root = await mkdtemp(join(tmpdir(), "tewake-management-e2e-"));
+  const root = await mkdtemp(join(tmpdir(), "sparerunner-management-e2e-"));
   const controllerState = join(root, "controller");
   let serve: ChildProcessWithoutNullStreams | undefined;
 
   try {
-    await runTewake(binary, ["init", "--state-dir", controllerState]);
+    await runSpareRunner(binary, ["init", "--state-dir", controllerState]);
     serve = spawn(
       binary,
       [
@@ -81,9 +83,9 @@ test("authorizes the browser, manages join codes, enrolls a node, and drains it"
 
     await page.getByRole("button", { name: "Begin browser authorization" }).click();
     const handoffCommand = await page.locator(".device-command").textContent();
-    const handoffCode = exactCommandArgument(handoffCommand, "tewake ui authorize");
+    const handoffCode = exactCommandArgument(handoffCommand, "sparerunner ui authorize");
     phase = "browser_owner_authorization";
-    await runTewake(runtime.binary, [
+    await runSpareRunner(runtime.binary, [
       "ui",
       "authorize",
       handoffCode,
@@ -108,7 +110,7 @@ test("authorizes the browser, manages join codes, enrolls a node, and drains it"
 
     phase = "node_enrollment";
     const joinCode = await createJoinCode(page, runtime.agentURL);
-    const joinOutput = await runTewake(runtime.binary, [
+    const joinOutput = await runSpareRunner(runtime.binary, [
       "join",
       joinCode,
       "--state-dir",
@@ -180,7 +182,7 @@ async function createJoinCode(
   const delivery = page.getByRole("textbox", { name: "One-time join code" });
   await expect(delivery).toBeVisible();
   const code = await delivery.inputValue();
-  if (!code.startsWith("twk_")) {
+  if (!code.startsWith("spr_")) {
     throw new Error("Controller returned a non-canonical join-code delivery.");
   }
   return code;
@@ -210,13 +212,13 @@ function isJoinCodeDelete(response: import("@playwright/test").Response): boolea
   );
 }
 
-async function runTewake(binary: string, args: readonly string[]): Promise<string> {
+async function runSpareRunner(binary: string, args: readonly string[]): Promise<string> {
   return new Promise((resolveRun, rejectRun) => {
     execFile(binary, [...args], { encoding: "utf8", maxBuffer: 64 * 1024 }, (error, stdout) => {
       if (error) {
         // Arguments and stderr can carry one-time credentials. Report only the
         // bounded operation name and exit status to failure artifacts.
-        rejectRun(new Error(`tewake ${args[0] ?? "command"} failed`));
+        rejectRun(new Error(`sparerunner ${args[0] ?? "command"} failed`));
         return;
       }
       resolveRun(stdout);

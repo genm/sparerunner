@@ -22,10 +22,10 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	managementapi "github.com/genm/tewake/internal/api"
-	"github.com/genm/tewake/internal/enroll"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	managementapi "github.com/genm/sparerunner/internal/api"
+	"github.com/genm/sparerunner/internal/enroll"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 func TestAdminListenerRejectsNonLoopbackExposure(t *testing.T) {
@@ -136,7 +136,7 @@ func TestEnrollmentRejectionsAppendBoundedSecretFreeAuditAfterClientCancellation
 	}{
 		{body: `{"joinCode":`, wantStatus: http.StatusBadRequest},
 		{
-			body:       `{"joinCode":"twk_secret-canary","csr":"AA"}`,
+			body:       `{"joinCode":"spr_secret-canary","csr":"AA"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -492,7 +492,7 @@ func newControllerAgentAuditTestState(
 	csr, err := x509.CreateCertificateRequest(
 		rand.Reader,
 		&x509.CertificateRequest{
-			Subject: pkix.Name{CommonName: "tewake-agent"},
+			Subject: pkix.Name{CommonName: "sparerunner-agent"},
 		},
 		privateKey,
 	)

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/domain"
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/reconcile"
-	"github.com/genm/tewake/internal/runner"
-	"github.com/genm/tewake/internal/store"
-	"github.com/genm/tewake/internal/transport"
+	"github.com/genm/sparerunner/internal/domain"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/reconcile"
+	"github.com/genm/sparerunner/internal/runner"
+	"github.com/genm/sparerunner/internal/store"
+	"github.com/genm/sparerunner/internal/transport"
 )
 
 const (
@@ -291,7 +291,7 @@ func (fixture *bindingFixture) coordinator(
 		ControllerRunnerConfig{
 			ScaleSetID:      github.ScaleSetID(bindingScaleSetID),
 			TargetID:        bindingTargetID,
-			Scope:           "example-org/tewake",
+			Scope:           "example-org/sparerunner",
 			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: bindingProfileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,

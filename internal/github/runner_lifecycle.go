@@ -20,7 +20,7 @@ type RunnerLifecycle interface {
 var _ RunnerLifecycle = (*Client)(nil)
 
 // RunnerQuery binds a provider read to one durable JIT attempt. GitHub runner
-// records expose no Tewake identity at all, so callers still pass the owning
+// records expose no SpareRunner identity at all, so callers still pass the owning
 // claim key to prevent a name-only lookup from becoming an unscoped
 // reconciliation API. The key is never sent upstream; it is negative for a
 // claim GitHub created from assigned demand rather than an offered job.
@@ -114,7 +114,7 @@ func (c *Client) QueryRunner(
 }
 
 // GetRunnerByName returns nil only when GitHub authoritatively reports that the
-// deterministic Tewake runner name is absent.
+// deterministic SpareRunner runner name is absent.
 func (c *Client) GetRunnerByName(ctx context.Context, name string) (*RunnerReference, error) {
 	if !isGitHubPathPart(name) {
 		return nil, errors.New("GitHub runner name is invalid")

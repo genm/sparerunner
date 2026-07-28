@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 const (
@@ -846,7 +846,7 @@ func (client *HelperClient) fixedLaunch(spec LaunchSpec) (string, bool, bool) {
 		spec.UID != client.policy.RunnerUID || spec.GID != client.policy.RunnerGID ||
 		spec.WorkspaceRef.Backend != WorkspaceBackend || spec.WorkspaceRef.OwnerID == "" ||
 		!validWorkspaceName(filepath.Base(directory)) ||
-		spec.Containment.OwnerID != "tewake-"+filepath.Base(directory) ||
+		spec.Containment.OwnerID != "sparerunner-"+filepath.Base(directory) ||
 		!fixedRunnerArguments(spec.Arguments) {
 		return "", false, false
 	}
@@ -1223,7 +1223,7 @@ func validateHelperRequest(request helperRequest) error {
 	case helperOpFinalizeCleanup:
 		if request.Containment == nil || !validWireContainment(*request.Containment) ||
 			!canonicalRootName(request.RootName) ||
-			request.Containment.OwnerID != "tewake-"+request.RootName ||
+			request.Containment.OwnerID != "sparerunner-"+request.RootName ||
 			request.WorkspaceRef == nil ||
 			request.WorkspaceRef.Backend != WorkspaceBackend ||
 			request.WorkspaceRef.OwnerID == "" ||
@@ -1270,7 +1270,7 @@ func validLaunchRequest(request helperRequest, containment runner.ContainmentRef
 	return validateHelperRequest(request) == nil &&
 		validWireContainment(containment) &&
 		canonicalRootName(request.RootName) &&
-		containment.OwnerID == "tewake-"+request.RootName &&
+		containment.OwnerID == "sparerunner-"+request.RootName &&
 		request.WorkspaceRef.Backend == WorkspaceBackend &&
 		request.WorkspaceRef.OwnerID != "" &&
 		*request.JITLength > 0 &&
@@ -1280,7 +1280,7 @@ func validLaunchRequest(request helperRequest, containment runner.ContainmentRef
 func validWireContainment(containment runner.ContainmentRef) bool {
 	return containment.Backend == containmentBackend &&
 		validOwner(containment.OwnerID) &&
-		containment.Scope == filepath.Join("tewake", containment.OwnerID) &&
+		containment.Scope == filepath.Join("sparerunner", containment.OwnerID) &&
 		containment.HostEpoch != "" &&
 		containment.InvocationID == "" &&
 		canonicalToken(containment.FenceToken)

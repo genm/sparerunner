@@ -24,8 +24,8 @@ import (
 const (
 	CAValidity        = 10 * 365 * 24 * time.Hour
 	LeafValidity      = 365 * 24 * time.Hour
-	ControllerDNSName = "tewake-controller"
-	canonicalNodeHost = "tewake.local"
+	ControllerDNSName = "sparerunner-controller"
+	canonicalNodeHost = "sparerunner.local"
 )
 
 var credentialEpochOID = []int{1, 3, 6, 1, 4, 1, 57264, 1, 1}
@@ -56,7 +56,7 @@ func NewControllerIdentity(now time.Time, reader io.Reader) (ControllerIdentity,
 	caTemplate.IsCA = true
 	caTemplate.BasicConstraintsValid = true
 	caTemplate.KeyUsage = x509.KeyUsageCertSign | x509.KeyUsageCRLSign | x509.KeyUsageDigitalSignature
-	caTemplate.Subject = pkix.Name{CommonName: "Tewake Controller CA"}
+	caTemplate.Subject = pkix.Name{CommonName: "SpareRunner Controller CA"}
 	caDER, err := x509.CreateCertificate(reader, caTemplate, caTemplate, caPublic, caPrivate)
 	if err != nil {
 		return ControllerIdentity{}, err
@@ -151,7 +151,7 @@ func (identity ControllerIdentity) IssueNodeCertificate(csrDER []byte, nodeID st
 	if err != nil {
 		return nil, nil, err
 	}
-	template.Subject = pkix.Name{CommonName: "tewake-node-" + nodeID}
+	template.Subject = pkix.Name{CommonName: "sparerunner-node-" + nodeID}
 	template.URIs = []*url.URL{uri}
 	template.KeyUsage = x509.KeyUsageDigitalSignature
 	template.ExtKeyUsage = []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
@@ -398,7 +398,7 @@ func atomicPrivateFile(path string, contents []byte) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	temporary, err := os.CreateTemp(parent, ".tewake-private-*")
+	temporary, err := os.CreateTemp(parent, ".sparerunner-private-*")
 	if err != nil {
 		return err
 	}

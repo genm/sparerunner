@@ -183,7 +183,7 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
       <a className="skip-link" href="#page-content">
         Skip to page content
       </a>
-      <aside className="side-rail" aria-label="Tewake navigation">
+      <aside className="side-rail" aria-label="SpareRunner navigation">
         <Brand />
         <nav className="route-nav" aria-label="Management sections">
           {navigation.map((item) => (
@@ -365,7 +365,7 @@ function BrowserHandoff({
             Run this command on the Controller host. The displayed code is not a credential and
             expires at {formatDate(delivery.expiresAt)}.
           </p>
-          <code className="device-command">tewake ui authorize '{delivery.code}'</code>
+          <code className="device-command">sparerunner ui authorize '{delivery.code}'</code>
           <button disabled={busy} onClick={() => void continueHandoff()} type="button">
             {busy ? "Checking authorization…" : "Continue after authorization"}
           </button>
@@ -473,7 +473,7 @@ function Page({
   return (
     <>
       <header className="page-header">
-        <p className="eyebrow">Tewake management</p>
+        <p className="eyebrow">SpareRunner management</p>
         <h1 ref={headingRef} tabIndex={-1}>
           {heading}
         </h1>
@@ -674,7 +674,7 @@ function NodesPage({ api, csrfToken, snapshot, onRefresh, onToast, mutationsDisa
       ) : (
         <EmptyPanel
           title="No enrolled nodes"
-          detail="Create a join code, then run tewake join on a trusted computer."
+          detail="Create a join code, then run sparerunner join on a trusted computer."
         />
       )}
     </section>
@@ -1424,8 +1424,8 @@ function TargetDialog({
   const [installationId, setInstallationId] = useState("");
   const [scopeKind, setScopeKind] = useState<"repository" | "organization">("repository");
   const [scope, setScope] = useState("");
-  const [scaleSetName, setScaleSetName] = useState("tewake");
-  const [profileId, setProfileId] = useState("profile-tewake");
+  const [scaleSetName, setScaleSetName] = useState("sparerunner");
+  const [profileId, setProfileId] = useState("profile-sparerunner");
   const [busy, setBusy] = useState(true);
   const [message, setMessage] = useState<string>();
   useEffect(() => {
@@ -1515,7 +1515,7 @@ function TargetDialog({
         {!installations.length && !busy ? (
           <EmptyPanel
             title="No installations"
-            detail="Connect and install the Tewake App in a private account first."
+            detail="Connect and install the SpareRunner App in a private account first."
           />
         ) : null}
         {installations.length ? (
@@ -1592,7 +1592,7 @@ function Brand() {
   return (
     <div className="brand">
       <p>LAN-first runner fleet</p>
-      <strong>Tewake</strong>
+      <strong>SpareRunner</strong>
     </div>
   );
 }

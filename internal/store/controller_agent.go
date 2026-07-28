@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/genm/tewake/internal/agentstate"
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/agentstate"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // IssuedAgentCommand is the non-secret Controller authority committed before a

@@ -4,7 +4,7 @@ import (
 	"log/slog"
 	"os"
 
-	"github.com/genm/tewake/internal/nodectl"
+	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 // AgentLocalControlOptions configures the same-host endpoint the tray, the

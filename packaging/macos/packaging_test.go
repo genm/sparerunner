@@ -13,14 +13,14 @@ type plistDocument struct {
 }
 
 func TestLaunchDaemonRestartsFailingAgentWithoutSecretEnvironment(t *testing.T) {
-	plist := readPackagingFile(t, "launchd/com.genm.tewake.agent.plist")
+	plist := readPackagingFile(t, "launchd/com.genm.sparerunner.agent.plist")
 	var document plistDocument
 	if err := xml.Unmarshal([]byte(plist), &document); err != nil {
 		t.Fatalf("invalid plist XML: %v", err)
 	}
 	for _, required := range []string{
-		"<string>com.genm.tewake.agent</string>",
-		"<string>/usr/local/libexec/tewake-agent</string>",
+		"<string>com.genm.sparerunner.agent</string>",
+		"<string>/usr/local/libexec/sparerunner-agent</string>",
 		"<string>root</string>",
 		"<string>wheel</string>",
 		"<key>RunAtLoad</key>",
@@ -39,7 +39,7 @@ func TestLaunchDaemonRestartsFailingAgentWithoutSecretEnvironment(t *testing.T) 
 		"jitconfig",
 		"node-private-key",
 		"join-token",
-		"tewake-runner-0</string>",
+		"sparerunner-runner-0</string>",
 	} {
 		if strings.Contains(plist, forbidden) {
 			t.Fatalf("launchd plist contains forbidden value %q", forbidden)
@@ -50,18 +50,18 @@ func TestLaunchDaemonRestartsFailingAgentWithoutSecretEnvironment(t *testing.T) 
 func TestInstallScriptCreatesHiddenNonLoginRunnerAndPrivateRoots(t *testing.T) {
 	script := readPackagingFile(t, "install-service.sh")
 	for _, required := range []string{
-		`runner_account="tewake-runner-0"`,
+		`runner_account="sparerunner-runner-0"`,
 		`UserShell "/usr/bin/false"`,
 		`IsHidden 1`,
 		`AuthenticationAuthority ";DisabledUser;"`,
 		`configured_home`,
 		`configured_auth`,
 		`configured_password`,
-		`marker_name=".tewake-install-ownership-v1"`,
+		`marker_name=".sparerunner-install-ownership-v1"`,
 		`"$EUID" -eq 0`,
 		`stat -f '%u:%g:%p'`,
 		`validate_owned_layout`,
-		`refusing foreign or partial Tewake service roots`,
+		`refusing foreign or partial SpareRunner service roots`,
 		`run_tool install -o root -g wheel -m 0600`,
 		`run_tool launchctl bootstrap system`,
 	} {
@@ -93,10 +93,10 @@ func TestInstallScriptCreatesHiddenNonLoginRunnerAndPrivateRoots(t *testing.T) {
 func TestInstallationPrecedesRootContextJoinIntoServiceState(t *testing.T) {
 	readme := readPackagingFile(t, "README.md")
 	install := `sudo ./packaging/macos/install-service.sh`
-	installCLI := `./tewake /usr/local/bin/tewake`
-	join := `sudo /usr/local/bin/tewake join twk_... \`
-	state := `--state-dir "/Library/Application Support/Tewake/agent"`
-	activation := `sudo /bin/launchctl kickstart -k system/com.genm.tewake.agent`
+	installCLI := `./sparerunner /usr/local/bin/sparerunner`
+	join := `sudo /usr/local/bin/sparerunner join spr_... \`
+	state := `--state-dir "/Library/Application Support/SpareRunner/agent"`
+	activation := `sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent`
 	installAt := strings.Index(readme, install)
 	installCLIAt := strings.Index(readme, installCLI)
 	joinAt := strings.Index(readme, join)

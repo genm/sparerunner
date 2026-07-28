@@ -17,12 +17,12 @@ fi
 (cd "$dist_dir" && sha256sum --check checksums.txt)
 
 for pattern in \
-  'tewake_*_linux_amd64.tar.gz' \
-  'tewake_*_linux_arm64.tar.gz' \
-  'tewake_*_darwin_amd64.tar.gz' \
-  'tewake_*_darwin_arm64.tar.gz' \
-  'tewake_*_windows_amd64.zip' \
-  'tewake_*_windows_arm64.zip'; do
+  'sparerunner_*_linux_amd64.tar.gz' \
+  'sparerunner_*_linux_arm64.tar.gz' \
+  'sparerunner_*_darwin_amd64.tar.gz' \
+  'sparerunner_*_darwin_arm64.tar.gz' \
+  'sparerunner_*_windows_amd64.zip' \
+  'sparerunner_*_windows_arm64.zip'; do
   compgen -G "$dist_dir/$pattern" >/dev/null || {
     printf 'required archive is missing: %s\n' "$pattern" >&2
     exit 1

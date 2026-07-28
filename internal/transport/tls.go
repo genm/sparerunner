@@ -15,7 +15,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/genm/tewake/internal/enroll"
+	"github.com/genm/sparerunner/internal/enroll"
 )
 
 // CredentialAuthorizer is implemented by controller persistence. Its decision
@@ -336,17 +336,17 @@ func UpgradeAuthenticatedWithSessions(writer http.ResponseWriter, request *http.
 			cause:  err,
 		}
 	}
-	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
+	connection, err := websocket.Accept(writer, request, &websocket.AcceptOptions{CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"sparerunner.v1"}})
 	if err != nil {
 		return err
 	}
 	connection.SetReadLimit(MaxEnvelopeBytes)
 	defer connection.CloseNow()
-	if connection.Subprotocol() != "tewake.v1" {
+	if connection.Subprotocol() != "sparerunner.v1" {
 		return upgradedSessionError{agentSessionRejectionError{
 			nodeID: credential.NodeID,
 			kind:   AgentSessionProtocolRejected,
-			cause:  errors.New("missing tewake.v1 subprotocol"),
+			cause:  errors.New("missing sparerunner.v1 subprotocol"),
 		}}
 	}
 	session := &AuthenticatedSession{connection: connection, authorizer: authorizer, credential: credential}
@@ -379,12 +379,12 @@ func DialNodeWSS(ctx context.Context, endpoint string, config *tls.Config) (*web
 		return nil, nil, errors.New("invalid secure WebSocket endpoint")
 	}
 	client := &http.Client{Transport: &http.Transport{Proxy: nil, TLSClientConfig: config}, CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("WebSocket redirects are forbidden") }}
-	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: client, CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"tewake.v1"}})
+	connection, response, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPClient: client, CompressionMode: websocket.CompressionDisabled, Subprotocols: []string{"sparerunner.v1"}})
 	if err == nil {
 		connection.SetReadLimit(MaxEnvelopeBytes)
-		if connection.Subprotocol() != "tewake.v1" {
+		if connection.Subprotocol() != "sparerunner.v1" {
 			connection.CloseNow()
-			return nil, response, errors.New("controller did not negotiate tewake.v1")
+			return nil, response, errors.New("controller did not negotiate sparerunner.v1")
 		}
 	}
 	return connection, response, err

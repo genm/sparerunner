@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/genm/tewake/internal/domain"
+	"github.com/genm/sparerunner/internal/domain"
 )
 
 // recordAssignedDemandForTest publishes the one statistic the scale-set
@@ -31,7 +31,7 @@ func recordAssignedDemandForTest(
 // TestGitHubAssignedDemandRaisesExecutionsToAssignedCount is the regression for
 // the live failure: GitHub assigned the queued job directly and never offered
 // it, so TotalAssignedJobs was 1, TotalAvailableJobs was 0, no JobAvailable ever
-// arrived, and the workflow sat queued forever while Tewake acknowledged every
+// arrived, and the workflow sat queued forever while SpareRunner acknowledged every
 // message correctly.
 func TestGitHubAssignedDemandRaisesExecutionsToAssignedCount(t *testing.T) {
 	ctx := context.Background()
@@ -349,7 +349,7 @@ func TestGitHubAssignedDemandFenceCrashLeavesReconcilableNonRunnableState(
 	}
 	// The fence is written before GenerateJITConfig is ever called. Crash here.
 	attempt, replayedAttempt, err := controller.BeginGitHubJITAttempt(
-		ctx, scaleSetID, claim.ClaimKey, epoch, "tewake-demand-runner")
+		ctx, scaleSetID, claim.ClaimKey, epoch, "sparerunner-demand-runner")
 	if err != nil || replayedAttempt {
 		t.Fatalf("begin JIT attempt = (%#v, %t, %v)", attempt, replayedAttempt, err)
 	}
@@ -406,7 +406,7 @@ func TestGitHubAssignedDemandCorrelatesLifecycleByRunnerIdentity(t *testing.T) {
 		ClaimEnabled: true,
 	}
 	const scaleSetID ScaleSetID = 7
-	const runnerName = "tewake-demand-correlated"
+	const runnerName = "sparerunner-demand-correlated"
 	const runnerID = 4242
 	enableGitHubClaimForTest(t, controller, &binding, scaleSetID, domain.ArchAMD64)
 	recordAssignedDemandForTest(t, controller, scaleSetID, 1)

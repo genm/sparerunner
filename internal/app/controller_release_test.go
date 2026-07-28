@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/genm/tewake/internal/github"
-	"github.com/genm/tewake/internal/store"
+	"github.com/genm/sparerunner/internal/github"
+	"github.com/genm/sparerunner/internal/store"
 )
 
 type runnerReleaseObserverFunc func(context.Context) (github.RunnerRelease, error)

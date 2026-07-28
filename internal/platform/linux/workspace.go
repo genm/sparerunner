@@ -16,7 +16,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/genm/tewake/internal/runner"
+	"github.com/genm/sparerunner/internal/runner"
 )
 
 // OSWorkspace is the Linux stat identity authority. It records the inode,
@@ -47,7 +47,7 @@ type OSWorkspace struct {
 	materializeArchive    func(*os.Root, *os.File, runner.Package) error
 }
 
-const officialAuthorityDirectory = ".tewake-official"
+const officialAuthorityDirectory = ".sparerunner-official"
 
 func NewOSWorkspace(agentUID, agentGID, runnerUID, runnerGID int) *OSWorkspace {
 	return &OSWorkspace{
@@ -639,10 +639,10 @@ func (workspace *OSWorkspace) PrepareOfficial(
 		return runner.WorkspaceRef{}, err
 	}
 	for _, directory := range []string{
-		".tewake-home",
-		".tewake-home/.config",
-		".tewake-home/.cache",
-		".tewake-home/.tmp",
+		".sparerunner-home",
+		".sparerunner-home/.config",
+		".sparerunner-home/.cache",
+		".sparerunner-home/.tmp",
 	} {
 		if err := workspaceRoot.MkdirAll(directory, 0o700); err != nil {
 			return runner.WorkspaceRef{}, err
