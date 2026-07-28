@@ -8,7 +8,12 @@ pre-commit:
       glob: "web/**/*.{ts,tsx,js,jsx,json,css,md}"
       run: pnpm --dir web format:check
 
+# `just check-push`, not `just check`: the full gate needs a running Docker daemon
+# for the privileged Linux boundary test and a Playwright browser download for
+# component tests. Both stay blocking in required CI, which is free and unlimited
+# on this public repository. A hook a contributor cannot satisfy after a clean
+# `just bootstrap` is a hook they learn to bypass, and bypassing is never the fix.
 pre-push:
   commands:
     check:
-      run: just check
+      run: just check-push

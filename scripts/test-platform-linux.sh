@@ -8,6 +8,23 @@ go_image="docker.io/library/golang:1.26.5-bookworm@sha256:1ecb7edf62a0408027bd57
 
 mkdir -p "${result_dir}"
 
+# Fail closed with the actual prerequisite rather than a confusing "command not
+# found" three lines into the run. Never skip: a boundary test that silently
+# reports success is worse than no boundary test.
+if ! command -v docker >/dev/null 2>&1; then
+  cat >&2 <<'MESSAGE'
+docker is required for the privileged Linux runner boundary test.
+
+This test runs the root ownership-handoff path inside a disposable, networkless
+container, so it needs a Docker-compatible runtime (Docker Desktop, OrbStack, or
+Colima) with a running daemon.
+
+It is not part of `just check-push`, so you can push without it; required CI runs
+it on every pull request.
+MESSAGE
+  exit 1
+fi
+
 # Resolve every module before disabling the container network. The root test
 # process receives source and dependencies read-only, so it can exercise
 # ownership handoff without being able to rewrite the checkout or fetch code.
