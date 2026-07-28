@@ -1,7 +1,7 @@
 # Linux private-sandbox acceptance
 
 This directory owns the SPR-007 live release gate. It is deliberately separate
-from `sparerunner serve`: the harness composes the real Controller, Agent broker,
+from `sprun serve`: the harness composes the real Controller, Agent broker,
 GitHub App client, pinned scale-set adapter, message session, JIT lifecycle, and
 single-slot coordinator in one process without introducing the future SPR-012
 Target/config API early.
@@ -77,7 +77,7 @@ execution/listener detection unambiguous.
 Copy [`config.example.json`](./config.example.json) to an absolute path outside
 the repository and replace every placeholder. Important values:
 
-- `controllerStateDirectory`: state created by `sparerunner init`.
+- `controllerStateDirectory`: state created by `sprun init`.
 - `agentListenAddress`: the exact stable endpoint already used by the enrolled
   Agent.
 - `evidenceDirectory`: a dedicated absolute mode-`0700` directory.

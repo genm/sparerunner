@@ -50,7 +50,7 @@ After creating the App:
 ## 2. Connect it to the controller
 
 ```bash
-sparerunner github connect \
+sprun github connect \
   --app-id 1234567 \
   --client-id Iv1.0123456789abcdef \
   --private-key-file ~/Downloads/your-app.private-key.pem
@@ -77,7 +77,7 @@ allows installation elsewhere and does not publish your key or code.
 Then confirm what the controller can see:
 
 ```bash
-sparerunner github installations
+sprun github installations
 # 149442642   your-org   Organization   all
 ```
 
@@ -88,7 +88,7 @@ The first column is the installation ID a Target refers to.
 Targets are ordinary configuration, so the same CLI completes the setup:
 
 ```bash
-sparerunner config export > fleet.yaml
+sprun config export > fleet.yaml
 ```
 
 Add a runner profile and a Target, keeping the installation ID from above:
@@ -110,7 +110,7 @@ targets:
 ```
 
 ```bash
-sparerunner config apply fleet.yaml
+sprun config apply fleet.yaml
 ```
 
 Applying verifies the scope against GitHub before anything is committed: a

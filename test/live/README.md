@@ -13,7 +13,7 @@ The harness writes one JSON file to a private evidence directory (normally
 `internal/releaseevidence`; validate it with:
 
 ```bash
-sparerunner evidence validate --file output/release-evidence/spr-014.json
+sprun evidence validate --file output/release-evidence/spr-014.json
 ```
 
 The validator is fail-closed and requires:

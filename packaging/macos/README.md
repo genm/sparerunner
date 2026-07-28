@@ -115,17 +115,17 @@ The release installer in `spr-015` invokes the checked
 
 ```bash
 sudo install -o root -g wheel -m 0755 \
-  ./sparerunner /usr/local/bin/sparerunner
+  ./sprun /usr/local/bin/sprun
 sudo install -o root -g wheel -m 0755 \
   ./sparerunner-agent /usr/local/libexec/sparerunner-agent
 sudo ./packaging/macos/install-service.sh
-sudo /usr/local/bin/sparerunner join spr_... \
+sudo /usr/local/bin/sprun join spr_... \
   --state-dir "/Library/Application Support/SpareRunner/agent"
 sudo /bin/launchctl kickstart -k system/com.genm.sparerunner.agent
 ```
 
 Installation intentionally precedes enrollment. The LaunchDaemon may restart
-with an explicit not-initialized error until the root-context `sparerunner join`
+with an explicit not-initialized error until the root-context `sprun join`
 creates the Agent state above; it must not synthesize empty state. Enrollment
 must complete before creating a private runner target. Do not copy a node
 private key into the state directory or pass it through an environment

@@ -31,7 +31,7 @@ func writeTestAppKey(t *testing.T) string {
 }
 
 // privateControllerDir prepares the state directory the documented way, by
-// running sparerunner init. A hand-made directory is not equivalent: on Windows the
+// running sprun init. A hand-made directory is not equivalent: on Windows the
 // credential store requires the restrictive ACL initialization applies, and the
 // connect command requires a controller that actually exists.
 //
@@ -42,7 +42,7 @@ func writeTestAppKey(t *testing.T) string {
 func privateControllerDir(t *testing.T) string {
 	t.Helper()
 	if runtime.GOOS == "darwin" {
-		t.Skip("sparerunner init needs the macOS credential adapter (spr-008)")
+		t.Skip("sprun init needs the macOS credential adapter (spr-008)")
 	}
 	directory := filepath.Join(t.TempDir(), "controller")
 	var stdout, stderr bytes.Buffer
@@ -158,7 +158,7 @@ func TestGitHubConnectRejectsIncompleteOrUnusableInput(t *testing.T) {
 
 // TestGitHubCommandsRefuseAnUninitializedStateDirectory keeps the missing setup
 // step visible: the platform credential store's own failure names neither the
-// directory nor sparerunner init.
+// directory nor sprun init.
 func TestGitHubCommandsRefuseAnUninitializedStateDirectory(t *testing.T) {
 	directory := filepath.Join(t.TempDir(), "not-a-controller")
 	if err := os.MkdirAll(directory, 0o700); err != nil {
@@ -179,7 +179,7 @@ func TestGitHubCommandsRefuseAnUninitializedStateDirectory(t *testing.T) {
 			if err == nil {
 				t.Fatal("uninitialized state directory was accepted")
 			}
-			if !strings.Contains(err.Error(), "sparerunner init") {
+			if !strings.Contains(err.Error(), "sprun init") {
 				t.Fatalf("error does not name the missing step: %v", err)
 			}
 		})
@@ -197,7 +197,7 @@ func TestGitHubInstallationsRequiresAConnectedApp(t *testing.T) {
 	if err == nil {
 		t.Fatal("installations succeeded without a connected App")
 	}
-	if !strings.Contains(err.Error(), "sparerunner github connect") {
+	if !strings.Contains(err.Error(), "sprun github connect") {
 		t.Fatalf("error does not name the next step: %v", err)
 	}
 	if stdout.Len() != 0 {
