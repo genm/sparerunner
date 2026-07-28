@@ -7,9 +7,15 @@ default branch until the first tagged support policy is published.
 
 ## Reporting a vulnerability
 
-Please use GitHub private vulnerability reporting for `genm/sparerunner` when it is
-available. Do not include secrets, exploit payloads, or sensitive runner logs in a
-public issue.
+Report privately, through GitHub's private vulnerability reporting for this
+repository:
+
+**<https://github.com/genm/sparerunner/security/advisories/new>**
+
+The same form is reachable from the repository's Security tab under "Report a
+vulnerability". It is enabled today, and it is the only channel for a suspected
+vulnerability. Do not open a public issue, and do not include secrets, exploit
+payloads, or sensitive runner logs anywhere public.
 
 Include:
 
@@ -20,8 +26,9 @@ Include:
 - expected and observed trust boundary
 - whether GitHub App, join, node, JIT, workflow, or host secrets may be exposed
 
-If private reporting is unavailable, open a minimal public issue asking the
-maintainer for a private contact channel without disclosing the vulnerability.
+If the advisory form is unavailable to you, contact the maintainer through their
+GitHub profile. Do not open a public issue, even a minimal one — the existence of
+a report against a named component is itself a disclosure.
 
 ## Security boundary
 
@@ -44,5 +51,13 @@ Release artifacts are draft-only until checksums, the GitHub attestation,
 CycloneDX SBOMs, real three-OS evidence, and platform signatures are verified.
 See [docs/RELEASE.md](docs/RELEASE.md) for the operator checklist.
 
-The detailed threat model and platform conformance results are tracked by
-`spr-014` and must exist before the first public tag.
+The boundary is documented in full, and the same documents ship inside every
+release archive:
+
+- [Security contract](docs/security/SECURITY_CONTRACT.md)
+- [Threat model](docs/security/THREAT_MODEL.md)
+- [Native isolation](docs/security/NATIVE_ISOLATION.md)
+- [Support matrix](docs/security/SUPPORT_MATRIX.md)
+
+What those documents do not yet have is live three-OS conformance evidence. That
+evidence is tracked by `spr-014` and must exist before the first public tag.

@@ -33,8 +33,12 @@ public or unreviewed code to `runs-on: sparerunner`.
 
 ## Reporting a vulnerability
 
+Report privately through GitHub's private vulnerability reporting for this
+repository: <https://github.com/genm/sparerunner/security/advisories/new>. Do not
+open a public issue.
+
 Do not include keys, tokens, JIT configuration, workspace contents, or full
-diagnostics in a report. Use the private security contact published in the
-repository's `SECURITY.md` once the release documentation is added. Until then,
-open a local report without sensitive material and preserve the exact build
-commit and scenario name.
+diagnostics in a report. Preserve the exact build commit and scenario name.
+
+`SECURITY.md` in the repository root states the full policy, including what to
+include and which invariants are release-blocking.
