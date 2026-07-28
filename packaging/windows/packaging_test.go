@@ -464,6 +464,27 @@ func TestSafeTreePurgeRejectsNestedJunctionWithoutDeletingExternalCanary(t *test
 	}
 }
 
+// The operator CLI was renamed to sprun (spr-023), and .goreleaser.yaml ships
+// packaging/** inside every release archive. When the installer and the README
+// disagree with the archive's actual binary name, the documented install command
+// fails against a freshly unpacked release and a successful install leaves the
+// CLI under a name no other document uses. Nothing else pins the name, so a
+// future rename would break it again silently.
+func TestWindowsPackagingUsesTheShippedCLIBinaryName(t *testing.T) {
+	for _, name := range []string{"install.ps1", "README.md"} {
+		contents := readPackagingFile(t, name)
+		if !strings.Contains(contents, "sprun.exe") {
+			t.Errorf("%s does not reference the shipped CLI binary sprun.exe", name)
+		}
+		if strings.Contains(contents, "sparerunner.exe") {
+			t.Errorf(
+				"%s still references sparerunner.exe; the release archive contains sprun.exe",
+				name,
+			)
+		}
+	}
+}
+
 func readPackagingFile(t *testing.T, name string) string {
 	t.Helper()
 	payload, err := os.ReadFile(packagingPath(t, name))

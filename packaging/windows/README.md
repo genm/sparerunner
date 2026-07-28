@@ -39,7 +39,7 @@ Run an elevated Windows PowerShell 5.1 or newer session from an unpacked release
 ```powershell
 .\packaging\windows\install.ps1 `
   -AgentBinary (Resolve-Path .\sparerunner-agent.exe) `
-  -CliBinary (Resolve-Path .\sparerunner.exe)
+  -CliBinary (Resolve-Path .\sprun.exe)
 ```
 
 The installer:
@@ -65,7 +65,7 @@ The service starts without enrollment state and exposes exactly one local named
 pipe instance. In the same elevated session, run:
 
 ```powershell
-& "$env:ProgramFiles\SpareRunner\sparerunner.exe" join spr_...
+& "$env:ProgramFiles\SpareRunner\sprun.exe" join spr_...
 ```
 
 On Windows, `sprun join` does not write Agent state as the interactive user. It

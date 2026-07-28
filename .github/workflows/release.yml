@@ -5,10 +5,11 @@ on:
     tags:
       - "v*"
 
+# Least privilege at workflow scope. The write, id-token, and attestations scopes
+# belong to the one job that signs and attests, so any job added to this file
+# later starts from read-only rather than inheriting the signing identity.
 permissions:
-  contents: write
-  id-token: write
-  attestations: write
+  contents: read
 
 concurrency:
   group: release-${{ github.ref }}
@@ -19,16 +20,48 @@ jobs:
     name: Build and attest release artifacts
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
     steps:
       - name: Check out repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          # GoReleaser reads tags and the changelog from the local repository,
+          # which fetch-depth: 0 already provides, and authenticates to the API
+          # through GITHUB_TOKEN below. Leaving a write-scoped credential in
+          # .git/config for the whole job buys nothing and widens what a
+          # compromised build step can reach.
+          persist-credentials: false
+
+      # `draft: true` keeps the release page unpublished, but it does not hold
+      # back the attestation: the Sigstore statement is minted immediately and is
+      # permanently, publicly bound to this repository. docs/RELEASE.md tells
+      # consumers to trust exactly that statement, so a tag pushed from any
+      # branch would otherwise produce artifacts that pass the documented
+      # verification. Fail closed on anything that is not already on main.
+      - name: Refuse a tag that is not an ancestor of main
+        run: |
+          # actions/checkout fetches only the tag ref, so main has to be fetched
+          # explicitly even at fetch-depth: 0.
+          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
+          if ! git merge-base --is-ancestor "${GITHUB_SHA}" refs/remotes/origin/main; then
+            echo "refusing to release ${GITHUB_REF_NAME}: ${GITHUB_SHA} is not on main" >&2
+            exit 1
+          fi
 
       - name: Set up Go
         uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
         with:
           go-version-file: go.mod
+          # This is the job that mints the attestations consumers trust. It never
+          # restores a cache another run wrote. Actions already scopes caches by
+          # ref, so this is defence in depth for a signing job, not a fix for a
+          # live exploit — and about thirty seconds of module download is the
+          # cheapest hardening available here.
+          cache: false
 
       - name: Download Syft
         id: syft
@@ -39,27 +72,88 @@ jobs:
       - name: Add Syft to PATH
         run: dirname '${{ steps.syft.outputs.cmd }}' >> "$GITHUB_PATH"
 
-      - name: Build draft release
+      # --skip=publish: build dist/ without creating the GitHub release object.
+      # Everything below verifies those artifacts, and only the final step turns
+      # them into a release. Publishing first would leave unverified assets
+      # attached to a real release whenever a later step failed.
+      - name: Build release artifacts
         uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
         with:
           distribution: goreleaser
           version: v2.17.0
-          args: release --clean
+          args: release --clean --skip=publish
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify checksums and SBOMs
         run: ./scripts/check-release-artifacts.sh dist
 
-      - name: Attach SBOMs to the draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release upload "${GITHUB_REF_NAME}" dist/*.cyclonedx.json --clobber
-
-      - name: Attest release checksums
+      # checksums.txt lists every archive and every CycloneDX document, and
+      # subject-checksums makes each listed file a subject. The attested subjects
+      # are therefore the artifacts themselves — checksums.txt is the manifest,
+      # not the subject.
+      - name: Attest release artifacts
         uses: actions/attest@36051bcae73b7c2a8a6945a48cbf80953c6baa35 # v4
         with:
           subject-checksums: dist/checksums.txt
+
+      # The attestation is the one release control that docs/RELEASE.md tells
+      # consumers to rely on, so the pipeline proves it works rather than
+      # assuming it. This runs the exact command the documentation publishes.
+      - name: Verify the attestation that was just minted
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          shopt -s nullglob
+          archives=(dist/*.tar.gz dist/*.zip)
+          if [ "${#archives[@]}" -eq 0 ]; then
+            echo "no release archives found to verify" >&2
+            exit 1
+          fi
+          for archive in "${archives[@]}"; do
+            gh attestation verify \
+              --repo "${GITHUB_REPOSITORY}" \
+              --signer-workflow "${GITHUB_REPOSITORY}/.github/workflows/release.yml" \
+              "${archive}"
+          done
+
+      # Only now does a release object exist. Its body is composed here because
+      # GoReleaser never publishes under --skip=publish; dist/CHANGELOG.md is
+      # still generated from the changelog settings in .goreleaser.yaml.
+      - name: Create the draft release from verified artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # Quoted heredocs: the body is literal Markdown, so nothing in it is
+          # expanded or run.
+          {
+            cat <<'HEADER'
+          This is a draft release. Publish only after the real three-OS and
+          two-installation live evidence gate, platform signing, and clean-machine
+          install checks pass.
+
+          HEADER
+            cat dist/CHANGELOG.md
+            cat <<'FOOTER'
+
+          Verify the checksum and the artifact attestation of the archive you
+          downloaded before installing. The attestation subject is the archive, not
+          `checksums.txt`:
+
+          ```bash
+          sha256sum --check checksums.txt
+          gh attestation verify \
+            --repo genm/sparerunner \
+            --signer-workflow genm/sparerunner/.github/workflows/release.yml \
+            <archive>
+          ```
+          FOOTER
+          } > "${RUNNER_TEMP}/release-notes.md"
+          gh release create "${GITHUB_REF_NAME}" \
+            --draft \
+            --title "SpareRunner ${GITHUB_REF_NAME}" \
+            --notes-file "${RUNNER_TEMP}/release-notes.md" \
+            dist/*.tar.gz dist/*.zip dist/checksums.txt dist/*.cyclonedx.json
 
       - name: Upload failure evidence
         if: failure()
