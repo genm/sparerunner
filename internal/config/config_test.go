@@ -182,10 +182,10 @@ func TestDecodeRejectsUnknownDuplicateTrailingAndSecretFields(t *testing.T) {
 			name:   "JSON forged verification flags",
 			format: "json",
 			body: `{"schemaVersion":1,"revision":"0","scheduler":{},"nodes":[],"runnerProfiles":[{
-				"id":"generic","label":"tewake","minAvailableMemoryBytes":"0","versionPolicy":"auto_update","runtime":"native"
+				"id":"generic","label":"sparerunner","minAvailableMemoryBytes":"0","versionPolicy":"auto_update","runtime":"native"
 			}],"targets":[{
 				"id":"target","installationId":"installation","scopeKind":"organization","scope":"example-org",
-				"scaleSetName":"tewake","runnerProfileId":"generic","visibility":"private","runnerGroupAccessSafe":true
+				"scaleSetName":"sparerunner","runnerProfileId":"generic","visibility":"private","runnerGroupAccessSafe":true
 			}]}`,
 			want: ErrInvalidJSON,
 		},
@@ -255,7 +255,7 @@ scheduler: {}
 nodes: []
 runnerProfiles:
   - id: generic
-    label: tewake
+    label: sparerunner
     minAvailableMemoryBytes: 0
     versionPolicy: auto_update
     runtime: native
@@ -264,7 +264,7 @@ targets:
     installationId: installation
     scopeKind: organization
     scope: example-org
-    scaleSetName: tewake
+    scaleSetName: sparerunner
     runnerProfileId: generic
     visibility: private
     runnerGroupAccessSafe: true
@@ -526,7 +526,7 @@ func TestRealisticLargeConfigurationFitsMeasuredTransportBudget(t *testing.T) {
 	for index := 0; index < 10_000; index++ {
 		id := fmt.Sprintf("%05d", index)
 		profileID := domain.RunnerProfileID("profile-" + id)
-		label := "tewake-" + id
+		label := "sparerunner-" + id
 		configuration.Nodes[index] = NodeConfiguration{
 			ID:          domain.NodeID("node-" + id),
 			DisplayName: "Build Node " + id,
@@ -625,14 +625,14 @@ func configurationFixture() Configuration {
 		RunnerProfiles: []RunnerProfileConfiguration{
 			{
 				ID:                      "profile-generic",
-				Label:                   "tewake",
+				Label:                   "sparerunner",
 				MinAvailableMemoryBytes: 0,
 				VersionPolicy:           domain.RunnerVersionAutoUpdate,
 				Runtime:                 domain.RuntimeNative,
 			},
 			{
 				ID:                      "profile-linux",
-				Label:                   "tewake-linux",
+				Label:                   "sparerunner-linux",
 				OperatingSystem:         &linux,
 				Architecture:            &amd64,
 				MinAvailableMemoryBytes: DecimalUint64(4 << 30),
@@ -646,7 +646,7 @@ func configurationFixture() Configuration {
 				InstallationID:  "installation-1",
 				ScopeKind:       domain.TargetOrganization,
 				Scope:           "example-org-generic",
-				ScaleSetName:    "tewake",
+				ScaleSetName:    "sparerunner",
 				RunnerProfileID: "profile-generic",
 			},
 			{
@@ -654,7 +654,7 @@ func configurationFixture() Configuration {
 				InstallationID:  "installation-2",
 				ScopeKind:       domain.TargetOrganization,
 				Scope:           "example-org-linux",
-				ScaleSetName:    "tewake-linux",
+				ScaleSetName:    "sparerunner-linux",
 				RunnerProfileID: "profile-linux",
 			},
 		},

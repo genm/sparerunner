@@ -21,7 +21,7 @@ type githubAPIBackend struct {
 }
 
 func (backend *githubAPIBackend) StartGitHubAppManifest(context.Context, string, string) (gen.GitHubManifestStart, error) {
-	return gen.GitHubManifestStart{ActionUrl: "https://github.com/settings/apps/new", Manifest: `{"name":"Tewake"}`, State: "twm1_test", ExpiresAt: testManifestExpiry()}, nil
+	return gen.GitHubManifestStart{ActionUrl: "https://github.com/settings/apps/new", Manifest: `{"name":"SpareRunner"}`, State: "twm1_test", ExpiresAt: testManifestExpiry()}, nil
 }
 
 func (backend *githubAPIBackend) CompleteGitHubAppManifest(context.Context, string, string) error {

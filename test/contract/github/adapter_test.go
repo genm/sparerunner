@@ -130,11 +130,11 @@ func TestPollerRejectsInvalidJobIdentityAndStateBeforeHealthCommitOrAcknowledgem
 		},
 		{
 			name: "started negative runner request ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: -1, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: -1, RunnerID: 33, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "started missing runner ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7001, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7001, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "started missing runner name",
@@ -142,15 +142,15 @@ func TestPollerRejectsInvalidJobIdentityAndStateBeforeHealthCommitOrAcknowledgem
 		},
 		{
 			name: "started negative workflow run ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: -1},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", WorkflowRunID: -1},
 		},
 		{
 			name: "completed negative runner request ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: -1, RunnerID: 33, RunnerName: "tewake-runner", Result: githubadapter.JobResultSucceeded, WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: -1, RunnerID: 33, RunnerName: "sparerunner-runner", Result: githubadapter.JobResultSucceeded, WorkflowRunID: 51},
 		},
 		{
 			name: "completed missing runner ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "completed missing runner name",
@@ -158,23 +158,23 @@ func TestPollerRejectsInvalidJobIdentityAndStateBeforeHealthCommitOrAcknowledgem
 		},
 		{
 			name: "completed missing result",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "completed noncanonical result",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", Result: "Succeeded", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", Result: "Succeeded", WorkflowRunID: 51},
 		},
 		{
 			name: "completed unknown result",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", Result: "unknown", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", Result: "unknown", WorkflowRunID: 51},
 		},
 		{
 			name: "available carries runner identity",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAvailable, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAvailable, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "assigned carries runner identity",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: 51},
+			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 7001, RunnerID: 33, RunnerName: "sparerunner-runner", WorkflowRunID: 51},
 		},
 		{
 			name: "unknown event type",
@@ -227,16 +227,16 @@ func TestPollerAcceptsStoreCompatibleJobIdentityStates(t *testing.T) {
 			// exact shape was rejected by both the adapter and the store, so a
 			// real queued job redelivered forever and never started. Nothing
 			// downstream reads the field for an assignment.
-			{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 0, RepositoryName: "tewake-runner-smoke", OwnerName: "arieal", JobID: "b595668a-9118-582e-abbd-9413df4dc0b5", WorkflowRunID: 54},
+			{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 0, RepositoryName: "sparerunner-runner-smoke", OwnerName: "arieal", JobID: "b595668a-9118-582e-abbd-9413df4dc0b5", WorkflowRunID: 54},
 			// Live GitHub also cancels a never-picked-up job with no runner
 			// identity at all. This shape was rejected too, so a cancellation
 			// could never be acknowledged and blocked the whole queue behind it.
-			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 0, Result: githubadapter.JobResultCanceled, RepositoryName: "tewake-runner-smoke", OwnerName: "arieal", WorkflowRunID: 55},
-			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7003, RunnerID: 33, RunnerName: "tewake-started", WorkflowRunID: 52},
-			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 0, RunnerID: 36, RunnerName: "tewake-started-zero-request", WorkflowRunID: 52},
-			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7004, RunnerID: 34, RunnerName: "tewake-completed", Result: githubadapter.JobResultSucceeded, WorkflowRunID: 53},
-			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7005, RunnerID: 35, RunnerName: "tewake-canceled", Result: githubadapter.JobResultCanceled, WorkflowRunID: 54},
-			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 0, RunnerID: 37, RunnerName: "tewake-completed-zero-request", Result: githubadapter.JobResultFailed, WorkflowRunID: 55},
+			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 0, Result: githubadapter.JobResultCanceled, RepositoryName: "sparerunner-runner-smoke", OwnerName: "arieal", WorkflowRunID: 55},
+			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7003, RunnerID: 33, RunnerName: "sparerunner-started", WorkflowRunID: 52},
+			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 0, RunnerID: 36, RunnerName: "sparerunner-started-zero-request", WorkflowRunID: 52},
+			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7004, RunnerID: 34, RunnerName: "sparerunner-completed", Result: githubadapter.JobResultSucceeded, WorkflowRunID: 53},
+			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7005, RunnerID: 35, RunnerName: "sparerunner-canceled", Result: githubadapter.JobResultCanceled, WorkflowRunID: 54},
+			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 0, RunnerID: 37, RunnerName: "sparerunner-completed-zero-request", Result: githubadapter.JobResultFailed, WorkflowRunID: 55},
 		},
 	}
 	source := &fakeMessageSource{messages: []*githubadapter.Message{&message}}

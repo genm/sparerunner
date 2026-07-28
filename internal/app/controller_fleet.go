@@ -494,7 +494,7 @@ func (provider githubAuthorityFleetProvider) Open(
 	if err != nil {
 		return nil, nil, err
 	}
-	// The stored scale set ID is durable Tewake state, not provider truth.
+	// The stored scale set ID is durable SpareRunner state, not provider truth.
 	// Confirm it before opening a session so a stale binding can never drive
 	// somebody else's queue.
 	scaleSet, err := client.GetScaleSet(ctx, target.RunnerGroupID, target.ScaleSetName)

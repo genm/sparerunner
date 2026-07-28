@@ -41,11 +41,11 @@ const (
 )
 
 func TestRuntimeFaultControllerCommitHelper(t *testing.T) {
-	path := os.Getenv("TEWAKE_RUNTIME_FAULT_CONTROLLER_DB")
+	path := os.Getenv("SPARERUNNER_RUNTIME_FAULT_CONTROLLER_DB")
 	if path == "" {
 		return
 	}
-	nodeID := domain.NodeID(os.Getenv("TEWAKE_RUNTIME_FAULT_NODE_ID"))
+	nodeID := domain.NodeID(os.Getenv("SPARERUNNER_RUNTIME_FAULT_NODE_ID"))
 	controller := openController(t, path)
 	restart, err := controller.RestartSnapshot(context.Background())
 	if err != nil {
@@ -95,11 +95,11 @@ func TestRuntimeFaultControllerCommitHelper(t *testing.T) {
 }
 
 func TestRuntimeFaultAgentAcceptedStartHelper(t *testing.T) {
-	path := os.Getenv("TEWAKE_RUNTIME_FAULT_AGENT_DB")
+	path := os.Getenv("SPARERUNNER_RUNTIME_FAULT_AGENT_DB")
 	if path == "" {
 		return
 	}
-	runtimeRoot := os.Getenv("TEWAKE_RUNTIME_FAULT_RUNTIME_ROOT")
+	runtimeRoot := os.Getenv("SPARERUNNER_RUNTIME_FAULT_RUNTIME_ROOT")
 	agentStore := openAgent(t, path)
 	supervisor := newRuntimeFaultSupervisor()
 	manager := runtimeFaultNewManager(t, agentStore, runtimeRoot, supervisor)
@@ -487,7 +487,7 @@ func runtimeFaultProveControllerLostJITCleanup(
 			Jobs: []store.GitHubJobEvent{{
 				Type:            store.GitHubJobAvailable,
 				RunnerRequestID: runtimeFaultRunnerRequestID,
-				RepositoryName:  "tewake-private",
+				RepositoryName:  "sparerunner-private",
 				OwnerName:       "runtime-fault-owner",
 				JobID:           "runtime-fault-job",
 				WorkflowRunID:   707001,
@@ -856,7 +856,7 @@ func runtimeFaultRunnerName(
 		scaleSetID,
 		runnerRequestID,
 	)))
-	return "tewake-" + strings.ToLower(base32.StdEncoding.WithPadding(
+	return "sparerunner-" + strings.ToLower(base32.StdEncoding.WithPadding(
 		base32.NoPadding,
 	).EncodeToString(digest[:]))
 }
@@ -1218,8 +1218,8 @@ func (harness *runtimeFaultHarness) killControllerAfterQueueCommit(t *testing.T)
 	)
 	command.Env = append(
 		os.Environ(),
-		"TEWAKE_RUNTIME_FAULT_CONTROLLER_DB="+harness.controllerPath,
-		"TEWAKE_RUNTIME_FAULT_NODE_ID="+string(harness.nodeID),
+		"SPARERUNNER_RUNTIME_FAULT_CONTROLLER_DB="+harness.controllerPath,
+		"SPARERUNNER_RUNTIME_FAULT_NODE_ID="+string(harness.nodeID),
 	)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -1280,8 +1280,8 @@ func runtimeFaultKillAcceptedStartHelper(
 	)
 	command.Env = append(
 		os.Environ(),
-		"TEWAKE_RUNTIME_FAULT_AGENT_DB="+agentPath,
-		"TEWAKE_RUNTIME_FAULT_RUNTIME_ROOT="+runtimeRoot,
+		"SPARERUNNER_RUNTIME_FAULT_AGENT_DB="+agentPath,
+		"SPARERUNNER_RUNTIME_FAULT_RUNTIME_ROOT="+runtimeRoot,
 	)
 	stdin, err := command.StdinPipe()
 	if err != nil {
@@ -2067,7 +2067,7 @@ func runtimeFaultMessage() *github.Message {
 		Jobs: []github.JobMessage{{
 			Type:            github.MessageTypeJobAvailable,
 			RunnerRequestID: runtimeFaultRunnerRequestID,
-			RepositoryName:  "tewake-private",
+			RepositoryName:  "sparerunner-private",
 			OwnerName:       "runtime-fault-owner",
 			JobID:           "runtime-fault-job",
 			WorkflowRunID:   707001,

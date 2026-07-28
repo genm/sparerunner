@@ -517,14 +517,14 @@ func TestManagementTargetVerificationFailsClosedAndAcceptsOnlyVerifiedPrivateAut
 		t.Fatal(err)
 	}
 	document.RunnerProfiles = []config.RunnerProfileConfiguration{{
-		ID: "profile-default", Label: "tewake",
+		ID: "profile-default", Label: "sparerunner",
 		VersionPolicy: domain.RunnerVersionAutoUpdate,
 		Runtime:       domain.RuntimeNative,
 	}}
 	target := config.GitHubTargetConfiguration{
 		ID: "target-private", InstallationID: "installation-41",
 		ScopeKind: domain.TargetOrganization, Scope: "example-org",
-		ScaleSetName: "tewake", RunnerProfileID: "profile-default",
+		ScaleSetName: "sparerunner", RunnerProfileID: "profile-default",
 	}
 	document.Targets = []config.GitHubTargetConfiguration{target}
 	payload, err := config.EncodeJSON(document)
@@ -621,14 +621,14 @@ func TestSetupKeepsTargetCreationAvailableWhileRuntimeIsUnverified(t *testing.T)
 		t.Fatal(err)
 	}
 	document.RunnerProfiles = []config.RunnerProfileConfiguration{{
-		ID: "profile-default", Label: "tewake",
+		ID: "profile-default", Label: "sparerunner",
 		VersionPolicy: domain.RunnerVersionAutoUpdate,
 		Runtime:       domain.RuntimeNative,
 	}}
 	document.Targets = []config.GitHubTargetConfiguration{{
 		ID: "target-org", InstallationID: "installation-41",
 		ScopeKind: domain.TargetOrganization, Scope: "example-org",
-		ScaleSetName: "tewake", RunnerProfileID: "profile-default",
+		ScaleSetName: "sparerunner", RunnerProfileID: "profile-default",
 	}}
 	payload, err := config.EncodeJSON(document)
 	if err != nil {

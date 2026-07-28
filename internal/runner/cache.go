@@ -76,7 +76,7 @@ func MaterializeOfficialArchive(destination *os.Root, source *os.File, pkg Packa
 	if destination == nil || source == nil || !pkg.valid() {
 		return ErrInvalidRequest
 	}
-	const archiveName = ".tewake-official-runner-archive"
+	const archiveName = ".sparerunner-official-runner-archive"
 	archive, err := destination.OpenFile(archiveName, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0o400)
 	if err != nil {
 		return ErrPackageIntegrity

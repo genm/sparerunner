@@ -1,4 +1,4 @@
-// Package domain defines Tewake's infrastructure-independent scheduling contracts.
+// Package domain defines SpareRunner's infrastructure-independent scheduling contracts.
 package domain
 
 import (

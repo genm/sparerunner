@@ -112,7 +112,7 @@ func (c *Client) QueryRunner(
 }
 
 // GetRunnerByName returns nil only when GitHub authoritatively reports that the
-// deterministic Tewake runner name is absent.
+// deterministic SpareRunner runner name is absent.
 func (c *Client) GetRunnerByName(ctx context.Context, name string) (*RunnerReference, error) {
 	if !isGitHubPathPart(name) {
 		return nil, errors.New("GitHub runner name is invalid")

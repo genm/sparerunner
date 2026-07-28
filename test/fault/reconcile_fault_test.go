@@ -27,18 +27,18 @@ const (
 )
 
 func TestReconcileFaultHelperProcess(t *testing.T) {
-	mode := os.Getenv("TEWAKE_FAULT_HELPER")
+	mode := os.Getenv("SPARERUNNER_FAULT_HELPER")
 	if mode == "" {
 		return
 	}
 	ctx := context.Background()
 	switch mode {
 	case "controller":
-		controller, err := store.OpenController(ctx, os.Getenv("TEWAKE_FAULT_DB"), store.Options{})
+		controller, err := store.OpenController(ctx, os.Getenv("SPARERUNNER_FAULT_DB"), store.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
-		nodeID := domain.NodeID(os.Getenv("TEWAKE_FAULT_NODE"))
+		nodeID := domain.NodeID(os.Getenv("SPARERUNNER_FAULT_NODE"))
 		recovered, err := reconcile.Start(ctx, controller, reconcile.Config{
 			Nodes:    []reconcile.NodeDefinition{faultNodeDefinition(nodeID, 1)},
 			Commands: []reconcile.IssuedCommand{faultPrepareAuthority(nodeID)},
@@ -48,7 +48,7 @@ func TestReconcileFaultHelperProcess(t *testing.T) {
 		}
 		fmt.Fprintf(os.Stdout, "READY epoch=%d\n", recovered.Epoch())
 	case "agent":
-		agent, err := store.OpenAgent(ctx, os.Getenv("TEWAKE_FAULT_DB"), store.Options{})
+		agent, err := store.OpenAgent(ctx, os.Getenv("SPARERUNNER_FAULT_DB"), store.Options{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -207,7 +207,7 @@ func TestAgentKillReplaysAcceptedStartWithoutCreatingAnotherRuntime(t *testing.T
 				RunnerRequestID: 8,
 				Attempt:         1,
 				ControllerEpoch: 1,
-				RunnerName:      "tewake-fault-a",
+				RunnerName:      "sparerunner-fault-a",
 				State:           store.GitHubJITStartAmbiguous,
 				RunnerID:        9,
 				JITDigest:       domain.PayloadDigest([]byte("jit-fault-a")),
@@ -450,9 +450,9 @@ func killFaultHelper(
 	t.Helper()
 	command := exec.Command(os.Args[0], "-test.run=^TestReconcileFaultHelperProcess$")
 	command.Env = append(os.Environ(),
-		"TEWAKE_FAULT_HELPER="+mode,
-		"TEWAKE_FAULT_DB="+path,
-		"TEWAKE_FAULT_NODE="+string(nodeID),
+		"SPARERUNNER_FAULT_HELPER="+mode,
+		"SPARERUNNER_FAULT_DB="+path,
+		"SPARERUNNER_FAULT_NODE="+string(nodeID),
 	)
 	stdin, err := command.StdinPipe()
 	if err != nil {

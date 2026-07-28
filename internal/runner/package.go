@@ -9,7 +9,7 @@ import (
 
 const OfficialRunnerVersion = "2.336.0"
 
-// Platform is intentionally narrower than runtime.GOOS/GOARCH: Tewake supports
+// Platform is intentionally narrower than runtime.GOOS/GOARCH: SpareRunner supports
 // only the official packages pinned below, not arbitrary release asset names.
 type Platform struct {
 	OS   string

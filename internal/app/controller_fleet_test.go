@@ -228,7 +228,7 @@ func (fixture *fleetFixture) applyConfiguration(
 	architecture := domain.ArchAMD64
 	profile := domain.RunnerProfile{
 		ID:                      fleetProfileID,
-		Label:                   "tewake-fleet",
+		Label:                   "sparerunner-fleet",
 		OS:                      &operatingSystem,
 		Architecture:            &architecture,
 		MinAvailableMemoryBytes: 4 << 30,

@@ -325,7 +325,7 @@ func TestMaterializeOfficialArchiveRejectsForgedCacheBytes(t *testing.T) {
 	if err := MaterializeOfficialArchive(destination, source, pkg); !errors.Is(err, ErrPackageIntegrity) {
 		t.Fatalf("MaterializeOfficialArchive error=%v", err)
 	}
-	if _, err := destination.Lstat(".tewake-official-runner-archive"); !errors.Is(err, os.ErrNotExist) {
+	if _, err := destination.Lstat(".sparerunner-official-runner-archive"); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("root-owned verification copy remains: %v", err)
 	}
 }

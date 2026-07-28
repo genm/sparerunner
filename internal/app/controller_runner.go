@@ -2300,7 +2300,7 @@ func deterministicExecutionID(
 }
 
 func deterministicRunnerName(scaleSetID store.ScaleSetID, runnerRequestID int64) string {
-	return "tewake-" + deterministicControllerToken(
+	return "sparerunner-" + deterministicControllerToken(
 		fmt.Sprintf("runner\x00%d\x00%d", scaleSetID, runnerRequestID))
 }
 

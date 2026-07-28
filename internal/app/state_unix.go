@@ -31,5 +31,5 @@ func createPrivateStateDirectoryPlatform(path string) error {
 }
 
 func createPrivateStateTempDirectory(parent string) (string, error) {
-	return os.MkdirTemp(parent, ".tewake-controller-init-")
+	return os.MkdirTemp(parent, ".sparerunner-controller-init-")
 }

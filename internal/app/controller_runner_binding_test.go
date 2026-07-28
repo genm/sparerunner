@@ -291,7 +291,7 @@ func (fixture *bindingFixture) coordinator(
 		ControllerRunnerConfig{
 			ScaleSetID:      github.ScaleSetID(bindingScaleSetID),
 			TargetID:        bindingTargetID,
-			Scope:           "example-org/tewake",
+			Scope:           "example-org/sparerunner",
 			ScopeKind:       domain.TargetRepository,
 			RunnerProfileID: bindingProfileID,
 			VersionPolicy:   domain.RunnerVersionAutoUpdate,

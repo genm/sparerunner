@@ -341,7 +341,7 @@ func TestManagementApplyPreservesVerifiedAuthorityAndRejectsUnverifiedTarget(t *
 
 	second := first
 	second.RunnerProfiles = append([]domain.RunnerProfile(nil), first.RunnerProfiles...)
-	second.RunnerProfiles[0].Label = "tewake-linux-updated"
+	second.RunnerProfiles[0].Label = "sparerunner-linux-updated"
 	applied, err := controller.ApplyManagementConfiguration(
 		ctx,
 		2,
@@ -371,7 +371,7 @@ func TestManagementApplyPreservesVerifiedAuthorityAndRejectsUnverifiedTarget(t *
 			InstallationID:  "installation-42",
 			ScopeKind:       domain.TargetOrganization,
 			Scope:           "example-org",
-			ScaleSetName:    "tewake-linux-second",
+			ScaleSetName:    "sparerunner-linux-second",
 			RunnerProfileID: "profile-linux",
 		},
 	)
@@ -1421,7 +1421,7 @@ func managementConfigurationFixture(
 	fleetMaximum := 4
 	profile := domain.RunnerProfile{
 		ID:                      "profile-linux",
-		Label:                   "tewake-linux",
+		Label:                   "sparerunner-linux",
 		OS:                      &operatingSystem,
 		Architecture:            &architecture,
 		MinAvailableMemoryBytes: 4 << 30,
@@ -1433,7 +1433,7 @@ func managementConfigurationFixture(
 		InstallationID:  "installation-41",
 		ScopeKind:       domain.TargetOrganization,
 		Scope:           "example-org",
-		ScaleSetName:    "tewake-linux",
+		ScaleSetName:    "sparerunner-linux",
 		RunnerProfileID: "profile-linux",
 	}
 	desired := DesiredManagementConfiguration{

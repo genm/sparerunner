@@ -19,7 +19,7 @@ func createPrivateStateDirectoryPlatform(path string) error {
 
 func createPrivateStateTempDirectory(parent string) (string, error) {
 	for attempt := 0; attempt < 16; attempt++ {
-		path, err := os.MkdirTemp(parent, ".tewake-controller-init-")
+		path, err := os.MkdirTemp(parent, ".sparerunner-controller-init-")
 		if err != nil {
 			return "", err
 		}

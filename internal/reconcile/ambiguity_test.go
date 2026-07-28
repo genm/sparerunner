@@ -32,7 +32,7 @@ func TestResolveGitHubStartAmbiguityUsesExactAgentCommandBeforeProviderRemoval(t
 		Runner: &GitHubRunnerIdentity{
 			ScaleSetID: 7,
 			ID:         9,
-			Name:       "tewake-a",
+			Name:       "sparerunner-a",
 		},
 	})
 	if err != nil {
@@ -66,11 +66,11 @@ func TestResolveGitHubJITRequiresRemoveThenFreshAbsence(t *testing.T) {
 		ScaleSetID:      7,
 		RunnerRequestID: 8,
 		RunnerObserved:  true,
-		RunnerName:      "tewake-a",
+		RunnerName:      "sparerunner-a",
 		Runner: &GitHubRunnerIdentity{
 			ScaleSetID: 7,
 			ID:         9,
-			Name:       "tewake-a",
+			Name:       "sparerunner-a",
 		},
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func TestResolveGitHubJITRequiresRemoveThenFreshAbsence(t *testing.T) {
 		ScaleSetID:      7,
 		RunnerRequestID: 8,
 		RunnerObserved:  true,
-		RunnerName:      "tewake-a",
+		RunnerName:      "sparerunner-a",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -169,11 +169,11 @@ func TestResolveGitHubFenceRejectsDifferentRunnerIdentity(t *testing.T) {
 		ScaleSetID:      7,
 		RunnerRequestID: 8,
 		RunnerObserved:  true,
-		RunnerName:      "tewake-a",
+		RunnerName:      "sparerunner-a",
 		Runner: &GitHubRunnerIdentity{
 			ScaleSetID: 7,
 			ID:         10,
-			Name:       "tewake-a",
+			Name:       "sparerunner-a",
 		},
 	}); !hasCode(err, "github_runner_identity_mismatch") {
 		t.Fatalf("different runner identity = %v", err)
@@ -227,7 +227,7 @@ func startFenceForTest(command domain.Command) GitHubFence {
 			RunnerRequestID: 8,
 			Attempt:         1,
 			ControllerEpoch: command.ControllerEpoch,
-			RunnerName:      "tewake-a",
+			RunnerName:      "sparerunner-a",
 			State:           store.GitHubJITStartAmbiguous,
 			RunnerID:        9,
 			JITDigest:       domain.PayloadDigest([]byte("jit")),

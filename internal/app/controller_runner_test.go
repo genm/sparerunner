@@ -1186,7 +1186,7 @@ func TestControllerRunnerDrivesClaimButDoesNotAckAdditionalUnclaimedAvailability
 	message := testControllerRunnerMessage()
 	message.Jobs = append(message.Jobs, github.JobMessage{
 		Type: github.MessageTypeJobAvailable, RunnerRequestID: 7005,
-		RepositoryName: "tewake", OwnerName: "example-org",
+		RepositoryName: "sparerunner", OwnerName: "example-org",
 		JobID: "job-5", WorkflowRunID: 55,
 	})
 	message.Statistics.TotalAvailableJobs = 2
@@ -2401,7 +2401,7 @@ func testControllerRunnerRequeueAvailableMessage(id int) *github.Message {
 		Jobs: []github.JobMessage{{
 			Type:            github.MessageTypeJobAvailable,
 			RunnerRequestID: 7001,
-			RepositoryName:  "tewake",
+			RepositoryName:  "sparerunner",
 			OwnerName:       "example-org",
 			JobID:           "job-1",
 			WorkflowRunID:   51,
@@ -2425,7 +2425,7 @@ func testControllerRunnerPickupMessage(
 			RunnerRequestID: attempt.RunnerRequestID,
 			RunnerID:        attempt.RunnerID,
 			RunnerName:      attempt.RunnerName,
-			RepositoryName:  "tewake",
+			RepositoryName:  "sparerunner",
 			OwnerName:       "example-org",
 			JobID:           "job-1",
 			WorkflowRunID:   51,
@@ -2444,7 +2444,7 @@ func testControllerRunnerCanceledRequeueMessage(
 		RunnerID:        attempt.RunnerID,
 		RunnerName:      attempt.RunnerName,
 		Result:          github.JobResultCanceled,
-		RepositoryName:  "tewake",
+		RepositoryName:  "sparerunner",
 		OwnerName:       "example-org",
 		JobID:           "job-1",
 		WorkflowRunID:   51,
@@ -3051,7 +3051,7 @@ func TestControllerRunnerRestartDispatchesReconciledReplacementBeforeLongPoll(
 		RunnerRequestID: 7001,
 		Attempt:         1,
 		ControllerEpoch: 3,
-		RunnerName:      "tewake-reconciled-old",
+		RunnerName:      "sparerunner-reconciled-old",
 		State:           store.GitHubJITReconciledAbsent,
 	}
 	stateStore.capacity = 0
@@ -3583,10 +3583,10 @@ func testControllerRunnerMessage() *github.Message {
 		ID:         41,
 		Statistics: github.Statistics{TotalAvailableJobs: 1},
 		Jobs: []github.JobMessage{
-			{Type: github.MessageTypeJobAvailable, RunnerRequestID: 7001, RepositoryName: "tewake", OwnerName: "example-org", JobID: "job-1", WorkflowRunID: 51},
-			{Type: github.MessageTypeJobAssigned, RunnerRequestID: 7002, RepositoryName: "tewake", OwnerName: "example-org", JobID: "job-2", WorkflowRunID: 52},
-			{Type: github.MessageTypeJobStarted, RunnerRequestID: 7003, RunnerID: 91, RunnerName: "existing-runner", RepositoryName: "tewake", OwnerName: "example-org", JobID: "job-3", WorkflowRunID: 53},
-			{Type: github.MessageTypeJobCompleted, RunnerRequestID: 7004, RunnerID: 92, RunnerName: "complete-runner", Result: "succeeded", RepositoryName: "tewake", OwnerName: "example-org", JobID: "job-4", WorkflowRunID: 54},
+			{Type: github.MessageTypeJobAvailable, RunnerRequestID: 7001, RepositoryName: "sparerunner", OwnerName: "example-org", JobID: "job-1", WorkflowRunID: 51},
+			{Type: github.MessageTypeJobAssigned, RunnerRequestID: 7002, RepositoryName: "sparerunner", OwnerName: "example-org", JobID: "job-2", WorkflowRunID: 52},
+			{Type: github.MessageTypeJobStarted, RunnerRequestID: 7003, RunnerID: 91, RunnerName: "existing-runner", RepositoryName: "sparerunner", OwnerName: "example-org", JobID: "job-3", WorkflowRunID: 53},
+			{Type: github.MessageTypeJobCompleted, RunnerRequestID: 7004, RunnerID: 92, RunnerName: "complete-runner", Result: "succeeded", RepositoryName: "sparerunner", OwnerName: "example-org", JobID: "job-4", WorkflowRunID: 54},
 		},
 	}
 }

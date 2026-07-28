@@ -14,14 +14,14 @@ func TestRunnerLifecycleValidatesObservedIdentityBeforeRemoval(t *testing.T) {
 	removed := int64(0)
 	client := &Client{
 		getRunnerByName: func(context.Context, string) (*scaleset.RunnerReference, error) {
-			return &scaleset.RunnerReference{ID: 17, Name: "tewake-runner", RunnerScaleSetID: 7}, nil
+			return &scaleset.RunnerReference{ID: 17, Name: "sparerunner-runner", RunnerScaleSetID: 7}, nil
 		},
 		removeRunner: func(_ context.Context, id int64) error {
 			removed = id
 			return nil
 		},
 	}
-	runner, err := client.GetRunnerByName(context.Background(), "tewake-runner")
+	runner, err := client.GetRunnerByName(context.Background(), "sparerunner-runner")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -42,7 +42,7 @@ func TestRunnerLifecycleFailsClosedOnMismatchedOrAmbiguousResponse(t *testing.T)
 			return &scaleset.RunnerReference{ID: 17, Name: "other", RunnerScaleSetID: 7}, nil
 		},
 	}
-	if _, err := client.GetRunnerByName(context.Background(), "tewake-runner"); !errors.Is(err, ErrInvalidPreviewResponse) {
+	if _, err := client.GetRunnerByName(context.Background(), "sparerunner-runner"); !errors.Is(err, ErrInvalidPreviewResponse) {
 		t.Fatalf("mismatched name error = %v, want ErrInvalidPreviewResponse", err)
 	}
 	if err := client.RemoveRunner(context.Background(), RunnerReference{}); !errors.Is(err, ErrInvalidPreviewResponse) {
@@ -54,7 +54,7 @@ func TestRunnerLifecycleFailsClosedOnMismatchedOrAmbiguousResponse(t *testing.T)
 			panic("preview canary")
 		},
 	}
-	if _, err := panicClient.GetRunnerByName(context.Background(), "tewake-runner"); !errors.Is(err, ErrInvalidPreviewResponse) {
+	if _, err := panicClient.GetRunnerByName(context.Background(), "sparerunner-runner"); !errors.Is(err, ErrInvalidPreviewResponse) {
 		t.Fatalf("panic error = %v, want ErrInvalidPreviewResponse", err)
 	}
 }
@@ -63,7 +63,7 @@ func TestRunnerQueryRequiresExactIDNameAndScaleSetEvidence(t *testing.T) {
 	query := RunnerQuery{
 		ScaleSetID:      7,
 		RunnerRequestID: 7001,
-		Name:            "tewake-runner",
+		Name:            "sparerunner-runner",
 		ExpectedID:      17,
 	}
 	exact := &Client{
@@ -102,7 +102,7 @@ func TestRunnerQueryReturnsExactNameAbsenceForDurableCallerConfirmation(t *testi
 	base := RunnerQuery{
 		ScaleSetID:      7,
 		RunnerRequestID: 7001,
-		Name:            "tewake-runner",
+		Name:            "sparerunner-runner",
 		ExpectedID:      17,
 	}
 	t.Run("generation ambiguity name miss", func(t *testing.T) {
@@ -132,7 +132,7 @@ func TestRunnerQueryFailsClosedOnSplitIdentity(t *testing.T) {
 	base := RunnerQuery{
 		ScaleSetID:      7,
 		RunnerRequestID: 7001,
-		Name:            "tewake-runner",
+		Name:            "sparerunner-runner",
 		ExpectedID:      17,
 	}
 	tests := []struct {
@@ -208,7 +208,7 @@ func TestRunnerLifecycleExposesFinalProviderHTTPStatus(t *testing.T) {
 	query := RunnerQuery{
 		ScaleSetID:      7,
 		RunnerRequestID: 7001,
-		Name:            "tewake-runner",
+		Name:            "sparerunner-runner",
 		ExpectedID:      17,
 	}
 	tests := []struct {

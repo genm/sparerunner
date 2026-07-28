@@ -492,7 +492,7 @@ func newControllerAgentAuditTestState(
 	csr, err := x509.CreateCertificateRequest(
 		rand.Reader,
 		&x509.CertificateRequest{
-			Subject: pkix.Name{CommonName: "tewake-agent"},
+			Subject: pkix.Name{CommonName: "sparerunner-agent"},
 		},
 		privateKey,
 	)

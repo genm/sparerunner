@@ -94,7 +94,7 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 			return err
 		}
 		fingerprint := state.Identity.CAFingerprint()
-		advertiser, err = transport.StartMDNSAdvertiser("tewake-"+hex.EncodeToString(fingerprint[:4]), port, nil)
+		advertiser, err = transport.StartMDNSAdvertiser("sparerunner-"+hex.EncodeToString(fingerprint[:4]), port, nil)
 		if err != nil {
 			return err
 		}

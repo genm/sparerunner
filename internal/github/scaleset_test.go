@@ -15,7 +15,7 @@ import (
 func TestNewAppClientAcceptsOnlyGitHubDotComScopes(t *testing.T) {
 	validURLs := []string{
 		"https://github.com/example-org",
-		"https://github.com/example-org/tewake",
+		"https://github.com/example-org/sparerunner",
 	}
 	for _, configURL := range validURLs {
 		t.Run(configURL, func(t *testing.T) {
@@ -50,8 +50,8 @@ func TestNewAppClientRejectsUnsafeOrMalformedGitHubConfigURLs(t *testing.T) {
 		{name: "fragment", configURL: "https://github.com/example-org#fragment"},
 		{name: "blank fragment", configURL: "https://github.com/example-org#"},
 		{name: "missing path", configURL: "https://github.com"},
-		{name: "too many path parts", configURL: "https://github.com/example-org/tewake/settings"},
-		{name: "encoded path", configURL: "https://github.com/example-org%2Ftewake"},
+		{name: "too many path parts", configURL: "https://github.com/example-org/sparerunner/settings"},
+		{name: "encoded path", configURL: "https://github.com/example-org%2Fsparerunner"},
 	}
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -88,7 +88,7 @@ func TestFromMessageRejectsMissingOrInconsistentStatistics(t *testing.T) {
 }
 
 func TestFromScaleSetPreservesMissingStatisticsAsUnknown(t *testing.T) {
-	converted, err := fromScaleSet(scaleset.RunnerScaleSet{ID: 7, Name: "tewake", RunnerGroupID: 1, Labels: []scaleset.Label{{Name: "tewake"}}})
+	converted, err := fromScaleSet(scaleset.RunnerScaleSet{ID: 7, Name: "sparerunner", RunnerGroupID: 1, Labels: []scaleset.Label{{Name: "sparerunner"}}})
 	if err != nil {
 		t.Fatalf("fromScaleSet() error = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestFromScaleSetPreservesMissingStatisticsAsUnknown(t *testing.T) {
 }
 
 func TestToScaleSetLeavesLabelTypeForOfficialClientDefault(t *testing.T) {
-	converted := toScaleSet(ScaleSet{ID: 7, Name: "tewake", Labels: []string{"tewake", "tewake-linux"}})
+	converted := toScaleSet(ScaleSet{ID: 7, Name: "sparerunner", Labels: []string{"sparerunner", "sparerunner-linux"}})
 	if len(converted.Labels) != 2 {
 		t.Fatalf("labels = %#v, want two labels", converted.Labels)
 	}
@@ -141,7 +141,7 @@ func TestGenerateJITConfigExposesFinalProviderHTTPStatus(t *testing.T) {
 	}
 	_, err := client.GenerateJITConfig(context.Background(), JITRequest{
 		ScaleSetID: 7,
-		Name:       "tewake-runner",
+		Name:       "sparerunner-runner",
 		WorkFolder: "_work",
 	})
 	var statusError *ProviderHTTPStatusError
@@ -463,13 +463,13 @@ func TestMessageSessionRejectsMismatchedBindingBeforeMutation(t *testing.T) {
 }
 
 func TestValidateExpectedScaleSetRequiresUpdateIDAndDisableUpdateExactness(t *testing.T) {
-	requested := ScaleSet{ID: 7, Name: "tewake", RunnerGroupID: 1, Labels: []string{"tewake"}, DisableUpdate: true}
+	requested := ScaleSet{ID: 7, Name: "sparerunner", RunnerGroupID: 1, Labels: []string{"sparerunner"}, DisableUpdate: true}
 	if err := validateExpectedScaleSet(requested, requested, true); err != nil {
 		t.Fatalf("matching update rejected: %v", err)
 	}
 	for _, response := range []ScaleSet{
-		{ID: 8, Name: "tewake", RunnerGroupID: 1, Labels: []string{"tewake"}, DisableUpdate: true},
-		{ID: 7, Name: "tewake", RunnerGroupID: 1, Labels: []string{"tewake"}, DisableUpdate: false},
+		{ID: 8, Name: "sparerunner", RunnerGroupID: 1, Labels: []string{"sparerunner"}, DisableUpdate: true},
+		{ID: 7, Name: "sparerunner", RunnerGroupID: 1, Labels: []string{"sparerunner"}, DisableUpdate: false},
 	} {
 		if !errors.Is(validateExpectedScaleSet(response, requested, true), ErrInvalidPreviewResponse) {
 			t.Fatalf("invalid update response accepted: %#v", response)
