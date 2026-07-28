@@ -277,6 +277,83 @@ func (authority *Authority) VerifyAndProvisionTarget(ctx context.Context, reques
 	return VerifiedTarget{TargetID: request.TargetID, InstallationID: request.InstallationID, ScopeKind: request.ScopeKind, Scope: request.Scope, ScaleSetName: request.ScaleSetName, RunnerProfileID: request.RunnerProfileID, ScaleSetID: created.ID, RunnerGroupID: groupID}, nil
 }
 
+// InstallationClient builds a scale-set client for one installation without
+// exposing the App private key. The credential is loaded, handed straight to
+// NewAppClient, and never returned or logged: keeping this constructor inside
+// the github package is what lets Authority.credential stay private while the
+// app package still drives real GitHub scale sets.
+func (authority *Authority) InstallationClient(
+	ctx context.Context,
+	installationID int64,
+	scopeKind string,
+	scope string,
+	version string,
+	commitSHA string,
+) (*Client, error) {
+	if authority == nil {
+		return nil, ErrGitHubNotConnected
+	}
+	if installationID <= 0 || scope == "" {
+		return nil, ErrGitHubTargetInvalid
+	}
+	owner := scope
+	switch scopeKind {
+	case "repository":
+		parts := strings.Split(scope, "/")
+		if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+			return nil, ErrGitHubTargetInvalid
+		}
+		owner = parts[0]
+	case "organization":
+	default:
+		return nil, ErrGitHubTargetInvalid
+	}
+	credential, err := authority.credential()
+	if err != nil {
+		return nil, err
+	}
+	// A committed Target is not standing proof that the App is still installed
+	// on that account. Refuse to drive a scale set whose installation no longer
+	// answers for this owner instead of failing later inside the message loop.
+	installations, err := authority.ListInstallations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	matched := false
+	for _, candidate := range installations {
+		if candidate.ID != installationID {
+			continue
+		}
+		if !strings.EqualFold(owner, candidate.AccountLogin) {
+			return nil, ErrGitHubInstallation
+		}
+		if scopeKind == "organization" && candidate.AccountType != "Organization" {
+			return nil, ErrGitHubInstallation
+		}
+		matched = true
+		break
+	}
+	if !matched {
+		return nil, ErrGitHubInstallation
+	}
+	if version == "" {
+		version = "dev"
+	}
+	if commitSHA == "" {
+		commitSHA = "unknown"
+	}
+	return NewAppClient(AppClientConfig{
+		GitHubConfigURL: "https://github.com/" + scope,
+		ClientID:        credential.ClientID,
+		InstallationID:  installationID,
+		PrivateKey:      credential.PrivateKey(),
+		System:          "tewake",
+		Version:         version,
+		CommitSHA:       commitSHA,
+		Subsystem:       "controller",
+	})
+}
+
 func (authority *Authority) verifyRepositoryPrivacy(ctx context.Context, request TargetRequest, token string) error {
 	parts := strings.Split(request.Scope, "/")
 	var repository struct {

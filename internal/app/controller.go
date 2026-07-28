@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net"
 	"net/http"
 	"strconv"
@@ -100,8 +101,23 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 		defer advertiser.Close()
 	}
 
+	// A controller with no GitHub App authority, no reconciler, or no provider
+	// runs no coordinators. That is the ordinary disconnected state, not a
+	// failure, so it must never stop the agent or admin listeners.
+	var fleet *ControllerFleet
+	if provider := NewGitHubAuthorityFleetProvider(state.GitHubAuthority); provider != nil &&
+		state.Reconciler != nil {
+		fleet, err = NewControllerFleet(state, provider, slog.Default())
+		if err != nil {
+			return err
+		}
+	}
+
 	serverCount := 1
 	if adminServer != nil {
+		serverCount++
+	}
+	if fleet != nil {
 		serverCount++
 	}
 	results := make(chan error, serverCount)
@@ -119,6 +135,14 @@ func ServeController(ctx context.Context, state *ControllerState, options Contro
 				err = nil
 			}
 			results <- err
+		}()
+	}
+	if fleet != nil {
+		go func() {
+			// The fleet joins the same error/shutdown group as the servers, but
+			// its per-Target failures are already absorbed by bounded backoff,
+			// so only a shutdown-time session error reaches this channel.
+			results <- fleet.Run(serveContext)
 		}()
 	}
 	go func() {

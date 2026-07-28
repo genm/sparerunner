@@ -1614,8 +1614,11 @@ func validateGitHubQueueMessage(message GitHubQueueMessage) error {
 				return errors.New("available GitHub job event is invalid")
 			}
 		case GitHubJobAssigned:
-			if job.RunnerRequestID == 0 ||
-				job.RunnerID != 0 || job.RunnerName != "" || job.Result != "" {
+			// Live GitHub omits RunnerRequestID on JobAssigned, and no durable
+			// decision reads it: assignment is stored as evidence, while claims
+			// key off JobAvailable and pickup off runner identity. Requiring one
+			// made the store reject the same messages the adapter did.
+			if job.RunnerID != 0 || job.RunnerName != "" || job.Result != "" {
 				return errors.New("assigned GitHub job event is invalid")
 			}
 		case GitHubJobStarted:
@@ -1624,8 +1627,18 @@ func validateGitHubQueueMessage(message GitHubQueueMessage) error {
 				return errors.New("started GitHub job event is invalid")
 			}
 		case GitHubJobCompleted:
-			if job.RunnerID <= 0 || job.RunnerName == "" ||
-				!validGitHubJobCompletionResult(job.Result) {
+			if !validGitHubJobCompletionResult(job.Result) {
+				return errors.New("completed GitHub job event is invalid")
+			}
+			// A cancellation that happened before any runner picked the job up
+			// carries no runner identity. It is stored as evidence only: the
+			// pickup query requires succeeded/failed plus an exact non-zero
+			// runner ID and name, so this row can never become pickup proof.
+			if job.Result == GitHubJobResultCanceled &&
+				job.RunnerID == 0 && job.RunnerName == "" {
+				break
+			}
+			if job.RunnerID <= 0 || job.RunnerName == "" {
 				return errors.New("completed GitHub job event is invalid")
 			}
 		default:

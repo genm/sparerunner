@@ -236,6 +236,39 @@ potentially truncated message list.
 The adapter preserves last-known data on transient errors and exposes staleness
 metadata. It never converts an external 5xx into an empty successful snapshot.
 
+### Fleet supervision
+
+`ControllerFleet` (`internal/app/controller_fleet.go`) is the production
+supervisor that starts and stops one coordinator per Target, started from and
+shut down with `ServeController`. It derives the desired coordinator set from
+`store.ReadManagementConfiguration` plus the durable `github_target_runtime_bindings`
+rows: one coordinator per configured Target that has a committed runtime
+binding (scale set ID and runner profile). A Target with no verified binding
+runs no coordinator and stays at zero capacity — the existing
+`github_target_runtime_unverified` condition already surfaces that.
+
+Per Target the fleet builds a `github.Client` for that Target's installation
+through the narrow exported `(*github.Authority).InstallationClient`, which
+takes the installation ID and scope and returns a ready client (the App private
+key never leaves `internal/github`; the method also re-proves that the App is
+still installed for that owner before returning),
+confirms the stored scale set ID against GitHub with `client.GetScaleSet` and
+refuses on mismatch, opens a message session, and runs `coordinator.Run(ctx)`
+in its own goroutine. It reacts to configuration changes by observing the same
+management revision/invalidation signal `publishManagementInvalidations`
+uses: adding a Target starts a coordinator, removing one cancels it and closes
+its session. Failures are restarted with bounded exponential backoff and a
+classified log, and never take down the agent or admin listeners. Shutdown
+cancels, waits, closes sessions with a bounded budget, and returns the first
+error. The fleet is skipped entirely when the controller has no GitHub App
+authority — a disconnected controller stays a normal, non-fatal state.
+
+Before this supervisor existed, `app.NewControllerRunnerCoordinator` was
+constructed only by the live acceptance rig (`test/live/linux/composition.go`);
+production `ServeController` had no scale-set wiring, so an enrolled,
+runner-ready node never got a GitHub message session and dispatched workflows
+stayed `queued` forever with all `github_*` tables empty.
+
 ## Enrollment and PKI
 
 `tewake init` creates a controller CA/identity, controller database, management
@@ -350,6 +383,44 @@ because its desired value matches.
 Protocol version mismatch is an explicit error before 1.0. Future WAN transport is
 limited to internal `PeerID`, discovery, and authenticated-session interfaces;
 Iroh-specific types or binaries are absent.
+
+## Runner Coordinator Scope
+
+A GitHub scale set exposes exactly one message queue. Two concurrent message
+sessions, or two pollers over one session, would race and double-consume that
+queue. Exactly one coordinator, one session, and one poller may therefore exist
+per Target/scale set — never per node.
+
+Because the coordinator is per Target, its `store.SingleSlotBinding` is resolved
+per operation instead of being a fixed field:
+
+- advertised demand is the sum of `GitHubSingleSlotCapacity` over every
+  candidate node of the Target; there is no invented cap, only the honest sum
+  reported to GitHub;
+- the node that receives a durable claim is chosen deterministically —
+  candidate nodes ordered by NodeID, the first whose durable capacity read is
+  greater than zero wins. Determinism is a correctness requirement, not a
+  nicety: a redelivered queue message that landed a claim on a different node
+  after a crash or restart would be a replay mismatch. When a queue message
+  replays a job that already has a durable claim, the binding is therefore
+  taken from that existing claim's own execution slot rather than re-selected;
+- per-node exclusion, drain, and stop are not re-implemented at this layer —
+  they already fall out of the existing `githubSlotAvailable` predicate
+  (administrative state plus the `node_target_exclusions` NOT EXISTS clause;
+  see Node Selection and Per-Target availability above), so an excluded or
+  stopped node naturally reports zero capacity and drops out of candidacy;
+- admission checks and node reconciliation actions act on the node that owns
+  the claim in question, read from the claim's execution slot, not on a
+  coordinator-wide node. `ControllerRunnerConfig.NodeID` survives only as an
+  explicit single-node pin used by the live acceptance rig;
+- the poll-claim authority attached to a binding still carries that one node's
+  own capacity (the store requires exactly 1); only the capacity advertised
+  upstream to GitHub is the fleet-wide sum above.
+
+Production wiring runs one coordinator per Target with a verified runtime
+binding as a `ControllerFleet` supervisor inside `ServeController`; see
+Fleet supervision under GitHub Integration for its lifecycle and failure
+posture.
 
 ## Native Runner Lifecycle
 

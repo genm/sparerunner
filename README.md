@@ -22,13 +22,20 @@ work for development, including pinned enrollment, mTLS WebSockets, reconnect,
 the signed GitHub App Manifest flow, installation discovery across multiple
 private org/repo scopes, private Target verification, generated management
 UI/API, node-affined scheduling, native runner lifecycle, verified cleanup, node
-availability control, the desktop tray, and the Raycast extension. Those core
-paths have local and fault-injection coverage, but OS service installation, a
-real private GitHub job, and live three-OS sandbox evidence remain release gates;
-the Windows local control endpoint fails closed. Per-Target availability —
+availability control, the desktop tray, and the Raycast extension. The
+production controller now starts a per-Target runner-coordinator fleet against
+real GitHub scale sets: each Target with a verified runtime binding gets its own
+message session and dispatch loop, so an enrolled runner-ready node can actually
+receive and run a job instead of leaving it `queued` forever. Those core paths
+have local and fault-injection coverage, but OS service installation, a real
+private GitHub job, and live three-OS sandbox evidence remain release gates; the
+Windows local control endpoint fails closed. Restart and disconnect
+reconciliation against live GitHub state (twk-011), node-affined scheduling's
+remaining live multi-Target evidence (twk-010), and macOS/Windows platform
+support (twk-008/twk-009) are still in progress, and per-Target availability —
 letting a node owner casually exclude one org/repo scope while the node keeps
-serving the rest — is specified and planned as twk-019, not yet implemented.
-A tag now produces a draft, checksummed six-platform bundle with CycloneDX SBOM
+serving the rest — is specified and planned as twk-019, not yet implemented. A
+tag now produces a draft, checksummed six-platform bundle with CycloneDX SBOM
 and GitHub attestation steps; it is not a supported release until the
 real-machine gate and platform signing prerequisites pass. Do not install it on
 a production runner fleet.

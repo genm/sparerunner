@@ -160,6 +160,13 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 	message := githubQueueMessageForTest(7, 101, 501)
 	message.Jobs = append(message.Jobs,
 		GitHubJobEvent{Type: GitHubJobAssigned, RunnerRequestID: 502},
+		// Live GitHub omits RunnerRequestID on JobAssigned. Rejecting that shape
+		// made the store refuse every real message, so the queue redelivered a
+		// genuinely runnable job forever instead of starting it.
+		GitHubJobEvent{Type: GitHubJobAssigned, RunnerRequestID: 0},
+		// A job canceled before any runner picked it up arrives with no runner
+		// identity either. Rejecting it wedged the queue the same way.
+		GitHubJobEvent{Type: GitHubJobCompleted, RunnerRequestID: 0, Result: "canceled"},
 		GitHubJobEvent{Type: GitHubJobStarted, RunnerRequestID: 503, RunnerID: 33, RunnerName: "tewake-existing"},
 		GitHubJobEvent{Type: GitHubJobCompleted, RunnerRequestID: 504, RunnerID: 34, RunnerName: "tewake-complete", Result: "succeeded"},
 	)
@@ -185,7 +192,7 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 		)
 	}
 	assertCount(t, controller.db, "SELECT count(*) FROM github_queue_messages", 1)
-	assertCount(t, controller.db, "SELECT count(*) FROM github_message_jobs", 4)
+	assertCount(t, controller.db, "SELECT count(*) FROM github_message_jobs", 6)
 	assertCount(t, controller.db, "SELECT count(*) FROM github_job_claims", 1)
 	assertCount(t, controller.db, "SELECT count(*) FROM executions", 1)
 	assertCount(t, controller.db, "SELECT count(*) FROM slot_reservations", 1)
@@ -198,7 +205,7 @@ func TestGitHubQueueMessageKeepsMixedEventsSeparateFromSingleSlotClaim(t *testin
 	if _, err := controller.CommitGitHubQueueMessage(ctx, message, binding); !errors.Is(err, ErrReplayMismatch) {
 		t.Fatalf("changed message replay error = %v, want ErrReplayMismatch", err)
 	}
-	assertCount(t, controller.db, "SELECT count(*) FROM github_message_jobs", 4)
+	assertCount(t, controller.db, "SELECT count(*) FROM github_message_jobs", 6)
 }
 
 func TestGitHubQueueCommitFailsClosedAfterManagementAuditDegrades(t *testing.T) {

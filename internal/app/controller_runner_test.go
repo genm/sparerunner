@@ -226,8 +226,12 @@ func TestControllerRunnerStableReplayIdentityIgnoresVolatileStatisticsUnderRace(
 		t.Fatal(err)
 	}
 	pollState.ClaimAuthority.AdvertisedCapacity = 1
-	coordinator.setPollAuthority(pollState.ClaimAuthority)
-	defer coordinator.clearPollAuthority()
+	coordinator.setPollScope(controllerRunnerPollScope{
+		authority: pollState.ClaimAuthority,
+		nodeID:    coordinator.config.NodeID,
+		claimable: true,
+	})
+	defer coordinator.clearPollScope()
 	first := *testControllerRunnerMessage()
 	first.Jobs = append([]github.JobMessage(nil), first.Jobs...)
 	second := first
@@ -3677,6 +3681,7 @@ func (session *runnerCoordinatorFakeSession) AcquireJobs(
 
 type runnerCoordinatorFakeStore struct {
 	mu                 sync.Mutex
+	nodes              []domain.NodeID
 	capacity           int
 	auditHealthy       bool
 	auditChange        chan struct{}
@@ -3746,6 +3751,21 @@ func (state *runnerCoordinatorFakeStore) ManagementAuditHealthy() bool {
 	state.mu.Lock()
 	defer state.mu.Unlock()
 	return state.auditHealthy
+}
+
+func (state *runnerCoordinatorFakeStore) ReadManagementConfiguration(
+	context.Context,
+) (store.ManagementConfiguration, error) {
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	configuration := store.ManagementConfiguration{}
+	for _, nodeID := range state.nodes {
+		configuration.Nodes = append(
+			configuration.Nodes,
+			store.ManagementNodeConfiguration{NodeID: nodeID, MaxRunners: 1},
+		)
+	}
+	return configuration, nil
 }
 
 func (state *runnerCoordinatorFakeStore) ManagementAuditChange() <-chan struct{} {

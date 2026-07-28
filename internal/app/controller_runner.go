@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +32,10 @@ var (
 	ErrGitHubReconciliationPending  = errors.New("GitHub runner reconciliation needs another observation")
 	ErrGitHubSessionFailureStore    = errors.New("GitHub session failure state could not be persisted")
 	ErrControllerRunnerAdmission    = errors.New("controller runner admission is unavailable")
+	// ErrControllerRunnerNoCandidate reports that the Target currently has no
+	// node the coordinator could even evaluate for capacity. It is a normal,
+	// recoverable state (an empty or fully removed fleet), never a fatal one.
+	ErrControllerRunnerNoCandidate = errors.New("controller runner target has no candidate node")
 )
 
 const (
@@ -42,6 +47,7 @@ const (
 type controllerRunnerStore interface {
 	ManagementAuditHealthy() bool
 	ManagementAuditChange() <-chan struct{}
+	ReadManagementConfiguration(context.Context) (store.ManagementConfiguration, error)
 	RecordGitHubSessionDemand(context.Context, store.GitHubSessionDemand) error
 	RecordGitHubScaleSetSessionSuccess(context.Context, store.ScaleSetID) (store.GitHubScaleSetSessionHealth, error)
 	RecordGitHubScaleSetSessionFailure(context.Context, store.ScaleSetID, store.GitHubObservationFailureClass) (store.GitHubScaleSetSessionHealth, error)
@@ -150,6 +156,10 @@ type ControllerRunnerConfig struct {
 	ScopeKind       domain.TargetScopeKind
 	RunnerProfileID domain.RunnerProfileID
 	VersionPolicy   domain.RunnerVersionPolicy
+	// NodeID pins this coordinator to exactly one node. It is optional: an
+	// empty value makes every configured node a candidate and the binding is
+	// resolved per operation instead. The live acceptance rig sets it so its
+	// evidence stays about one known machine.
 	NodeID          domain.NodeID
 	ControllerEpoch domain.ControllerEpoch
 	Reconciler      controllerRunnerReconciler
@@ -161,7 +171,6 @@ type ControllerRunnerCoordinator struct {
 	agents                 controllerRunnerAgent
 	lifecycle              ControllerRunnerLifecycle
 	config                 ControllerRunnerConfig
-	binding                store.SingleSlotBinding
 	poller                 *github.Poller
 	logger                 *slog.Logger
 	pollMu                 sync.Mutex
@@ -169,13 +178,37 @@ type ControllerRunnerCoordinator struct {
 	finiteOperationContext func(context.Context) (context.Context, context.CancelFunc)
 	reconciliationRetry    time.Duration
 	authorityMu            sync.RWMutex
-	activePollAuthority    store.GitHubPollClaimAuthority
-	hasActivePollAuthority bool
+	activePollScope        controllerRunnerPollScope
+	hasActivePollScope     bool
 }
 
-// NewControllerRunnerCoordinator creates the production-callable TWK-007
-// single-slot vertical. Task twk-010 replaces the fixed binding with the full
-// node-affined scheduler without changing the durable GitHub claim boundary.
+// controllerRunnerPollScope is the exact node selection one poll iteration
+// committed to. CommitMessage runs inside that poll, so it must bind the same
+// node the advertised authority was read for; claimable is false whenever no
+// candidate node actually had durable capacity.
+type controllerRunnerPollScope struct {
+	authority store.GitHubPollClaimAuthority
+	nodeID    domain.NodeID
+	claimable bool
+}
+
+// controllerRunnerCandidate is one node's complete admission evidence for a
+// single poll iteration. Capacity is already gated here, so demand and
+// selection can never disagree about whether a node is usable.
+type controllerRunnerCandidate struct {
+	nodeID           domain.NodeID
+	pollState        store.GitHubPollState
+	capacity         int
+	admission        reconcile.NodeAdmission
+	readinessChanged context.Context
+	recheckAt        time.Time
+	runnerRecheckAt  time.Time
+}
+
+// NewControllerRunnerCoordinator creates the production-callable single-slot
+// vertical for exactly one Target. A GitHub scale set exposes one message
+// queue, so exactly one coordinator, session, and poller may exist per Target;
+// the owning node is therefore resolved per operation rather than pinned.
 func NewControllerRunnerCoordinator(
 	stateStore controllerRunnerStore,
 	session controllerRunnerMessageSession,
@@ -185,7 +218,7 @@ func NewControllerRunnerCoordinator(
 	logger *slog.Logger,
 ) (*ControllerRunnerCoordinator, error) {
 	if stateStore == nil || session == nil || agents == nil || lifecycle == nil ||
-		config.ScaleSetID <= 0 || config.TargetID == "" || config.NodeID == "" ||
+		config.ScaleSetID <= 0 || config.TargetID == "" ||
 		config.RunnerProfileID == "" ||
 		// Target identity is mandatory on the command wire, so a coordinator that
 		// cannot name its own scope must never be constructed. Failing here keeps
@@ -208,11 +241,6 @@ func NewControllerRunnerCoordinator(
 		logger:                 logger,
 		finiteOperationContext: github.WithFiniteOperationTimeout,
 		reconciliationRetry:    store.GitHubRunnerAbsenceConfirmationDelay,
-		binding: store.SingleSlotBinding{
-			TargetID: config.TargetID,
-			NodeID:   config.NodeID,
-			Slot:     0,
-		},
 	}
 	poller, err := github.NewPoller(session, coordinator, logger)
 	if err != nil {
@@ -321,21 +349,37 @@ func (coordinator *ControllerRunnerCoordinator) CommitMessage(
 		}
 		record.Jobs = append(record.Jobs, event)
 	}
-	binding := coordinator.binding
-	authority, hasAuthority := coordinator.currentPollAuthority()
-	if hasAuthority {
-		binding.PollAuthority = authority
-	}
-	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
+	binding := store.SingleSlotBinding{TargetID: coordinator.config.TargetID, Slot: 0}
+	scope, hasScope := coordinator.currentPollScope()
+	existingNode, hasExisting, err := coordinator.existingClaimNode(ctx, record)
 	if err != nil {
 		return err
 	}
-	if snapshot, online, _ := coordinator.agents.Readiness(coordinator.config.NodeID); online {
-		binding.ClaimEnabled = hasAuthority &&
-			authority.AdvertisedCapacity > 0 &&
-			snapshot.NativeRunnerReady &&
-			snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
-			admission.AllowsNewCapacity
+	switch {
+	case hasExisting:
+		binding.NodeID = existingNode
+	case hasScope:
+		binding.NodeID = scope.nodeID
+	default:
+		return ErrControllerRunnerNoCandidate
+	}
+	if hasScope {
+		binding.PollAuthority = scope.authority
+	}
+	// A new claim may only be created for the node this poll actually selected
+	// and advertised authority for. When the binding came from an existing
+	// claim on a different node, the commit stays a pure replay.
+	if hasScope && scope.claimable && scope.nodeID == binding.NodeID {
+		admission, err := coordinator.config.Reconciler.Admission(binding.NodeID)
+		if err != nil {
+			return err
+		}
+		if snapshot, online, _ := coordinator.agents.Readiness(binding.NodeID); online {
+			binding.ClaimEnabled = scope.authority.AdvertisedCapacity > 0 &&
+				snapshot.NativeRunnerReady &&
+				snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
+				admission.AllowsNewCapacity
+		}
 	}
 	// Audit health may change while the provider long poll is returning. Check
 	// again at the durable queue boundary so that message evidence is not
@@ -374,29 +418,185 @@ func (coordinator *ControllerRunnerCoordinator) CommitMessage(
 	return nil
 }
 
-func (coordinator *ControllerRunnerCoordinator) currentPollAuthority() (
-	store.GitHubPollClaimAuthority,
+func (coordinator *ControllerRunnerCoordinator) currentPollScope() (
+	controllerRunnerPollScope,
 	bool,
 ) {
 	coordinator.authorityMu.RLock()
 	defer coordinator.authorityMu.RUnlock()
-	return coordinator.activePollAuthority, coordinator.hasActivePollAuthority
+	return coordinator.activePollScope, coordinator.hasActivePollScope
 }
 
-func (coordinator *ControllerRunnerCoordinator) setPollAuthority(
-	authority store.GitHubPollClaimAuthority,
+func (coordinator *ControllerRunnerCoordinator) setPollScope(
+	scope controllerRunnerPollScope,
 ) {
 	coordinator.authorityMu.Lock()
-	coordinator.activePollAuthority = authority
-	coordinator.hasActivePollAuthority = true
+	coordinator.activePollScope = scope
+	coordinator.hasActivePollScope = true
 	coordinator.authorityMu.Unlock()
 }
 
-func (coordinator *ControllerRunnerCoordinator) clearPollAuthority() {
+func (coordinator *ControllerRunnerCoordinator) clearPollScope() {
 	coordinator.authorityMu.Lock()
-	coordinator.activePollAuthority = store.GitHubPollClaimAuthority{}
-	coordinator.hasActivePollAuthority = false
+	coordinator.activePollScope = controllerRunnerPollScope{}
+	coordinator.hasActivePollScope = false
 	coordinator.authorityMu.Unlock()
+}
+
+// candidateNodes lists, in a stable order, every node this Target may bind a
+// claim to. Ordering is the tie-break authority for selection: a restart or a
+// redelivered message must resolve the same node, so the order can never come
+// from a query plan or a map iteration.
+func (coordinator *ControllerRunnerCoordinator) candidateNodes(
+	ctx context.Context,
+) ([]domain.NodeID, error) {
+	if coordinator.config.NodeID != "" {
+		return []domain.NodeID{coordinator.config.NodeID}, nil
+	}
+	configuration, err := coordinator.store.ReadManagementConfiguration(ctx)
+	if err != nil {
+		return nil, err
+	}
+	nodes := make([]domain.NodeID, 0, len(configuration.Nodes))
+	for _, node := range configuration.Nodes {
+		if node.NodeID == "" {
+			continue
+		}
+		nodes = append(nodes, node.NodeID)
+	}
+	slices.Sort(nodes)
+	return slices.Compact(nodes), nil
+}
+
+// evaluateCandidates reads each candidate node's durable capacity and gates it
+// with the same admission evidence a claim would need. Demand is the honest sum
+// over those gated capacities; selected is the index of the first usable node in
+// candidate order, or -1 when the Target currently has none.
+func (coordinator *ControllerRunnerCoordinator) evaluateCandidates(
+	ctx context.Context,
+	now time.Time,
+	auditHealthy bool,
+) (candidates []controllerRunnerCandidate, demand int, selected int, err error) {
+	nodes, err := coordinator.candidateNodes(ctx)
+	if err != nil {
+		return nil, 0, -1, err
+	}
+	selected = -1
+	candidates = make([]controllerRunnerCandidate, 0, len(nodes))
+	for _, nodeID := range nodes {
+		candidate, err := coordinator.evaluateCandidate(ctx, nodeID, now, auditHealthy)
+		if err != nil {
+			return nil, 0, -1, err
+		}
+		demand += candidate.capacity
+		if candidate.capacity > 0 && selected < 0 {
+			selected = len(candidates)
+		}
+		candidates = append(candidates, candidate)
+	}
+	return candidates, demand, selected, nil
+}
+
+func (coordinator *ControllerRunnerCoordinator) evaluateCandidate(
+	ctx context.Context,
+	nodeID domain.NodeID,
+	now time.Time,
+	auditHealthy bool,
+) (controllerRunnerCandidate, error) {
+	pollState, err := coordinator.store.ReadGitHubPollState(
+		ctx,
+		coordinator.runtimeBinding(),
+		nodeID,
+	)
+	if err != nil {
+		return controllerRunnerCandidate{}, err
+	}
+	capacity, err := coordinator.store.GitHubSingleSlotCapacity(
+		ctx,
+		store.SingleSlotBinding{
+			TargetID: coordinator.config.TargetID,
+			NodeID:   nodeID,
+			Slot:     0,
+		},
+	)
+	if err != nil {
+		return controllerRunnerCandidate{}, err
+	}
+	if !auditHealthy {
+		capacity = 0
+	}
+	snapshot, online, readinessChanged := coordinator.agents.Readiness(nodeID)
+	admission, err := coordinator.config.Reconciler.Admission(nodeID)
+	if err != nil {
+		return controllerRunnerCandidate{}, err
+	}
+	runnerUpdate, err := coordinator.evaluateRunnerUpdate(now, pollState.Runtime)
+	if err != nil {
+		return controllerRunnerCandidate{}, err
+	}
+	runnerRecheckAt := runnerUpdateRecheckAt(now, runnerUpdate)
+	snapshotDigest := ""
+	if online {
+		snapshotDigest, err = transport.AgentSnapshotDigest(snapshot)
+		if err != nil {
+			return controllerRunnerCandidate{}, err
+		}
+	}
+	durableAgent := pollState.ClaimAuthority.Agent
+	durableAgentReady := durableAgent.HasSnapshot &&
+		durableAgent.NativeRunnerReady &&
+		durableAgent.AcceptedByControllerEpoch == coordinator.config.ControllerEpoch &&
+		durableAgent.RunnerVersion == runner.OfficialRunnerVersion
+	inMemoryAgentReady := online &&
+		snapshot.NodeID == nodeID &&
+		snapshot.NativeRunnerReady &&
+		snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
+		snapshotDigest == durableAgent.SnapshotDigest
+	providerReady := pollState.Runtime.Session.Freshness == store.RuntimeFreshnessFresh &&
+		runnerUpdate.AllowsAdmissionAt(now)
+	if capacity > 0 && (!durableAgentReady || !inMemoryAgentReady ||
+		!providerReady || !admission.AllowsNewCapacity) {
+		capacity = 0
+	}
+	return controllerRunnerCandidate{
+		nodeID:           nodeID,
+		pollState:        pollState,
+		capacity:         capacity,
+		admission:        admission,
+		readinessChanged: readinessChanged,
+		recheckAt: earliestControllerRunnerTime(
+			admission.RecheckAt,
+			runnerRecheckAt,
+		),
+		runnerRecheckAt: runnerRecheckAt,
+	}, nil
+}
+
+// existingClaimNode returns the node that already owns a durable claim for one
+// of this message's available jobs. Redelivery must reuse that node: the store
+// rejects a claim whose binding moved, so re-running selection after a crash
+// would turn an ordinary commit-before-ack replay into a replay mismatch.
+func (coordinator *ControllerRunnerCoordinator) existingClaimNode(
+	ctx context.Context,
+	record store.GitHubQueueMessage,
+) (domain.NodeID, bool, error) {
+	for _, job := range record.Jobs {
+		if job.Type != store.GitHubJobAvailable {
+			continue
+		}
+		claim, found, err := coordinator.store.GitHubClaim(
+			ctx,
+			record.ScaleSetID,
+			job.RunnerRequestID,
+		)
+		if err != nil {
+			return "", false, err
+		}
+		if found && claim.Execution.Slot.NodeID != "" {
+			return claim.Execution.Slot.NodeID, true, nil
+		}
+	}
+	return "", false, nil
 }
 
 func (coordinator *ControllerRunnerCoordinator) runtimeBinding() store.GitHubTargetRuntimeBinding {
@@ -473,92 +673,91 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 	coordinator.pollMu.Lock()
 	defer coordinator.pollMu.Unlock()
 
-	pollState, err := coordinator.store.ReadGitHubPollState(
-		ctx,
-		coordinator.runtimeBinding(),
-		coordinator.config.NodeID,
-	)
-	if err != nil {
-		return nil, false, err
-	}
-	capacity, err := coordinator.store.GitHubSingleSlotCapacity(ctx, coordinator.binding)
-	if err != nil {
-		return nil, false, err
-	}
 	auditHealthy := coordinator.store.ManagementAuditHealthy()
-	if !auditHealthy {
-		capacity = 0
-	}
 	auditChanged := coordinator.store.ManagementAuditChange()
-	snapshot, online, readinessChanged := coordinator.agents.Readiness(coordinator.config.NodeID)
-	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
-	if err != nil {
-		return nil, false, err
-	}
 	pollNow := time.Now()
-	runnerUpdate, err := coordinator.evaluateRunnerUpdate(
-		pollNow,
-		pollState.Runtime,
-	)
+	candidates, demand, selected, err := coordinator.evaluateCandidates(
+		ctx, pollNow, auditHealthy)
 	if err != nil {
 		return nil, false, err
 	}
-	runnerRecheckAt := runnerUpdateRecheckAt(pollNow, runnerUpdate)
-	snapshotDigest := ""
-	if online {
-		snapshotDigest, err = transport.AgentSnapshotDigest(snapshot)
-		if err != nil {
-			return nil, false, err
-		}
+	if len(candidates) == 0 {
+		// Advertising demand for a Target with no node at all would be a lie,
+		// and there is no binding a durable claim could name. Report it and let
+		// the caller wait for a configuration change instead of hot looping.
+		return nil, false, ErrControllerRunnerNoCandidate
 	}
-	durableAgent := pollState.ClaimAuthority.Agent
-	durableAgentReady := durableAgent.HasSnapshot &&
-		durableAgent.NativeRunnerReady &&
-		durableAgent.AcceptedByControllerEpoch == coordinator.config.ControllerEpoch &&
-		durableAgent.RunnerVersion == runner.OfficialRunnerVersion
-	inMemoryAgentReady := online &&
-		snapshot.NodeID == coordinator.config.NodeID &&
-		snapshot.NativeRunnerReady &&
-		snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
-		snapshotDigest == durableAgent.SnapshotDigest
-	providerReady := pollState.Runtime.Session.Freshness == store.RuntimeFreshnessFresh &&
-		runnerUpdate.AllowsAdmissionAt(pollNow)
-	if capacity > 0 && (!durableAgentReady || !inMemoryAgentReady ||
-		!providerReady || !admission.AllowsNewCapacity) {
-		capacity = 0
+	// The poll authority is always one concrete node's evidence, because the
+	// store requires an advertised capacity of exactly one at the claim
+	// boundary. Only the capacity reported upstream to GitHub is the fleet sum.
+	authorityIndex := selected
+	if authorityIndex < 0 {
+		authorityIndex = 0
 	}
-	authority := pollState.ClaimAuthority
-	authority.AdvertisedCapacity = capacity
+	chosen := candidates[authorityIndex]
+	authority := chosen.pollState.ClaimAuthority
+	authority.AdvertisedCapacity = chosen.capacity
 	if coordinator.config.VersionPolicy == domain.RunnerVersionPinned &&
-		!runnerRecheckAt.IsZero() {
-		authority.AdmissionDeadlineUnixNano = runnerRecheckAt.UnixNano()
+		!chosen.runnerRecheckAt.IsZero() {
+		authority.AdmissionDeadlineUnixNano = chosen.runnerRecheckAt.UnixNano()
 	}
-	coordinator.setPollAuthority(authority)
-	defer coordinator.clearPollAuthority()
+	coordinator.setPollScope(controllerRunnerPollScope{
+		authority: authority,
+		nodeID:    chosen.nodeID,
+		claimable: selected >= 0,
+	})
+	defer coordinator.clearPollScope()
 
-	recheckAt := earliestControllerRunnerTime(admission.RecheckAt, runnerRecheckAt)
-	if readinessChanged == nil && admission.Change == nil &&
-		(!auditHealthy || auditChanged == nil) && recheckAt.IsZero() {
-		message, err := coordinator.poller.PollOnce(ctx, capacity)
+	// Every candidate's readiness matters, not just the selected one: a node
+	// that becomes usable while another one owns the current poll must still be
+	// able to interrupt the long poll and raise advertised demand.
+	recheckAt := time.Time{}
+	watched := false
+	for _, candidate := range candidates {
+		if candidate.readinessChanged != nil || candidate.admission.Change != nil {
+			watched = true
+		}
+		recheckAt = earliestControllerRunnerTime(recheckAt, candidate.recheckAt)
+	}
+	if !watched && (!auditHealthy || auditChanged == nil) && recheckAt.IsZero() {
+		message, err := coordinator.poller.PollOnce(ctx, demand)
 		if err != nil {
 			err = coordinator.persistProviderFailure(ctx, err)
 		}
 		return message, false, err
 	}
 
+	// One line per poll naming the advertised demand and the node that would
+	// own a claim. A fleet that silently advertises zero is the single hardest
+	// state to diagnose from the outside, so it must be visible without a
+	// debug build.
+	coordinator.logger.Info(
+		"github_poll_demand",
+		slog.String("component", "github"),
+		slog.String("target_id", string(coordinator.config.TargetID)),
+		slog.Int("demand", demand),
+		slog.Int("candidates", len(candidates)),
+		slog.String("selected_node", string(chosen.nodeID)),
+		slog.Bool("claimable", selected >= 0),
+	)
 	pollContext, cancel := context.WithCancel(ctx)
-	stopReadiness := func() bool { return false }
-	if readinessChanged != nil {
-		stopReadiness = context.AfterFunc(readinessChanged, cancel)
-	}
-	if admission.Change != nil {
-		go func() {
-			select {
-			case <-admission.Change:
-				cancel()
-			case <-pollContext.Done():
-			}
-		}()
+	stopReadiness := make([]func() bool, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate.readinessChanged != nil {
+			stopReadiness = append(
+				stopReadiness,
+				context.AfterFunc(candidate.readinessChanged, cancel),
+			)
+		}
+		if candidate.admission.Change != nil {
+			go func(change <-chan struct{}) {
+				select {
+				case <-change:
+					cancel()
+				case <-pollContext.Done():
+				}
+			}(candidate.admission.Change)
+		}
 	}
 	if auditHealthy && auditChanged != nil {
 		go func() {
@@ -574,17 +773,26 @@ func (coordinator *ControllerRunnerCoordinator) pollOnce(
 		deadlineTimer = time.AfterFunc(time.Until(recheckAt), cancel)
 	}
 	defer func() {
-		stopReadiness()
+		for _, stop := range stopReadiness {
+			stop()
+		}
 		if deadlineTimer != nil {
 			deadlineTimer.Stop()
 		}
 		cancel()
 	}()
-	message, err := coordinator.poller.PollOnce(pollContext, capacity)
-	invalidated := (readinessChanged != nil && readinessChanged.Err() != nil) ||
-		(admission.Change != nil && channelClosed(admission.Change)) ||
-		(auditHealthy && auditChanged != nil && channelClosed(auditChanged)) ||
+	message, err := coordinator.poller.PollOnce(pollContext, demand)
+	invalidated := (auditHealthy && auditChanged != nil && channelClosed(auditChanged)) ||
 		(!recheckAt.IsZero() && !time.Now().Before(recheckAt))
+	for _, candidate := range candidates {
+		if invalidated {
+			break
+		}
+		invalidated = (candidate.readinessChanged != nil &&
+			candidate.readinessChanged.Err() != nil) ||
+			(candidate.admission.Change != nil &&
+				channelClosed(candidate.admission.Change))
+	}
 	if err != nil && ctx.Err() == nil && invalidated &&
 		errors.Is(err, context.Canceled) {
 		// A readiness transition intentionally interrupts the upstream long
@@ -870,6 +1078,18 @@ func (coordinator *ControllerRunnerCoordinator) Run(ctx context.Context) error {
 					return nil
 				}
 				continue
+			case errors.Is(err, ErrControllerRunnerNoCandidate):
+				// An empty candidate set is a normal configuration state, so it
+				// backs off like any other recoverable stall rather than
+				// terminating the Target's coordinator.
+				providerFailureAttempts++
+				if !coordinator.waitForProviderRetry(
+					ctx,
+					providerFailureAttempts,
+				) {
+					return nil
+				}
+				continue
 			default:
 				var providerFailure *github.ProviderFailure
 				if !errors.As(err, &providerFailure) {
@@ -1083,32 +1303,55 @@ func (coordinator *ControllerRunnerCoordinator) waitForReconciliationRetry(
 	}
 }
 
+// waitForRunnerReadiness blocks until any candidate node of this Target could
+// carry recovery work. Waiting on a single node would stall a Target whose work
+// can legitimately move to a different machine.
 func (coordinator *ControllerRunnerCoordinator) waitForRunnerReadiness(ctx context.Context) error {
-	snapshot, online, changed := coordinator.agents.Readiness(coordinator.config.NodeID)
-	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
+	nodes, err := coordinator.candidateNodes(ctx)
 	if err != nil {
 		return err
 	}
-	if online && snapshot.NativeRunnerReady &&
-		snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
-		admission.AllowsRecovery {
-		return nil
-	}
-	if changed == nil && admission.Change == nil {
+	if len(nodes) == 0 {
 		return ErrAgentOffline
 	}
-	var readinessDone <-chan struct{}
-	if changed != nil {
-		readinessDone = changed.Done()
+	watchContext, cancel := context.WithCancel(ctx)
+	defer cancel()
+	watching := false
+	for _, nodeID := range nodes {
+		snapshot, online, changed := coordinator.agents.Readiness(nodeID)
+		admission, err := coordinator.config.Reconciler.Admission(nodeID)
+		if err != nil {
+			return err
+		}
+		if online && snapshot.NativeRunnerReady &&
+			snapshot.RunnerVersion == runner.OfficialRunnerVersion &&
+			admission.AllowsRecovery {
+			return nil
+		}
+		if changed != nil {
+			stop := context.AfterFunc(changed, cancel)
+			defer stop()
+			watching = true
+		}
+		if admission.Change != nil {
+			watching = true
+			go func(change <-chan struct{}) {
+				select {
+				case <-change:
+					cancel()
+				case <-watchContext.Done():
+				}
+			}(admission.Change)
+		}
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-readinessDone:
-		return nil
-	case <-admission.Change:
-		return nil
+	if !watching {
+		return ErrAgentOffline
 	}
+	<-watchContext.Done()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
 }
 
 // DriveNext advances at most one durable single-slot claim. A pre-existing
@@ -1120,10 +1363,43 @@ func (coordinator *ControllerRunnerCoordinator) DriveNext(ctx context.Context) (
 	return coordinator.driveNext(ctx)
 }
 
+// reconciliationNodes names the nodes whose pending reconciliation actions this
+// Target owns. A durable fence or claim identifies its node exactly, so those
+// actions are driven against the machine that owns the work rather than a
+// coordinator-wide one. Only when this Target holds no claim at all does it fall
+// back to its candidates, which keeps a pinned single-node deployment identical.
+func (coordinator *ControllerRunnerCoordinator) reconciliationNodes(
+	ctx context.Context,
+) ([]domain.NodeID, error) {
+	fence, found, err := coordinator.store.NextGitHubReconciliationFence(
+		ctx, store.ScaleSetID(coordinator.config.ScaleSetID))
+	if err != nil {
+		return nil, err
+	}
+	if found && fence.Claim.Execution.Slot.NodeID != "" {
+		return []domain.NodeID{fence.Claim.Execution.Slot.NodeID}, nil
+	}
+	claim, found, err := coordinator.store.NextActionableGitHubClaim(
+		ctx, store.ScaleSetID(coordinator.config.ScaleSetID))
+	if err != nil {
+		return nil, err
+	}
+	if found && claim.Execution.Slot.NodeID != "" {
+		return []domain.NodeID{claim.Execution.Slot.NodeID}, nil
+	}
+	return coordinator.candidateNodes(ctx)
+}
+
 func (coordinator *ControllerRunnerCoordinator) driveNext(ctx context.Context) (bool, error) {
-	handled, blocked, err := coordinator.driveNodeReconciliationAction(ctx)
-	if err != nil || handled || blocked {
-		return handled, err
+	reconciliationNodes, err := coordinator.reconciliationNodes(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, nodeID := range reconciliationNodes {
+		handled, blocked, err := coordinator.driveNodeReconciliationAction(ctx, nodeID)
+		if err != nil || handled || blocked {
+			return handled, err
+		}
 	}
 	fence, found, err := coordinator.store.NextGitHubReconciliationFence(
 		ctx, store.ScaleSetID(coordinator.config.ScaleSetID))
@@ -1185,7 +1461,8 @@ func (coordinator *ControllerRunnerCoordinator) driveNext(ctx context.Context) (
 }
 
 func (coordinator *ControllerRunnerCoordinator) acquire(ctx context.Context, claim store.GitHubJobClaim) error {
-	if err := coordinator.requireRunnerAdmission(ctx); err != nil {
+	if err := coordinator.requireRunnerAdmission(
+		ctx, claim.Execution.Slot.NodeID); err != nil {
 		return err
 	}
 	attempt, err := coordinator.store.BeginGitHubAcquire(
@@ -1225,14 +1502,22 @@ func (coordinator *ControllerRunnerCoordinator) acquire(ctx context.Context, cla
 	return coordinator.config.Reconciler.ClearGitHubFence(acquireFence)
 }
 
+// requireRunnerAdmission proves that one exact node may still carry the claim
+// it is being asked to advance. The node comes from the claim's own execution
+// slot, so a coordinator that serves several nodes can never send a command to
+// a machine that does not own the work.
 func (coordinator *ControllerRunnerCoordinator) requireRunnerAdmission(
 	ctx context.Context,
+	nodeID domain.NodeID,
 ) error {
+	if nodeID == "" {
+		return ErrControllerRunnerConfig
+	}
 	if !coordinator.store.ManagementAuditHealthy() {
 		return ErrControllerRunnerAdmission
 	}
-	snapshot, online, _ := coordinator.agents.Readiness(coordinator.config.NodeID)
-	admission, err := coordinator.config.Reconciler.Admission(coordinator.config.NodeID)
+	snapshot, online, _ := coordinator.agents.Readiness(nodeID)
+	admission, err := coordinator.config.Reconciler.Admission(nodeID)
 	if err != nil {
 		return err
 	}
@@ -1244,7 +1529,7 @@ func (coordinator *ControllerRunnerCoordinator) requireRunnerAdmission(
 	pollState, err := coordinator.store.ReadGitHubPollState(
 		ctx,
 		coordinator.runtimeBinding(),
-		coordinator.config.NodeID,
+		nodeID,
 	)
 	if err != nil {
 		return err
@@ -1287,7 +1572,8 @@ func channelClosed(channel <-chan struct{}) bool {
 }
 
 func (coordinator *ControllerRunnerCoordinator) prepare(ctx context.Context, claim store.GitHubJobClaim) (bool, error) {
-	if err := coordinator.requireRunnerAdmission(ctx); err != nil {
+	nodeID := claim.Execution.Slot.NodeID
+	if err := coordinator.requireRunnerAdmission(ctx, nodeID); err != nil {
 		return false, err
 	}
 	metadata := transport.CommandMetadata{
@@ -1298,13 +1584,13 @@ func (coordinator *ControllerRunnerCoordinator) prepare(ctx context.Context, cla
 		Target:          coordinator.commandTarget(),
 	}
 	update, err := coordinator.agents.SendPrepare(
-		ctx, coordinator.config.NodeID, metadata, coordinator.disableUpdate())
+		ctx, nodeID, metadata, coordinator.disableUpdate())
 	if err != nil {
 		// Prepare is non-secret and exact-idempotent. Keep the claim Acquired so
 		// reconnect can resend the same deterministic command.
 		return false, err
 	}
-	if err := validateControllerRunnerUpdate(update, coordinator.config.NodeID, metadata); err != nil {
+	if err := validateControllerRunnerUpdate(update, nodeID, metadata); err != nil {
 		return false, err
 	}
 	switch update.State {
@@ -1324,7 +1610,8 @@ func (coordinator *ControllerRunnerCoordinator) prepare(ctx context.Context, cla
 }
 
 func (coordinator *ControllerRunnerCoordinator) generateAndStart(ctx context.Context, claim store.GitHubJobClaim) error {
-	if err := coordinator.requireRunnerAdmission(ctx); err != nil {
+	nodeID := claim.Execution.Slot.NodeID
+	if err := coordinator.requireRunnerAdmission(ctx, nodeID); err != nil {
 		return err
 	}
 	runnerName := deterministicRunnerName(claim.ScaleSetID, claim.RunnerRequestID)
@@ -1428,7 +1715,7 @@ func (coordinator *ControllerRunnerCoordinator) generateAndStart(ctx context.Con
 		Target:          coordinator.commandTarget(),
 	}
 	update, err := coordinator.agents.SendStart(
-		ctx, coordinator.config.NodeID, metadata, coordinator.disableUpdate(), jitConfig)
+		ctx, nodeID, metadata, coordinator.disableUpdate(), jitConfig)
 	if err != nil {
 		if markErr := coordinator.store.MarkGitHubStartAmbiguous(ctx, attempt); markErr != nil {
 			return errors.Join(ErrGitHubStartAmbiguous, markErr)
@@ -1440,7 +1727,7 @@ func (coordinator *ControllerRunnerCoordinator) generateAndStart(ctx context.Con
 		}
 		return ErrGitHubStartAmbiguous
 	}
-	if err := validateControllerRunnerUpdate(update, coordinator.config.NodeID, metadata); err != nil ||
+	if err := validateControllerRunnerUpdate(update, nodeID, metadata); err != nil ||
 		update.State != domain.ExecutionRunning {
 		if markErr := coordinator.store.MarkGitHubStartAmbiguous(ctx, attempt); markErr != nil {
 			return errors.Join(ErrGitHubStartAmbiguous, markErr)
@@ -1571,8 +1858,11 @@ func (coordinator *ControllerRunnerCoordinator) reconcileJITAttempt(
 	if unpickedRequeue && requeueIntent.Claim != claim {
 		return ErrGitHubReconciliationRequired
 	}
-	snapshot, online, _ := coordinator.agents.Readiness(coordinator.config.NodeID)
-	if !online || snapshot.NodeID != coordinator.config.NodeID {
+	// Reconciliation authority is the snapshot of the node that owns this claim,
+	// never a coordinator-wide one.
+	claimNodeID := claim.Execution.Slot.NodeID
+	snapshot, online, _ := coordinator.agents.Readiness(claimNodeID)
+	if claimNodeID == "" || !online || snapshot.NodeID != claimNodeID {
 		return ErrGitHubReconciliationRequired
 	}
 	snapshotDigest, err := transport.AgentSnapshotDigest(snapshot)

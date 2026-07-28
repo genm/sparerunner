@@ -129,10 +129,6 @@ func TestPollerRejectsInvalidJobIdentityAndStateBeforeHealthCommitOrAcknowledgem
 			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAvailable, WorkflowRunID: 51},
 		},
 		{
-			name: "assigned missing runner request ID",
-			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobAssigned, WorkflowRunID: 51},
-		},
-		{
 			name: "started negative runner request ID",
 			job:  githubadapter.JobMessage{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: -1, RunnerID: 33, RunnerName: "tewake-runner", WorkflowRunID: 51},
 		},
@@ -227,6 +223,15 @@ func TestPollerAcceptsStoreCompatibleJobIdentityStates(t *testing.T) {
 		Jobs: []githubadapter.JobMessage{
 			{Type: githubadapter.MessageTypeJobAvailable, RunnerRequestID: 7001, WorkflowRunID: 0},
 			{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 7002, WorkflowRunID: 51},
+			// Live GitHub sends JobAssigned with no RunnerRequestID at all. This
+			// exact shape was rejected by both the adapter and the store, so a
+			// real queued job redelivered forever and never started. Nothing
+			// downstream reads the field for an assignment.
+			{Type: githubadapter.MessageTypeJobAssigned, RunnerRequestID: 0, RepositoryName: "tewake-runner-smoke", OwnerName: "arieal", JobID: "b595668a-9118-582e-abbd-9413df4dc0b5", WorkflowRunID: 54},
+			// Live GitHub also cancels a never-picked-up job with no runner
+			// identity at all. This shape was rejected too, so a cancellation
+			// could never be acknowledged and blocked the whole queue behind it.
+			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 0, Result: githubadapter.JobResultCanceled, RepositoryName: "tewake-runner-smoke", OwnerName: "arieal", WorkflowRunID: 55},
 			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 7003, RunnerID: 33, RunnerName: "tewake-started", WorkflowRunID: 52},
 			{Type: githubadapter.MessageTypeJobStarted, RunnerRequestID: 0, RunnerID: 36, RunnerName: "tewake-started-zero-request", WorkflowRunID: 52},
 			{Type: githubadapter.MessageTypeJobCompleted, RunnerRequestID: 7004, RunnerID: 34, RunnerName: "tewake-completed", Result: githubadapter.JobResultSucceeded, WorkflowRunID: 53},
