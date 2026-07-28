@@ -1,13 +1,13 @@
 Set-StrictMode -Version Latest
 
-if ($null -eq (Get-Command "Set-TewakePrivateAcl" -ErrorAction SilentlyContinue) -or
-    $null -eq (Get-Command "Remove-TewakeTreeNoReparse" -ErrorAction SilentlyContinue)) {
-    throw "The Tewake ownership and safe-tree authorities must be loaded first."
+if ($null -eq (Get-Command "Set-SpareRunnerPrivateAcl" -ErrorAction SilentlyContinue) -or
+    $null -eq (Get-Command "Remove-SpareRunnerTreeNoReparse" -ErrorAction SilentlyContinue)) {
+    throw "The SpareRunner ownership and safe-tree authorities must be loaded first."
 }
 
-$script:TewakeLiveEvidenceMarkerName = ".tewake-live-evidence.json"
+$script:SpareRunnerLiveEvidenceMarkerName = ".sparerunner-live-evidence.json"
 
-function Get-TewakeLiveCanonicalPath {
+function Get-SpareRunnerLiveCanonicalPath {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Path
@@ -26,7 +26,7 @@ function Get-TewakeLiveCanonicalPath {
     return $Canonical
 }
 
-function Test-TewakeLivePathOverlap {
+function Test-SpareRunnerLivePathOverlap {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Left,
@@ -34,8 +34,8 @@ function Test-TewakeLivePathOverlap {
         [string] $Right
     )
 
-    $Left = Get-TewakeLiveCanonicalPath -Path $Left
-    $Right = Get-TewakeLiveCanonicalPath -Path $Right
+    $Left = Get-SpareRunnerLiveCanonicalPath -Path $Left
+    $Right = Get-SpareRunnerLiveCanonicalPath -Path $Right
     if ([string]::Equals(
             $Left,
             $Right,
@@ -53,7 +53,7 @@ function Test-TewakeLivePathOverlap {
     )
 }
 
-function Assert-TewakeLiveEvidenceIsolation {
+function Assert-SpareRunnerLiveEvidenceIsolation {
     param(
         [Parameter(Mandatory = $true)]
         [string] $EvidenceDirectory,
@@ -61,21 +61,21 @@ function Assert-TewakeLiveEvidenceIsolation {
         [string[]] $ProtectedPaths
     )
 
-    $EvidenceDirectory = Get-TewakeLiveCanonicalPath -Path $EvidenceDirectory
+    $EvidenceDirectory = Get-SpareRunnerLiveCanonicalPath -Path $EvidenceDirectory
     if ($null -eq [System.IO.Directory]::GetParent($EvidenceDirectory)) {
         throw "A filesystem volume root cannot be a live-evidence directory."
     }
     foreach ($ProtectedPath in $ProtectedPaths) {
-        if (Test-TewakeLivePathOverlap `
+        if (Test-SpareRunnerLivePathOverlap `
                 -Left $EvidenceDirectory `
                 -Right $ProtectedPath) {
-            throw "The live-evidence directory overlaps a protected Tewake path."
+            throw "The live-evidence directory overlaps a protected SpareRunner path."
         }
     }
     return $EvidenceDirectory
 }
 
-function ConvertTo-TewakeLiveEvidenceMarkerText {
+function ConvertTo-SpareRunnerLiveEvidenceMarkerText {
     param(
         [Parameter(Mandatory = $true)]
         [string] $Root,
@@ -102,19 +102,19 @@ function ConvertTo-TewakeLiveEvidenceMarkerText {
     $Payload = [ordered]@{
         version = 1
         role = "windows-live-evidence"
-        root = (Get-TewakeLiveCanonicalPath -Path $Root)
-        repositoryRoot = (Get-TewakeLiveCanonicalPath -Path $RepositoryRoot)
+        root = (Get-SpareRunnerLiveCanonicalPath -Path $Root)
+        repositoryRoot = (Get-SpareRunnerLiveCanonicalPath -Path $RepositoryRoot)
         expectedCommitSha = $ExpectedCommitSha
         expectedAgentSha256 = $ExpectedAgentSha256
-        installedAgent = (Get-TewakeLiveCanonicalPath -Path $InstalledAgent)
-        agentStateDirectory = (Get-TewakeLiveCanonicalPath -Path $AgentStateDirectory)
-        cacheRoot = (Get-TewakeLiveCanonicalPath -Path $CacheRoot)
-        runtimeRoot = (Get-TewakeLiveCanonicalPath -Path $RuntimeRoot)
+        installedAgent = (Get-SpareRunnerLiveCanonicalPath -Path $InstalledAgent)
+        agentStateDirectory = (Get-SpareRunnerLiveCanonicalPath -Path $AgentStateDirectory)
+        cacheRoot = (Get-SpareRunnerLiveCanonicalPath -Path $CacheRoot)
+        runtimeRoot = (Get-SpareRunnerLiveCanonicalPath -Path $RuntimeRoot)
     }
     return ($Payload | ConvertTo-Json -Compress) + [Environment]::NewLine
 }
 
-function Write-TewakeLiveEvidenceMarker {
+function Write-SpareRunnerLiveEvidenceMarker {
     param(
         [Parameter(Mandatory = $true)]
         [string] $ActualRoot,
@@ -138,8 +138,8 @@ function Write-TewakeLiveEvidenceMarker {
         [System.Security.Principal.SecurityIdentifier] $OwnerSid
     )
 
-    $Marker = Join-Path $ActualRoot $script:TewakeLiveEvidenceMarkerName
-    $Payload = ConvertTo-TewakeLiveEvidenceMarkerText `
+    $Marker = Join-Path $ActualRoot $script:SpareRunnerLiveEvidenceMarkerName
+    $Payload = ConvertTo-SpareRunnerLiveEvidenceMarkerText `
         -Root $BoundRoot `
         -RepositoryRoot $RepositoryRoot `
         -ExpectedCommitSha $ExpectedCommitSha `
@@ -162,10 +162,10 @@ function Write-TewakeLiveEvidenceMarker {
     finally {
         $Stream.Dispose()
     }
-    Set-TewakePrivateAcl -Path $Marker -OwnerSid $OwnerSid
+    Set-SpareRunnerPrivateAcl -Path $Marker -OwnerSid $OwnerSid
 }
 
-function Assert-TewakeLiveEvidenceRoot {
+function Assert-SpareRunnerLiveEvidenceRoot {
     param(
         [Parameter(Mandatory = $true)]
         [string] $ActualRoot,
@@ -189,11 +189,11 @@ function Assert-TewakeLiveEvidenceRoot {
         [System.Security.Principal.SecurityIdentifier] $OwnerSid
     )
 
-    $ActualRoot = Get-TewakeLiveCanonicalPath -Path $ActualRoot
-    $BoundRoot = Get-TewakeLiveCanonicalPath -Path $BoundRoot
-    Assert-TewakePrivateAcl -Path $ActualRoot -OwnerSid $OwnerSid -Directory
-    $Marker = Join-Path $ActualRoot $script:TewakeLiveEvidenceMarkerName
-    Assert-TewakePrivateAcl -Path $Marker -OwnerSid $OwnerSid
+    $ActualRoot = Get-SpareRunnerLiveCanonicalPath -Path $ActualRoot
+    $BoundRoot = Get-SpareRunnerLiveCanonicalPath -Path $BoundRoot
+    Assert-SpareRunnerPrivateAcl -Path $ActualRoot -OwnerSid $OwnerSid -Directory
+    $Marker = Join-Path $ActualRoot $script:SpareRunnerLiveEvidenceMarkerName
+    Assert-SpareRunnerPrivateAcl -Path $Marker -OwnerSid $OwnerSid
     $MarkerItem = Get-Item -LiteralPath $Marker -Force -ErrorAction Stop
     if ($MarkerItem.Length -le 0 -or $MarkerItem.Length -gt 16384) {
         throw "The live-evidence ownership marker has an invalid size."
@@ -218,7 +218,7 @@ function Assert-TewakeLiveEvidenceRoot {
         $Value.role -cne "windows-live-evidence") {
         throw "The live-evidence ownership marker is invalid."
     }
-    $Expected = ConvertTo-TewakeLiveEvidenceMarkerText `
+    $Expected = ConvertTo-SpareRunnerLiveEvidenceMarkerText `
         -Root $BoundRoot `
         -RepositoryRoot $RepositoryRoot `
         -ExpectedCommitSha $ExpectedCommitSha `
@@ -232,7 +232,7 @@ function Assert-TewakeLiveEvidenceRoot {
     }
 }
 
-function Assert-TewakeFreshLiveEvidenceContents {
+function Assert-SpareRunnerFreshLiveEvidenceContents {
     param(
         [Parameter(Mandatory = $true)]
         [string] $ActualRoot
@@ -242,7 +242,7 @@ function Assert-TewakeFreshLiveEvidenceContents {
         [System.IO.Directory]::EnumerateFileSystemEntries($ActualRoot)
     )
     $ExpectedMarker = [System.IO.Path]::GetFullPath(
-        (Join-Path $ActualRoot $script:TewakeLiveEvidenceMarkerName)
+        (Join-Path $ActualRoot $script:SpareRunnerLiveEvidenceMarkerName)
     )
     if ($Entries.Count -ne 1 -or
         -not [string]::Equals(
@@ -254,7 +254,7 @@ function Assert-TewakeFreshLiveEvidenceContents {
     }
 }
 
-function Initialize-TewakeLiveEvidenceRoot {
+function Initialize-SpareRunnerLiveEvidenceRoot {
     param(
         [Parameter(Mandatory = $true)]
         [string] $EvidenceDirectory,
@@ -279,7 +279,7 @@ function Initialize-TewakeLiveEvidenceRoot {
     )
 
     # Isolation is checked before any directory or ACL mutation.
-    $EvidenceDirectory = Assert-TewakeLiveEvidenceIsolation `
+    $EvidenceDirectory = Assert-SpareRunnerLiveEvidenceIsolation `
         -EvidenceDirectory $EvidenceDirectory `
         -ProtectedPaths $ProtectedPaths
     $Arguments = @{
@@ -294,7 +294,7 @@ function Initialize-TewakeLiveEvidenceRoot {
         OwnerSid = $OwnerSid
     }
     if (Test-Path -LiteralPath $EvidenceDirectory) {
-        Assert-TewakeLiveEvidenceRoot `
+        Assert-SpareRunnerLiveEvidenceRoot `
             -ActualRoot $EvidenceDirectory `
             @Arguments
         return [pscustomobject]@{
@@ -303,13 +303,13 @@ function Initialize-TewakeLiveEvidenceRoot {
         }
     }
     $Parent = [System.IO.Path]::GetDirectoryName($EvidenceDirectory)
-    Assert-TewakeNoReparsePath -Path $Parent
+    Assert-SpareRunnerNoReparsePath -Path $Parent
     $ParentItem = Get-Item -LiteralPath $Parent -Force -ErrorAction Stop
     if (-not $ParentItem.PSIsContainer) {
         throw "The live-evidence parent is not an existing directory."
     }
     $Staging = Join-Path $Parent (
-        ".tewake-live-evidence-{0}.staging" -f
+        ".sparerunner-live-evidence-{0}.staging" -f
             [Guid]::NewGuid().ToString("N")
     )
     if (Test-Path -LiteralPath $Staging) {
@@ -318,20 +318,20 @@ function Initialize-TewakeLiveEvidenceRoot {
     [void] [System.IO.Directory]::CreateDirectory($Staging)
     $Published = $false
     try {
-        Set-TewakePrivateAcl -Path $Staging -OwnerSid $OwnerSid -Directory
-        Write-TewakeLiveEvidenceMarker `
+        Set-SpareRunnerPrivateAcl -Path $Staging -OwnerSid $OwnerSid -Directory
+        Write-SpareRunnerLiveEvidenceMarker `
             -ActualRoot $Staging `
             @Arguments
-        Assert-TewakeLiveEvidenceRoot `
+        Assert-SpareRunnerLiveEvidenceRoot `
             -ActualRoot $Staging `
             @Arguments
-        Assert-TewakeFreshLiveEvidenceContents -ActualRoot $Staging
+        Assert-SpareRunnerFreshLiveEvidenceContents -ActualRoot $Staging
         [System.IO.Directory]::Move($Staging, $EvidenceDirectory)
         $Published = $true
-        Assert-TewakeLiveEvidenceRoot `
+        Assert-SpareRunnerLiveEvidenceRoot `
             -ActualRoot $EvidenceDirectory `
             @Arguments
-        Assert-TewakeFreshLiveEvidenceContents -ActualRoot $EvidenceDirectory
+        Assert-SpareRunnerFreshLiveEvidenceContents -ActualRoot $EvidenceDirectory
         return [pscustomobject]@{
             Root = $EvidenceDirectory
             Created = $true
@@ -341,12 +341,12 @@ function Initialize-TewakeLiveEvidenceRoot {
         $PublishFailure = $_
         if ($Published -and (Test-Path -LiteralPath $EvidenceDirectory)) {
             try {
-                Assert-TewakeLiveEvidenceRoot `
+                Assert-SpareRunnerLiveEvidenceRoot `
                     -ActualRoot $EvidenceDirectory `
                     @Arguments
-                Assert-TewakeFreshLiveEvidenceContents `
+                Assert-SpareRunnerFreshLiveEvidenceContents `
                     -ActualRoot $EvidenceDirectory
-                Remove-TewakeTreeNoReparse -Root $EvidenceDirectory
+                Remove-SpareRunnerTreeNoReparse -Root $EvidenceDirectory
             }
             catch {
                 throw (
@@ -359,18 +359,18 @@ function Initialize-TewakeLiveEvidenceRoot {
     }
     finally {
         if (Test-Path -LiteralPath $Staging) {
-            Remove-TewakeTreeNoReparse -Root $Staging
+            Remove-SpareRunnerTreeNoReparse -Root $Staging
         }
     }
 }
 
-if ($null -eq ("Tewake.Live.WindowsCommandLine" -as [type])) {
+if ($null -eq ("SpareRunner.Live.WindowsCommandLine" -as [type])) {
     Add-Type -TypeDefinition @"
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace Tewake.Live {
+namespace SpareRunner.Live {
     public static class WindowsCommandLine {
         [DllImport("shell32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
         private static extern IntPtr CommandLineToArgvW(
@@ -415,7 +415,7 @@ namespace Tewake.Live {
 "@
 }
 
-function Assert-TewakeServiceCommandLine {
+function Assert-SpareRunnerServiceCommandLine {
     param(
         [Parameter(Mandatory = $true)]
         [string] $CommandLine,
@@ -426,24 +426,24 @@ function Assert-TewakeServiceCommandLine {
         [int[]] $PathArgumentIndexes = @()
     )
 
-    $Parsed = [Tewake.Live.WindowsCommandLine]::Parse($CommandLine)
+    $Parsed = [SpareRunner.Live.WindowsCommandLine]::Parse($CommandLine)
     if ($Parsed.Count -ne ($ExpectedArguments.Count + 1)) {
-        throw "A Tewake SCM command has missing, duplicate, or unknown arguments."
+        throw "A SpareRunner SCM command has missing, duplicate, or unknown arguments."
     }
-    $ObservedExecutable = Get-TewakeLiveCanonicalPath -Path $Parsed[0]
-    $ExpectedExecutable = Get-TewakeLiveCanonicalPath -Path $ExpectedExecutable
+    $ObservedExecutable = Get-SpareRunnerLiveCanonicalPath -Path $Parsed[0]
+    $ExpectedExecutable = Get-SpareRunnerLiveCanonicalPath -Path $ExpectedExecutable
     if (-not [string]::Equals(
             $ObservedExecutable,
             $ExpectedExecutable,
             [System.StringComparison]::OrdinalIgnoreCase
         )) {
-        throw "A Tewake SCM command points at an unexpected executable."
+        throw "A SpareRunner SCM command points at an unexpected executable."
     }
     $PathIndexes = @{}
     foreach ($Index in $PathArgumentIndexes) {
         if ($Index -lt 0 -or $Index -ge $ExpectedArguments.Count -or
             $PathIndexes.Contains($Index)) {
-            throw "A Tewake SCM path-argument contract is invalid."
+            throw "A SpareRunner SCM path-argument contract is invalid."
         }
         $PathIndexes[$Index] = $true
     }
@@ -451,18 +451,18 @@ function Assert-TewakeServiceCommandLine {
         $Observed = [string] $Parsed[$Index + 1]
         $Expected = [string] $ExpectedArguments[$Index]
         if ($PathIndexes.Contains($Index)) {
-            $Observed = Get-TewakeLiveCanonicalPath -Path $Observed
-            $Expected = Get-TewakeLiveCanonicalPath -Path $Expected
+            $Observed = Get-SpareRunnerLiveCanonicalPath -Path $Observed
+            $Expected = Get-SpareRunnerLiveCanonicalPath -Path $Expected
             if (-not [string]::Equals(
                     $Observed,
                     $Expected,
                     [System.StringComparison]::OrdinalIgnoreCase
                 )) {
-                throw "A Tewake SCM command has an unexpected configured path."
+                throw "A SpareRunner SCM command has an unexpected configured path."
             }
         }
         elseif ($Observed -cne $Expected) {
-            throw "A Tewake SCM command has an unexpected role, service, or flag."
+            throw "A SpareRunner SCM command has an unexpected role, service, or flag."
         }
     }
     return ,$Parsed

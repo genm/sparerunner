@@ -129,7 +129,7 @@ func TestLiveConfigValidationFailsClosedAtOwnedBoundaries(t *testing.T) {
 			config.GitHub.ConfigURL = "https://github.example.test/example-org/private-sandbox"
 		}},
 		{name: "public preview label drift", mutate: func(config *liveConfig) {
-			config.GitHub.ScaleSetName = "tewake"
+			config.GitHub.ScaleSetName = "sparerunner"
 		}},
 		{name: "non canonical node", mutate: func(config *liveConfig) {
 			config.NodeID = "ABCDEF0123456789ABCDEF0123456789"
@@ -138,7 +138,7 @@ func TestLiveConfigValidationFailsClosedAtOwnedBoundaries(t *testing.T) {
 			config.AgentListenAddress = "controller.example.test:7443"
 		}},
 		{name: "relative unit fragment", mutate: func(config *liveConfig) {
-			config.Provenance.ExpectedAgentUnitFragmentPath = "tewake-agent.service"
+			config.Provenance.ExpectedAgentUnitFragmentPath = "sparerunner-agent.service"
 		}},
 		{name: "uppercase commit", mutate: func(config *liveConfig) {
 			config.Provenance.ExpectedCommitSHA = strings.Repeat("A", 40)
@@ -265,9 +265,9 @@ func validTestConfig(t *testing.T) liveConfig {
 		Provenance: provenanceConfig{
 			ExpectedCommitSHA:                  strings.Repeat("1", 40),
 			ExpectedInstalledAgentSHA256:       strings.Repeat("2", 64),
-			ExpectedAgentUnitFragmentPath:      "/etc/systemd/system/tewake-agent.service",
+			ExpectedAgentUnitFragmentPath:      "/etc/systemd/system/sparerunner-agent.service",
 			ExpectedAgentUnitSHA256:            strings.Repeat("3", 64),
-			ExpectedSupervisorUnitFragmentPath: "/etc/systemd/system/tewake-supervisor.service",
+			ExpectedSupervisorUnitFragmentPath: "/etc/systemd/system/sparerunner-supervisor.service",
 			ExpectedSupervisorUnitSHA256:       strings.Repeat("4", 64),
 			ExpectedRunnerPackageSHA256:        officialPackage.Checksum,
 		},

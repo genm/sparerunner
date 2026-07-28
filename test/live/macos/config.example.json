@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "evidenceDirectory": "/var/db/tewake-macos-live/evidence-normal",
-  "harnessPath": "/usr/local/libexec/tewake-macos-live",
+  "evidenceDirectory": "/var/db/sparerunner-macos-live/evidence-normal",
+  "harnessPath": "/usr/local/libexec/sparerunner-macos-live",
   "executionId": "replace-with-the-exact-controller-execution-id",
   "expectedArchitecture": "arm64",
   "expectedCommitSha": "0000000000000000000000000000000000000000",

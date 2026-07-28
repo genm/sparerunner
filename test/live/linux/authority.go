@@ -147,17 +147,17 @@ func captureAuthorityEvidence(config liveConfig, repoRoot string, probe authorit
 	if !safeIdentifier(bootID, 64) {
 		return errNodeEvidenceInvalid
 	}
-	agentUID, err := probe.lookupUID("tewake-agent")
+	agentUID, err := probe.lookupUID("sparerunner-agent")
 	if err != nil || agentUID <= 0 {
 		return errNodeEvidenceInvalid
 	}
-	runnerUID, err := probe.lookupUID("tewake-runner-0")
+	runnerUID, err := probe.lookupUID("sparerunner-runner-0")
 	if err != nil || runnerUID <= 0 || runnerUID == agentUID {
 		return errNodeEvidenceInvalid
 	}
 	agent, err := readServiceAuthority(
 		probe,
-		"tewake-agent.service",
+		"sparerunner-agent.service",
 		"serve",
 		config.RuntimeRoot,
 		config.Provenance.ExpectedAgentUnitFragmentPath,
@@ -168,7 +168,7 @@ func captureAuthorityEvidence(config liveConfig, repoRoot string, probe authorit
 	}
 	supervisor, err := readServiceAuthority(
 		probe,
-		"tewake-supervisor.service",
+		"sparerunner-supervisor.service",
 		"supervisor",
 		config.RuntimeRoot,
 		config.Provenance.ExpectedSupervisorUnitFragmentPath,
@@ -317,9 +317,9 @@ func parseEffectiveExecStart(value string) ([]string, error) {
 	for index := range argv {
 		argv[index] = strings.Trim(argv[index], "\"'")
 	}
-	if declaredExecutable != "/usr/local/bin/tewake-agent" ||
+	if declaredExecutable != "/usr/local/bin/sparerunner-agent" ||
 		len(argv) < 2 || argv[0] != declaredExecutable ||
-		strings.Count(value, "/usr/local/bin/tewake-agent") != 2 {
+		strings.Count(value, "/usr/local/bin/sparerunner-agent") != 2 {
 		return nil, errNodeEvidenceInvalid
 	}
 	return argv, nil
@@ -329,22 +329,22 @@ func expectedServiceArgv(subcommand, runtimeRoot string) []string {
 	switch subcommand {
 	case "serve":
 		return []string{
-			"/usr/local/bin/tewake-agent", "serve",
-			"--state-dir=/var/lib/tewake-agent",
-			"--cache-root=/var/cache/tewake-agent",
+			"/usr/local/bin/sparerunner-agent", "serve",
+			"--state-dir=/var/lib/sparerunner-agent",
+			"--cache-root=/var/cache/sparerunner-agent",
 			"--runtime-root=" + runtimeRoot,
-			"--supervisor-socket=/run/tewake-supervisor/supervisor.sock",
+			"--supervisor-socket=/run/sparerunner-supervisor/supervisor.sock",
 			"--require-native-runner",
 		}
 	case "supervisor":
 		return []string{
-			"/usr/local/bin/tewake-agent", "supervisor",
-			"--socket=/run/tewake-supervisor/supervisor.sock",
+			"/usr/local/bin/sparerunner-agent", "supervisor",
+			"--socket=/run/sparerunner-supervisor/supervisor.sock",
 			"--runtime-root=" + runtimeRoot,
-			"--cache-root=/var/cache/tewake-agent",
-			"--fence-root=/var/lib/tewake-supervisor/fences",
-			"--runner-user=tewake-runner-0",
-			"--agent-user=tewake-agent",
+			"--cache-root=/var/cache/sparerunner-agent",
+			"--fence-root=/var/lib/sparerunner-supervisor/fences",
+			"--runner-user=sparerunner-runner-0",
+			"--agent-user=sparerunner-agent",
 		}
 	default:
 		return nil

@@ -19,17 +19,17 @@ const (
 	maxMacOSConfigBytes    = 32 << 10
 	maxMacOSRunDuration    = 24 * time.Hour
 
-	installedAgentPath = "/usr/local/libexec/tewake-agent"
-	installedPlistPath = "/Library/LaunchDaemons/com.genm.tewake.agent.plist"
-	agentStateRoot     = "/Library/Application Support/Tewake/agent"
+	installedAgentPath = "/usr/local/libexec/sparerunner-agent"
+	installedPlistPath = "/Library/LaunchDaemons/com.genm.sparerunner.agent.plist"
+	agentStateRoot     = "/Library/Application Support/SpareRunner/agent"
 	agentDatabasePath  = agentStateRoot + "/agent.db"
 	nodeKeyLocatorPath = agentStateRoot + "/node-private-key.pem"
-	runtimeRootPath    = "/Library/Application Support/Tewake/runtime"
+	runtimeRootPath    = "/Library/Application Support/SpareRunner/runtime"
 	executionsRootPath = runtimeRootPath + "/executions"
-	fenceRootPath      = "/Library/Application Support/Tewake/fences"
-	cacheRootPath      = "/Library/Caches/com.genm.tewake/runner"
-	launchDaemonLabel  = "com.genm.tewake.agent"
-	runnerAccountName  = "tewake-runner-0"
+	fenceRootPath      = "/Library/Application Support/SpareRunner/fences"
+	cacheRootPath      = "/Library/Caches/com.genm.sparerunner/runner"
+	launchDaemonLabel  = "com.genm.sparerunner.agent"
+	runnerAccountName  = "sparerunner-runner-0"
 )
 
 var (

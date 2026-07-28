@@ -115,7 +115,7 @@ func bindProcessEvidence(
 	}
 	agent, err := readServiceAuthority(
 		probe,
-		"tewake-agent.service",
+		"sparerunner-agent.service",
 		"serve",
 		config.RuntimeRoot,
 		config.Provenance.ExpectedAgentUnitFragmentPath,
@@ -126,7 +126,7 @@ func bindProcessEvidence(
 	}
 	supervisor, err := readServiceAuthority(
 		probe,
-		"tewake-supervisor.service",
+		"sparerunner-supervisor.service",
 		"supervisor",
 		config.RuntimeRoot,
 		config.Provenance.ExpectedSupervisorUnitFragmentPath,
@@ -150,8 +150,8 @@ func bindProcessEvidence(
 		digest := sha256.Sum256([]byte(marker.ExecutionID))
 		expectedRunnerCgroup = filepath.Join(
 			supervisor.ControlGroup,
-			"tewake",
-			"tewake-"+hex.EncodeToString(digest[:]),
+			"sparerunner",
+			"sparerunner-"+hex.EncodeToString(digest[:]),
 		)
 	}
 	for index := range processes.Processes {
@@ -286,7 +286,7 @@ func inspectRelevantProcess(procRoot string, pid int) (observedProcess, bool, er
 	}
 	role := ""
 	switch filepath.Base(arguments[0]) {
-	case "tewake-agent":
+	case "sparerunner-agent":
 		if len(arguments) < 2 {
 			return observedProcess{}, false, nil
 		}
@@ -378,7 +378,7 @@ func collectFilesystemEvidence(runtimeRoot string) (filesystemEvidence, error) {
 			result.CredentialFiles++
 		case ".credentials_rsaparams":
 			result.CredentialRSAParamFiles++
-		case ".tewake-jit-canary":
+		case ".sparerunner-jit-canary":
 			result.JITCanaryFiles++
 		}
 		return nil

@@ -1,7 +1,7 @@
 # Windows native-runner acceptance
 
-This directory captures TWK-009 host evidence. It does not replace the
-three-OS/two-installation private GitHub gate owned by TWK-014.
+This directory captures SPR-009 host evidence. It does not replace the
+three-OS/two-installation private GitHub gate owned by SPR-014.
 
 Run only on a trusted, elevated Windows host and a clean protected commit.
 Native mode is not a sandbox for untrusted code.
@@ -65,7 +65,7 @@ Agent without `--require-native-runner`. SCM command lines are parsed through
 Windows `CommandLineToArgvW` and compared as exact argument arrays rather than
 substring-matched.
 
-Still required before marking TWK-009 complete:
+Still required before marking SPR-009 complete:
 
 - `amd64` and `arm64` host artifacts;
 - DPAPI plaintext-canary and the unexecuted `dpapi-identity` cross-service

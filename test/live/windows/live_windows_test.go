@@ -37,7 +37,7 @@ $binding = @{
     RepositoryRoot = $repo
     ExpectedCommitSha = ("a" * 40)
     ExpectedAgentSha256 = ("b" * 64)
-    InstalledAgent = (Join-Path $install "tewake-agent.exe")
+    InstalledAgent = (Join-Path $install "sparerunner-agent.exe")
     AgentStateDirectory = $state
     CacheRoot = $cache
     RuntimeRoot = $runtime
@@ -103,14 +103,14 @@ $foreign = Join-Path $base "foreign evidence"
     (Join-Path $foreign "nested\canary.txt"),
     "foreign.example.test"
 )
-Set-TewakePrivateAcl -Path $foreign -OwnerSid $owner -Directory
+Set-SpareRunnerPrivateAcl -Path $foreign -OwnerSid $owner -Directory
 $beforeSddl = Get-Sddl $foreign
 $beforeTree = Get-TreeSnapshot $foreign
 $rejected = $false
 try {
     $foreignArguments = @{} + $binding
     $foreignArguments.EvidenceDirectory = $foreign
-    [void] (Initialize-TewakeLiveEvidenceRoot @foreignArguments)
+    [void] (Initialize-SpareRunnerLiveEvidenceRoot @foreignArguments)
 }
 catch {
     $rejected = $true
@@ -129,13 +129,13 @@ $overlapCandidates = @(
 $overlapIndex = 0
 foreach ($overlap in $overlapCandidates) {
     $overlapIndex++
-    if (-not (Test-TewakeLivePathOverlap -Left $overlap -Right $repo)) {
+    if (-not (Test-SpareRunnerLivePathOverlap -Left $overlap -Right $repo)) {
         exit (20 + $overlapIndex)
     }
     $overlapArguments = @{} + $binding
     $overlapArguments.EvidenceDirectory = $overlap
     try {
-        [void] (Initialize-TewakeLiveEvidenceRoot @overlapArguments)
+        [void] (Initialize-SpareRunnerLiveEvidenceRoot @overlapArguments)
         exit (23 + $overlapIndex)
     }
     catch {}
@@ -147,11 +147,11 @@ if (Test-Path -LiteralPath (Join-Path $repo "evidence")) {
 $owned = Join-Path $base "owned evidence"
 $ownedArguments = @{} + $binding
 $ownedArguments.EvidenceDirectory = $owned
-$created = Initialize-TewakeLiveEvidenceRoot @ownedArguments
+$created = Initialize-SpareRunnerLiveEvidenceRoot @ownedArguments
 if (-not $created.Created) {
     exit 28
 }
-$reused = Initialize-TewakeLiveEvidenceRoot @ownedArguments
+$reused = Initialize-SpareRunnerLiveEvidenceRoot @ownedArguments
 if ($reused.Created) {
     exit 29
 }
@@ -161,7 +161,7 @@ $wrongBinding = @{} + $binding
 $wrongBinding.ExpectedCommitSha = ("c" * 40)
 try {
     $wrongBinding.EvidenceDirectory = $owned
-    [void] (Initialize-TewakeLiveEvidenceRoot @wrongBinding)
+    [void] (Initialize-SpareRunnerLiveEvidenceRoot @wrongBinding)
     exit 30
 }
 catch {}
@@ -188,16 +188,16 @@ func TestSCMCommandLineParserRejectsWrongAndAmbiguousContracts(t *testing.T) {
 . $args[2]
 $ErrorActionPreference = "Stop"
 $base = $args[3]
-$exe = Join-Path $base "Program Files\Tewake\tewake-agent.exe"
-$state = Join-Path $base "ProgramData\Tewake\agent-state"
-$cache = Join-Path $base "ProgramData\Tewake\cache"
-$runtime = Join-Path $base "ProgramData\Tewake\runtime"
+$exe = Join-Path $base "Program Files\SpareRunner\sparerunner-agent.exe"
+$state = Join-Path $base "ProgramData\SpareRunner\agent-state"
+$cache = Join-Path $base "ProgramData\SpareRunner\cache"
+$runtime = Join-Path $base "ProgramData\SpareRunner\runtime"
 $expected = @(
     "windows-service",
     "--role",
     "agent",
     "--service-name",
-    "TewakeAgent",
+    "SpareRunnerAgent",
     "--state-dir",
     $state,
     "--cache-root",
@@ -205,14 +205,14 @@ $expected = @(
     "--runtime-root",
     $runtime,
     "--runner-identity-service",
-    "TewakeRunnerIdentity",
+    "SpareRunnerRunnerIdentity",
     "--require-native-runner"
 )
 $valid = (
     '"' + $exe + '" windows-service --role agent ' +
-    '--service-name TewakeAgent --state-dir "' + $state + '" ' +
+    '--service-name SpareRunnerAgent --state-dir "' + $state + '" ' +
     '--cache-root "' + $cache + '" --runtime-root "' + $runtime + '" ' +
-    '--runner-identity-service TewakeRunnerIdentity --require-native-runner'
+    '--runner-identity-service SpareRunnerRunnerIdentity --require-native-runner'
 )
 $assertion = @{
     CommandLine = $valid
@@ -220,47 +220,47 @@ $assertion = @{
     ExpectedArguments = $expected
     PathArgumentIndexes = @(6, 8, 10)
 }
-[void] (Assert-TewakeServiceCommandLine @assertion)
+[void] (Assert-SpareRunnerServiceCommandLine @assertion)
 $runnerExpected = @(
     "windows-service",
     "--role",
     "runner-identity",
     "--service-name",
-    "TewakeRunnerIdentity"
+    "SpareRunnerRunnerIdentity"
 )
 $runnerValid = (
     '"' + $exe + '" windows-service --role runner-identity ' +
-    '--service-name TewakeRunnerIdentity'
+    '--service-name SpareRunnerRunnerIdentity'
 )
 $runnerAssertion = @{
     CommandLine = $runnerValid
     ExpectedExecutable = $exe
     ExpectedArguments = $runnerExpected
 }
-[void] (Assert-TewakeServiceCommandLine @runnerAssertion)
+[void] (Assert-SpareRunnerServiceCommandLine @runnerAssertion)
 
 $invalid = @(
     $valid + " --role agent",
     $valid.Replace("--require-native-runner", "--unknown"),
     $valid.Replace("--role agent", "--role runner-identity"),
-    $valid.Replace("--service-name TewakeAgent", "--service-name OtherAgent"),
+    $valid.Replace("--service-name SpareRunnerAgent", "--service-name OtherAgent"),
     $valid.Replace($state, (Join-Path $base "wrong-state")),
     $valid.Replace("--require-native-runner", "")
 )
 foreach ($candidate in $invalid) {
     try {
         $assertion.CommandLine = $candidate
-        [void] (Assert-TewakeServiceCommandLine @assertion)
+        [void] (Assert-SpareRunnerServiceCommandLine @assertion)
         exit 30
     }
     catch {}
 }
 try {
     $runnerAssertion.CommandLine = $runnerValid.Replace(
-        "TewakeRunnerIdentity",
+        "SpareRunnerRunnerIdentity",
         "OtherRunnerIdentity"
     )
-    [void] (Assert-TewakeServiceCommandLine @runnerAssertion)
+    [void] (Assert-SpareRunnerServiceCommandLine @runnerAssertion)
     exit 31
 }
 catch {}
@@ -269,7 +269,7 @@ try {
         $exe,
         (Join-Path $base "other.exe")
     )
-    [void] (Assert-TewakeServiceCommandLine @assertion)
+    [void] (Assert-SpareRunnerServiceCommandLine @assertion)
     exit 32
 }
 catch {}
@@ -302,17 +302,17 @@ func runPowerShell(t *testing.T, script string, arguments ...string) {
 
 func powershellFileCommand(t *testing.T, script string, arguments ...string) *exec.Cmd {
 	t.Helper()
-	scriptPath := filepath.Join(t.TempDir(), "tewake-test.ps1")
-	prefix := "$args = @(0..([int]$env:TEWAKE_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"TEWAKE_TEST_PS_ARG_$_\") })\n"
+	scriptPath := filepath.Join(t.TempDir(), "sparerunner-test.ps1")
+	prefix := "$args = @(0..([int]$env:SPARERUNNER_TEST_PS_ARG_COUNT - 1) | ForEach-Object { [Environment]::GetEnvironmentVariable(\"SPARERUNNER_TEST_PS_ARG_$_\") })\n"
 	if err := os.WriteFile(scriptPath, []byte(prefix+script), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	commandArguments := []string{"-NoProfile", "-NonInteractive", "-File", scriptPath}
 	commandArguments = append(commandArguments, arguments...)
 	command := exec.Command("powershell.exe", commandArguments...)
-	command.Env = append(os.Environ(), fmt.Sprintf("TEWAKE_TEST_PS_ARG_COUNT=%d", len(arguments)))
+	command.Env = append(os.Environ(), fmt.Sprintf("SPARERUNNER_TEST_PS_ARG_COUNT=%d", len(arguments)))
 	for index, argument := range arguments {
-		command.Env = append(command.Env, fmt.Sprintf("TEWAKE_TEST_PS_ARG_%d=%s", index, argument))
+		command.Env = append(command.Env, fmt.Sprintf("SPARERUNNER_TEST_PS_ARG_%d=%s", index, argument))
 	}
 	return command
 }

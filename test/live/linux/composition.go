@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	liveSubsystem      = "twk-007-linux-live"
+	liveSubsystem      = "spr-007-linux-live"
 	liveShutdownBudget = 10 * time.Second
 	liveStatePollDelay = 200 * time.Millisecond
 )
@@ -123,7 +123,7 @@ func runLiveAcceptance(
 		ClientID:        config.GitHub.ClientID,
 		InstallationID:  config.GitHub.InstallationID,
 		PrivateKey:      privateKey,
-		System:          "tewake",
+		System:          "sparerunner",
 		Version:         "live-acceptance",
 		CommitSHA:       "unknown",
 		Subsystem:       liveSubsystem,
@@ -456,7 +456,7 @@ func stableTargetID(config liveConfig, scaleSet github.ScaleSet) domain.TargetID
 		scaleSet.Name,
 	)
 	digest := sha256.Sum256([]byte(identity))
-	return domain.TargetID("twk-live-" + hex.EncodeToString(digest[:]))
+	return domain.TargetID("spr-live-" + hex.EncodeToString(digest[:]))
 }
 
 type liveRunnerReleaseObserver interface {

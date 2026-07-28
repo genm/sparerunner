@@ -103,17 +103,17 @@ func TestReadServiceAuthorityBindsEffectiveRuntimeMainPIDUIDAndCgroup(t *testing
 	probe := validAuthorityProbe()
 	got, err := readServiceAuthority(
 		probe,
-		"tewake-agent.service",
+		"sparerunner-agent.service",
 		"serve",
-		"/var/lib/tewake-runtime",
-		"/etc/systemd/system/tewake-agent.service",
+		"/var/lib/sparerunner-runtime",
+		"/etc/systemd/system/sparerunner-agent.service",
 		1001,
 	)
 	if err != nil {
 		t.Fatalf("readServiceAuthority() error = %v", err)
 	}
 	if got.MainPID != 101 || got.UID != 1001 ||
-		got.ControlGroup != "/system.slice/tewake-agent.service" ||
+		got.ControlGroup != "/system.slice/sparerunner-agent.service" ||
 		got.ProcessStartTicks != 111 {
 		t.Fatalf("authority = %#v", got)
 	}
@@ -125,16 +125,16 @@ func TestReadServiceAuthorityRejectsDecoyRuntimeFakePIDWrongUIDAndPIDReuse(t *te
 		mutate func(*fakeAuthorityProbe)
 	}{
 		{name: "decoy runtime root", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] =
+			probe.properties["sparerunner-agent.service\x00ExecStart"] =
 				strings.Replace(
-					probe.properties["tewake-agent.service\x00ExecStart"],
-					"--runtime-root=/var/lib/tewake-runtime",
-					"--runtime-root=/var/lib/tewake-runtime-decoy",
+					probe.properties["sparerunner-agent.service\x00ExecStart"],
+					"--runtime-root=/var/lib/sparerunner-runtime",
+					"--runtime-root=/var/lib/sparerunner-runtime-decoy",
 					1,
 				)
 		}},
 		{name: "fake main pid", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00MainPID"] = "999"
+			probe.properties["sparerunner-agent.service\x00MainPID"] = "999"
 		}},
 		{name: "wrong uid", mutate: func(probe *fakeAuthorityProbe) {
 			probe.files["/proc/101/status"] = fakeStatus(1002)
@@ -143,49 +143,49 @@ func TestReadServiceAuthorityRejectsDecoyRuntimeFakePIDWrongUIDAndPIDReuse(t *te
 			probe.files["/proc/101/cgroup"] = []byte("0::/user.slice/decoy\n")
 		}},
 		{name: "missing start identity", mutate: func(probe *fakeAuthorityProbe) {
-			probe.files["/proc/101/stat"] = []byte("101 (tewake-agent) S 1 2\n")
+			probe.files["/proc/101/stat"] = []byte("101 (sparerunner-agent) S 1 2\n")
 		}},
 		{name: "fake argv executable", mutate: func(probe *fakeAuthorityProbe) {
-			probe.executables[101] = [2]string{"/tmp/tewake-agent", strings.Repeat("a", 64)}
+			probe.executables[101] = [2]string{"/tmp/sparerunner-agent", strings.Repeat("a", 64)}
 		}},
 		{name: "unexpected state directory", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] = strings.Replace(
-				probe.properties["tewake-agent.service\x00ExecStart"],
-				"--state-dir=/var/lib/tewake-agent",
+			probe.properties["sparerunner-agent.service\x00ExecStart"] = strings.Replace(
+				probe.properties["sparerunner-agent.service\x00ExecStart"],
+				"--state-dir=/var/lib/sparerunner-agent",
 				"--state-dir=/var/lib/decoy",
 				1,
 			)
 		}},
 		{name: "unexpected cache directory", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] = strings.Replace(
-				probe.properties["tewake-agent.service\x00ExecStart"],
-				"--cache-root=/var/cache/tewake-agent",
+			probe.properties["sparerunner-agent.service\x00ExecStart"] = strings.Replace(
+				probe.properties["sparerunner-agent.service\x00ExecStart"],
+				"--cache-root=/var/cache/sparerunner-agent",
 				"--cache-root=/var/cache/decoy",
 				1,
 			)
 		}},
 		{name: "wrong supervisor socket", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] = strings.Replace(
-				probe.properties["tewake-agent.service\x00ExecStart"],
-				"--supervisor-socket=/run/tewake-supervisor/supervisor.sock",
+			probe.properties["sparerunner-agent.service\x00ExecStart"] = strings.Replace(
+				probe.properties["sparerunner-agent.service\x00ExecStart"],
+				"--supervisor-socket=/run/sparerunner-supervisor/supervisor.sock",
 				"--supervisor-socket=/run/decoy.sock",
 				1,
 			)
 		}},
 		{name: "duplicate binary", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] +=
-				" /usr/local/bin/tewake-agent"
+			probe.properties["sparerunner-agent.service\x00ExecStart"] +=
+				" /usr/local/bin/sparerunner-agent"
 		}},
 		{name: "unexpected flag", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00ExecStart"] = strings.Replace(
-				probe.properties["tewake-agent.service\x00ExecStart"],
+			probe.properties["sparerunner-agent.service\x00ExecStart"] = strings.Replace(
+				probe.properties["sparerunner-agent.service\x00ExecStart"],
 				" ; ignore_errors",
 				" --unexpected ; ignore_errors",
 				1,
 			)
 		}},
 		{name: "untrusted drop in", mutate: func(probe *fakeAuthorityProbe) {
-			probe.properties["tewake-agent.service\x00DropInPaths"] =
+			probe.properties["sparerunner-agent.service\x00DropInPaths"] =
 				"/run/user/1001/decoy.conf"
 		}},
 	}
@@ -195,10 +195,10 @@ func TestReadServiceAuthorityRejectsDecoyRuntimeFakePIDWrongUIDAndPIDReuse(t *te
 			testCase.mutate(&probe)
 			if _, err := readServiceAuthority(
 				probe,
-				"tewake-agent.service",
+				"sparerunner-agent.service",
 				"serve",
-				"/var/lib/tewake-runtime",
-				"/etc/systemd/system/tewake-agent.service",
+				"/var/lib/sparerunner-runtime",
+				"/etc/systemd/system/sparerunner-agent.service",
 				1001,
 			); !errors.Is(err, errNodeEvidenceInvalid) {
 				t.Fatalf("readServiceAuthority() error = %v, want errNodeEvidenceInvalid", err)
@@ -209,13 +209,13 @@ func TestReadServiceAuthorityRejectsDecoyRuntimeFakePIDWrongUIDAndPIDReuse(t *te
 
 func TestReadSupervisorAuthorityRejectsWrongSocketFenceAndUsers(t *testing.T) {
 	for _, replacement := range [][2]string{
-		{"--socket=/run/tewake-supervisor/supervisor.sock", "--socket=/run/decoy.sock"},
-		{"--fence-root=/var/lib/tewake-supervisor/fences", "--fence-root=/var/lib/decoy"},
-		{"--runner-user=tewake-runner-0", "--runner-user=root"},
-		{"--agent-user=tewake-agent", "--agent-user=root"},
+		{"--socket=/run/sparerunner-supervisor/supervisor.sock", "--socket=/run/decoy.sock"},
+		{"--fence-root=/var/lib/sparerunner-supervisor/fences", "--fence-root=/var/lib/decoy"},
+		{"--runner-user=sparerunner-runner-0", "--runner-user=root"},
+		{"--agent-user=sparerunner-agent", "--agent-user=root"},
 	} {
 		probe := validAuthorityProbe()
-		key := "tewake-supervisor.service\x00ExecStart"
+		key := "sparerunner-supervisor.service\x00ExecStart"
 		probe.properties[key] = strings.Replace(
 			probe.properties[key],
 			replacement[0],
@@ -224,10 +224,10 @@ func TestReadSupervisorAuthorityRejectsWrongSocketFenceAndUsers(t *testing.T) {
 		)
 		if _, err := readServiceAuthority(
 			probe,
-			"tewake-supervisor.service",
+			"sparerunner-supervisor.service",
 			"supervisor",
-			"/var/lib/tewake-runtime",
-			"/etc/systemd/system/tewake-supervisor.service",
+			"/var/lib/sparerunner-runtime",
+			"/etc/systemd/system/sparerunner-supervisor.service",
 			0,
 		); !errors.Is(err, errNodeEvidenceInvalid) {
 			t.Fatalf(
@@ -241,9 +241,9 @@ func TestReadSupervisorAuthorityRejectsWrongSocketFenceAndUsers(t *testing.T) {
 
 func TestParseEffectiveExecStartRejectsDuplicateAndPrefixRuntimeArguments(t *testing.T) {
 	for _, value := range []string{
-		"{ /usr/local/bin/tewake-agent ; /usr/local/bin/tewake-agent serve --runtime-root=/runtime --runtime-root=/decoy ; }",
-		"{ /usr/local/bin/tewake-agent ; /usr/local/bin/tewake-agent serve --runtime-root=/runtime-extra ; }",
-		"{ /tmp/tewake-agent ; /tmp/tewake-agent serve --runtime-root=/runtime ; }",
+		"{ /usr/local/bin/sparerunner-agent ; /usr/local/bin/sparerunner-agent serve --runtime-root=/runtime --runtime-root=/decoy ; }",
+		"{ /usr/local/bin/sparerunner-agent ; /usr/local/bin/sparerunner-agent serve --runtime-root=/runtime-extra ; }",
+		"{ /tmp/sparerunner-agent ; /tmp/sparerunner-agent serve --runtime-root=/runtime ; }",
 	} {
 		argv, err := parseEffectiveExecStart(value)
 		if err == nil &&
@@ -254,8 +254,8 @@ func TestParseEffectiveExecStartRejectsDuplicateAndPrefixRuntimeArguments(t *tes
 }
 
 func TestParseEffectiveExecStartAcceptsRealSystemdShowSerialization(t *testing.T) {
-	expected := expectedServiceArgv("serve", "/var/lib/tewake-runtime")
-	value := "{ path=/usr/local/bin/tewake-agent ; argv[]=" +
+	expected := expectedServiceArgv("serve", "/var/lib/sparerunner-runtime")
+	value := "{ path=/usr/local/bin/sparerunner-agent ; argv[]=" +
 		strings.Join(expected, " ") +
 		" ; ignore_errors=no ; start_time=[Sun 2026-07-27 12:00:00 JST] ; " +
 		"stop_time=[n/a] ; pid=101 ; code=(null) ; status=0/0 }"
@@ -285,12 +285,12 @@ func validAuthorityProbe() fakeAuthorityProbe {
 		cgroup              string
 		ticks               uint64
 	}{
-		{"tewake-agent.service", "serve", "tewake-agent", 101, 1001, "/system.slice/tewake-agent.service", 111},
-		{"tewake-supervisor.service", "supervisor", "root", 202, 0, "/system.slice/tewake-supervisor.service", 222},
+		{"sparerunner-agent.service", "serve", "sparerunner-agent", 101, 1001, "/system.slice/sparerunner-agent.service", 111},
+		{"sparerunner-supervisor.service", "supervisor", "root", 202, 0, "/system.slice/sparerunner-supervisor.service", 222},
 	} {
 		properties[service.unit+"\x00ExecStart"] =
-			"{ path=/usr/local/bin/tewake-agent ; argv[]=" +
-				strings.Join(expectedServiceArgv(service.command, "/var/lib/tewake-runtime"), " ") +
+			"{ path=/usr/local/bin/sparerunner-agent ; argv[]=" +
+				strings.Join(expectedServiceArgv(service.command, "/var/lib/sparerunner-runtime"), " ") +
 				" ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
 		properties[service.unit+"\x00MainPID"] = strconv.Itoa(service.pid)
 		properties[service.unit+"\x00ControlGroup"] = service.cgroup
@@ -304,32 +304,32 @@ func validAuthorityProbe() fakeAuthorityProbe {
 	return fakeAuthorityProbe{
 		properties: properties,
 		unitContents: map[string][]byte{
-			"tewake-agent.service":      []byte("agent unit\n"),
-			"tewake-supervisor.service": []byte("supervisor unit\n"),
+			"sparerunner-agent.service":      []byte("agent unit\n"),
+			"sparerunner-supervisor.service": []byte("supervisor unit\n"),
 		},
 		uids: map[string]int{
-			"tewake-agent":    1001,
-			"tewake-runner-0": 1002,
+			"sparerunner-agent":    1001,
+			"sparerunner-runner-0": 1002,
 		},
 		files: files,
 		executables: map[int][2]string{
-			101: {"/usr/local/bin/tewake-agent", strings.Repeat("a", 64)},
-			202: {"/usr/local/bin/tewake-agent", strings.Repeat("a", 64)},
+			101: {"/usr/local/bin/sparerunner-agent", strings.Repeat("a", 64)},
+			202: {"/usr/local/bin/sparerunner-agent", strings.Repeat("a", 64)},
 		},
 		fileDigests: map[string]string{
-			"/usr/local/bin/tewake-agent": strings.Repeat("a", 64),
+			"/usr/local/bin/sparerunner-agent": strings.Repeat("a", 64),
 		},
 		buildVCS: map[string][2]string{
-			"/usr/local/bin/tewake-agent": {strings.Repeat("1", 40), "false"},
+			"/usr/local/bin/sparerunner-agent": {strings.Repeat("1", 40), "false"},
 		},
 		runnerAuthority: [3]string{
-			"/var/lib/tewake-runtime/.tewake-official/test/archive",
+			"/var/lib/sparerunner-runtime/.sparerunner-official/test/archive",
 			strings.Repeat("5", 64),
 			"1",
 		},
 		trustedFiles: map[string]bool{
-			"/etc/systemd/system/tewake-agent.service":      true,
-			"/etc/systemd/system/tewake-supervisor.service": true,
+			"/etc/systemd/system/sparerunner-agent.service":      true,
+			"/etc/systemd/system/sparerunner-supervisor.service": true,
 		},
 		commit: strings.Repeat("1", 40),
 		clean:  true,

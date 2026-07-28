@@ -180,7 +180,7 @@ func (store *evidenceStore) writeJSON(name string, value any) error {
 		return errMacOSEvidenceInvalid
 	}
 	encoded = append(encoded, '\n')
-	temporary, err := os.CreateTemp(store.directory, ".tewake-macos-evidence-")
+	temporary, err := os.CreateTemp(store.directory, ".sparerunner-macos-evidence-")
 	if err != nil {
 		return errMacOSEvidenceInvalid
 	}

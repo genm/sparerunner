@@ -11,7 +11,7 @@ import (
 )
 
 func TestMain(m *testing.M) {
-	root, err := os.MkdirTemp(".", ".tewake-live-test-")
+	root, err := os.MkdirTemp(".", ".sparerunner-live-test-")
 	if err != nil {
 		panic(err)
 	}

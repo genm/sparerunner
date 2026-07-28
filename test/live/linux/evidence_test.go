@@ -234,7 +234,7 @@ func TestResultEvidenceAlwaysEmitsWarmLatencyForPassingZeroMillis(t *testing.T) 
 		Mode:                     string(modeNormal),
 		Status:                   "passed",
 		TargetID:                 "target",
-		PrivateRepository:        "genm/tewake-private",
+		PrivateRepository:        "genm/sparerunner-private",
 		NodeID:                   "0123456789abcdef0123456789abcdef",
 		ScaleSetID:               41,
 		ControllerEpoch:          2,
