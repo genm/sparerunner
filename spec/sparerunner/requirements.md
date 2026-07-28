@@ -605,7 +605,24 @@ as something the specification always intended.
   test and build environments; a VM mode is the only credible path toward public
   repositories and fork-originated pull requests, which native mode must never
   claim. Either one adds an isolation contract and a threat model, so neither is
-  a configuration flag on the existing runtime.
+  a configuration flag on the existing runtime. The same work owns detecting
+  Docker/Podman and virtualization capability on each node and recommending an
+  execution mode from repository visibility and platform; today the Agent
+  measures neither because no mode consumes them.
+- **Usage-intent presets with derived concurrency.** The original product
+  definition envisioned the node owner choosing an intent — "don't disturb my
+  work", "use freely when idle", or "dedicated runner" — and SpareRunner deriving
+  per-node concurrency and admission thresholds from measured CPU and memory.
+  The current release exposes the raw dials instead: `maxRunners` defaults to 1,
+  the owner toggles a binary availability intent, and CPU usage is observability
+  data rather than a capacity input. A preset layer would change scheduling
+  admission and needs its own load-measurement contract, so it is a scope change,
+  not a UI relabeling of `maxRunners`.
+- **An environment diagnosis command.** A `sprun doctor`-style command that
+  checks service installation, local control reachability, containment
+  prerequisites, and GitHub connectivity in one report. Today those diagnoses
+  are spread across `sprun node status`, fail-closed startup errors, and the
+  Web UI setup state.
 - **Participation outside one LAN.** The fleet is LAN-first because that is what
   the current transport and discovery guarantee. NAT traversal or a relay would
   let an owner lend a computer from another network without a VPN, an open
