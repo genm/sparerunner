@@ -40,7 +40,12 @@ func EndpointPath(stateDirectory string) (string, error) {
 // address, and the socket is private to the service account: authorization is
 // enforced per connection, but the filesystem permission keeps an unrelated
 // local user from reaching the endpoint at all.
-func Listen(stateDirectory string) (net.Listener, error) {
+//
+// owners is ignored here. Unix names the authorized principals once, in the
+// per-connection allowlist, because the socket mode already restricts who can
+// reach the endpoint. Windows has no such mode and must name them again in the
+// pipe DACL, so the parameter exists to keep one signature and one call site.
+func Listen(stateDirectory string, _ []string) (net.Listener, error) {
 	path, err := EndpointPath(stateDirectory)
 	if err != nil {
 		return nil, err

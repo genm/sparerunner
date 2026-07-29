@@ -2,18 +2,21 @@ package app
 
 import (
 	"log/slog"
-	"os"
 
 	"github.com/genm/sparerunner/internal/nodectl"
 )
 
 // AgentLocalControlOptions configures the same-host endpoint the tray, the
 // launcher, and the CLI use. Authorization is an explicit allowlist of local
-// user IDs: the service account itself, plus any node-owner desktop account the
-// operator names. An empty allowlist authorizes nobody.
+// principals: the service account itself, plus any node-owner desktop account
+// the operator names. The naming is per platform because the two systems have no
+// common principal type — OwnerUIDs on Unix, OwnerSIDs on Windows — and the
+// option that does not apply to the running platform is ignored. An empty
+// allowlist authorizes nobody but the service account.
 type AgentLocalControlOptions struct {
 	Enabled   bool
 	OwnerUIDs []int
+	OwnerSIDs []string
 	Logger    *slog.Logger
 }
 
@@ -23,20 +26,25 @@ func startAgentLocalControl(
 	options AgentLocalControlOptions,
 	logger *slog.Logger,
 ) (*nodectl.Server, error) {
-	listener, err := nodectl.Listen(stateDirectory)
+	// The principal list is resolved before the endpoint exists so a
+	// misconfigured owner fails startup instead of producing a listening
+	// endpoint that silently authorizes fewer accounts than the operator asked
+	// for.
+	principals, authorizer, err := localControlPrincipals(options)
 	if err != nil {
 		return nil, err
 	}
-	// The service account always reaches its own endpoint; extra desktop owners
-	// are additive and explicit.
-	uids := append([]int{os.Geteuid()}, options.OwnerUIDs...)
+	listener, err := nodectl.Listen(stateDirectory, principals)
+	if err != nil {
+		return nil, err
+	}
 	controlLogger := options.Logger
 	if controlLogger == nil {
 		controlLogger = logger
 	}
 	server, err := nodectl.Serve(listener, nodectl.ServerOptions{
 		Controller: availability,
-		Authorizer: nodectl.NewUIDAllowlist(uids...),
+		Authorizer: authorizer,
 		Logger:     controlLogger,
 	})
 	if err != nil {
@@ -46,7 +54,7 @@ func startAgentLocalControl(
 	controlLogger.Info(
 		"node control endpoint listening",
 		"component", "nodectl",
-		"authorized_uid_count", len(uids),
+		"authorized_principal_count", len(principals),
 	)
 	return server, nil
 }
