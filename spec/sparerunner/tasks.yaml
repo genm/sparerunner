@@ -908,3 +908,33 @@ tasks:
       - "`sprun doctor` reports which native runner mode this Linux host can run, and names the missing prerequisite (kernel, cgroup v2, user delegation, linger, root Supervisor) when one cannot."
       - "`sprun join` against the packaged user-service state directory prints the `systemctl --user` restart instruction and never a second `sparerunner-agent serve` command."
       - The Linux README states the vanilla-runner comparison and the reason each prerequisite exists, and the sudo-free quickstart is no longer than the manual registration flow it replaces.
+
+  - id: task-028
+    title: Evaluate user-namespace UID separation as the single Linux mode
+    type: platform
+    description: >
+      The root Supervisor exists for exactly one property: UID separation
+      between the Agent and the job. User namespaces with subordinate IDs
+      (`/etc/subuid`, `newuidmap`) provide that property without a
+      project-owned root daemon, which is how rootless container runtimes
+      obtained real isolation while deleting their privileged component.
+      Evaluate with a working spike whether a userns-based native runner can
+      satisfy every containment acceptance of the existing modes; if it can,
+      adopt it as the single Linux mode and deprecate both the root Supervisor
+      and the operator-facing mode choice, and if it cannot, record the exact
+      blocking evidence as the reason two modes remain.
+    depends_on: [task-007, task-021]
+    paths:
+      - spec/sparerunner
+      - internal/platform/linux
+      - docs/security
+    ci_targets: [lint, test]
+    status: todo
+    notes:
+      - "2026-07-29: Recorded as the corrective follow-up to two unexamined judgments. First, the specification chose a custom root daemon as the UID-separation mechanism without evaluating the unprivileged alternative; no revision of requirements.md or design.md mentions user namespaces, subuid, or newuidmap, so the requirement was the consequence of the chosen mechanism rather than a proven necessity. Second, the root daemon is itself attack surface that a vanilla runner machine does not have: the Supervisor accepts a protocol from the network-parsing Agent, so a Supervisor bug is a root compromise, while the vanilla worst case is a user compromise. Sequencing the root mode first also produced the two-mode operator choice that task-027 then had to document."
+      - "2026-07-29: Known friction to weigh honestly rather than assume away: Ubuntu 24.04 restricts unprivileged user namespaces through AppArmor by default, so a one-time root-installed profile may remain as a residual root step and must be recorded as such; newuidmap is also setuid-root code, though distribution-owned rather than project-owned; workspace statx identity verification must hold across the UID mapping; the root-verified package authority and the Agent-restart-surviving fence semantics need a stated new owner. The decision must compare residual root steps against the root Supervisor's standing attack surface, not against zero."
+    acceptance:
+      - A spike proves or refutes, with machine-readable evidence on Ubuntu LTS and one non-Ubuntu mainstream distribution, that a real job executes under a subordinate UID inside a delegated cgroup with cgroup.kill descendant termination, exec-boundary workspace verification across the UID mapping, one-shot JIT delivery, and verified cleanup.
+      - The recorded decision names every residual root step (for example an AppArmor profile) and weighs it against the root Supervisor's standing root-daemon surface; neither alternative is compared against an assumed zero.
+      - If adopted, follow-up implementation and deprecation tasks are filed and the mode-choice documentation collapses to one mode; if refuted, the Linux README's mode rationale cites the recorded blocking evidence.
+      - The evaluation changes no runtime behavior by itself; both existing modes remain fail-closed and unmodified until a follow-up task lands.
