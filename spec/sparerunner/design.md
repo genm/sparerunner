@@ -899,9 +899,9 @@ an in-memory replay ledger, is sent only in that request, and is then cleared. T
 root and proof are never placed in argv, environment variables, SQLite, config,
 logs, audit rows, or response bodies.
 
-SPR-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
+task-012 therefore exposes an owner-authorized CLI/API bootstrap, not a direct
 browser bootstrap. JavaScript cannot read the Controller credential and a plain
-same-origin session POST returns 401. SPR-013 adds a device-code-style browser
+same-origin session POST returns 401. task-013 adds a device-code-style browser
 handoff without putting a bearer credential in a URL or command argument:
 
 1. the browser creates a random 256-bit claim secret with Web Crypto, retains it
@@ -1347,6 +1347,41 @@ secrets, or raw environment snapshots.
 
 Test evidence is emitted as JSON or JUnit and aggregated by `just check`. Debug
 artifacts have explicit short retention and are uploaded only on failure.
+
+### Continuous verification surfaces
+
+Verification is split by what a pull request can afford to wait for, not by
+importance. Standard GitHub-hosted runners are free and unmetered for a public
+repository, so the constraint on required CI is feedback latency, and work that
+only needs wall-clock time is moved off the merge path instead of being dropped.
+
+Required pull-request CI keeps the fast, deterministic gates, plus the scanners
+that report per change: static analysis of workflows and shell, generated-artifact
+drift, Go quality and lint across the three target platforms, one pass of the Go
+and Web suites, the race detector over the packages that own the controller's
+concurrency, `govulncheck`, the cross-build matrix, CodeQL, and dependency review
+of newly introduced packages.
+
+The nightly deep-verification workflow gates nothing and covers the two things
+required CI deliberately leaves out:
+
+- Coverage-guided fuzzing of the untrusted decoding boundaries — the join code an
+  operator pastes, the agent WebSocket envelope, and the operator configuration
+  document in both codecs — one job per target with a corpus that accumulates
+  across runs. Each target asserts a differential property rather than the
+  absence of a panic, because the security value of these decoders is that they
+  accept exactly one representation of exactly one meaning
+- The whole module under the race detector with shuffled repetition on all three
+  operating systems. Required CI's race job is scoped to five packages because
+  the controller application and store suites are far too slow under the
+  detector to hold a pull request; this is where they are covered, and where
+  order dependence between tests is exposed
+It runs on a schedule and on manual dispatch only. A workflow that gates nothing
+must not re-check a pull request's unrelated surface, so nothing about it is
+attached to a pull request event.
+
+A finding on the nightly surface is a defect in shipped behavior and is triaged
+as one, not as a failure of whichever change happened to be merged last.
 
 ## Rollout and Release
 

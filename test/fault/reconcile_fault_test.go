@@ -476,17 +476,17 @@ func killFaultHelper(
 		}
 		ready <- ""
 	}()
-	select {
-	case line := <-ready:
-		if !strings.HasPrefix(line, "READY ") {
-			_ = command.Process.Kill()
-			_ = command.Wait()
-			t.Fatalf("helper failed before commit: line=%q stderr=%q", line, stderr.String())
-		}
-	case <-time.After(10 * time.Second):
+	// The helper is this same race-instrumented test binary, and it opens SQLite
+	// and commits before it can print, so how long that takes is a property of
+	// the machine rather than of the boundary under test. A fixed deadline here
+	// reported a loaded machine as a durability failure. A helper that dies
+	// instead closes stdout and is reported immediately below, and a helper that
+	// truly hangs is owned by the package's own `go test -timeout`, which also
+	// dumps every goroutine.
+	if line := <-ready; !strings.HasPrefix(line, "READY ") {
 		_ = command.Process.Kill()
 		_ = command.Wait()
-		t.Fatalf("helper did not reach durable boundary: %s", stderr.String())
+		t.Fatalf("helper failed before commit: line=%q stderr=%q", line, stderr.String())
 	}
 	if err := command.Process.Kill(); err != nil {
 		t.Fatal(err)

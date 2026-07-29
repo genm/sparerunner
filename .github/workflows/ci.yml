@@ -52,6 +52,10 @@ jobs:
       - name: Audit workflows for supply-chain and injection patterns
         uses: zizmorcore/zizmor-action@6fc4b006235f201fdab3722e17240ab420d580e5 # v0.6.1
         with:
+          # Pinned to the same version .mise.toml installs, so `just lint`
+          # applies exactly the rules this gate applies. The Action's own
+          # default is `latest`, which drifts.
+          version: 1.28.0
           # zizmor's own SARIF upload needs security-events: write, which a fork
           # pull request cannot have. Failing the job keeps the signal blocking
           # and identical for every contributor.
@@ -84,7 +88,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -96,7 +100,7 @@ jobs:
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
@@ -126,7 +130,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -172,7 +176,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: go-quality-failure-${{ github.run_attempt }}
           path: output/test-results/
@@ -202,7 +206,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -246,7 +250,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -269,7 +273,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: go-race-failure-${{ github.run_attempt }}
           path: output/test-results/
@@ -287,7 +291,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -316,7 +320,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -326,7 +330,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: go-platform-failure-${{ github.run_attempt }}
           path: output/test-results/
@@ -350,7 +354,7 @@ jobs:
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
@@ -375,7 +379,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-failure-${{ github.run_attempt }}
           path: output/test-results/
@@ -395,7 +399,7 @@ jobs:
       # This extension uses npm, not pnpm, because that is what the Raycast
       # publishing pipeline expects.
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'npm' || '' }}
@@ -430,7 +434,7 @@ jobs:
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
@@ -467,7 +471,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: web-components-failure-${{ github.run_attempt }}
           path: |
@@ -488,7 +492,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -500,7 +504,7 @@ jobs:
           run_install: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.15.0
           cache: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) && 'pnpm' || '' }}
@@ -529,7 +533,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: browser-journey-failure-${{ github.run_attempt }}
           path: |
@@ -557,7 +561,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
@@ -602,7 +606,7 @@ jobs:
 
       - name: Upload failure evidence
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: go-${{ matrix.os }}-failure-${{ github.run_attempt }}
           path: output/test-results/
@@ -620,7 +624,7 @@ jobs:
           persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
           cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}

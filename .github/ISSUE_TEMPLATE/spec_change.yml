@@ -57,11 +57,11 @@ body:
       label: Specification impact
       description: >-
         Which requirement clauses, design sections, and task IDs would change. Use
-        `spr-NNN` task IDs where you know them.
+        `task-NNN` task IDs where you know them.
       placeholder: |
         requirements.md: capacity control section
         design.md: agent local control ownership
-        tasks.yaml: spr-019
+        tasks.yaml: task-019
     validations:
       required: true
 

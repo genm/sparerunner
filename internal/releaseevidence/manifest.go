@@ -29,7 +29,7 @@ var (
 	commitPattern = regexp.MustCompile(`^[0-9a-fA-F]{40,64}$`)
 )
 
-// Manifest is the only accepted aggregate format for the SPR-014 live gate.
+// Manifest is the only accepted aggregate format for the task-014 live gate.
 // It deliberately contains observations and identifiers, never credentials,
 // tokens, JIT material, or free-form diagnostic payloads.
 type Manifest struct {

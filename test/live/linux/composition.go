@@ -20,7 +20,7 @@ import (
 )
 
 const (
-	liveSubsystem      = "spr-007-linux-live"
+	liveSubsystem      = "task-007-linux-live"
 	liveShutdownBudget = 10 * time.Second
 	liveStatePollDelay = 200 * time.Millisecond
 )

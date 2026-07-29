@@ -1,13 +1,13 @@
 # Release runbook
 
 The release workflow is intentionally tag-driven and creates a GitHub draft. A
-draft is not a supported release: publish it only after the SPR-014 live gate
+draft is not a supported release: publish it only after the task-014 live gate
 has accepted a real Linux, macOS, and Windows node plus two private GitHub App
 installations.
 
-Task IDs merged before the SpareRunner rename (spr-022) use the older `twk-NNN`
-prefix, including in commit messages and pull request titles. The mapping is
-positional: `twk-014` is `spr-014`.
+Commit messages and pull request titles merged under the earlier `twk-NNN` and
+`spr-NNN` prefixes are not rewritten. `spec/sparerunner/tasks.yaml` holds the
+single mapping; do not restate it here.
 
 ## Local artifact check
 
@@ -47,10 +47,10 @@ Pushing `v*` runs [.github/workflows/release.yml](../.github/workflows/release.y
 5. A failed check uploads `dist/` for three days only.
 
 Before pushing the tag, the release owner must validate the separately captured
-SPR-014 manifest from the trusted Linux/macOS/Windows sandbox:
+task-014 manifest from the trusted Linux/macOS/Windows sandbox:
 
 ```bash
-just validate-release-evidence output/release-evidence/spr-014.json
+just validate-release-evidence output/release-evidence/task-014.json
 ```
 
 This command must return zero on the exact trusted commit that will be tagged.

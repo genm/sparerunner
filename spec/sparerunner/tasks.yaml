@@ -1,12 +1,20 @@
-# Task IDs were `twk-NNN` before the SpareRunner rename (spr-022). The mapping is
-# exact and positional: `twk-NNN` is the same task as `spr-NNN`. Commits and pull
-# requests merged before that change use the old prefix, and Git history is not
-# rewritten to match.
+# A task ID is an opaque, permanent handle. It is minted once, never reused, and
+# never renumbered. `task-` names what the identifier refers to, not what the
+# product is called: renaming the product must never renumber the task graph
+# again. Gaps are normal and mean a task was abandoned, not that one is missing.
+#
+# The number is mint order, not execution order. Execution order is `depends_on`
+# and nothing else, so a task can be inserted without touching any other entry.
+# Never read a lower number as "comes first".
+#
+# History: IDs were `twk-NNN`, then `spr-NNN` after the product rename. Both map
+# positionally to `task-NNN`, so `twk-007` and `spr-007` are `task-007`. Commits
+# and pull requests merged under the old prefixes are not rewritten.
 version: 1
 feature: sparerunner
 
 tasks:
-  - id: spr-001
+  - id: task-001
     title: Bootstrap the OSS repository and specification
     type: foundation
     description: >
@@ -38,7 +46,6 @@ tasks:
       - web
       - scripts/cross-build.sh
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 1
     status: done
     acceptance:
       - The requirements, design, and task vocabulary are consistent and executable.
@@ -46,20 +53,19 @@ tasks:
       - "`sprun` and `sparerunner-agent` cross-compile for supported Linux, macOS, and Windows targets."
       - Required CI always reports and uses only GitHub-hosted runners.
 
-  - id: spr-002
+  - id: task-002
     title: Prove and isolate the GitHub scale-set contract
     type: integration
     description: >
       Pin the official scale-set client behind an internal adapter and prove App
       Manifest, multiple installations, scale-set lifecycle, JIT generation,
       message replay, and job pickup behavior in a private sandbox.
-    depends_on: [spr-001]
+    depends_on: [task-001]
     paths:
       - internal/github
       - test/contract/github
       - docs/github-sandbox.md
     ci_targets: [lint, test, build]
-    pr_order: 2
     status: done
     notes:
       - "2026-07-26: Local fake-contract coverage proves commit-before-ack, replay, acknowledgement-failure redelivery, and JIT redaction. Private GitHub sandbox acceptance remains pending."
@@ -73,17 +79,16 @@ tasks:
       - JIT configuration is passed as a secret value and is absent from persistence and logs.
       - Startup latency and GitHub's current pickup/requeue behavior are measured in the sandbox.
 
-  - id: spr-003
+  - id: task-003
     title: Implement domain states and invariants
     type: backend
     description: >
       Define Node, Target, Runner Profile, Slot, Execution, command, epoch, and
       transition contracts without infrastructure dependencies.
-    depends_on: [spr-001]
+    depends_on: [task-001]
     paths:
       - internal/domain
     ci_targets: [lint, test, build]
-    pr_order: 3
     status: done
     notes: >
       Accepted locally: randomized and concurrent slot-ledger properties, execution
@@ -95,18 +100,17 @@ tasks:
       - A repeated command ID with a different payload is rejected.
       - Terminal executions cannot return to an active state.
 
-  - id: spr-004
+  - id: task-004
     title: Implement crash-safe controller and agent stores
     type: backend
     description: >
       Add versioned migrations, WAL SQLite stores, atomic message/reservation
       persistence, controller epochs, agent journal, backup, and recovery mode.
-    depends_on: [spr-003]
+    depends_on: [task-003]
     paths:
       - internal/store
       - internal/store/migrations
     ci_targets: [lint, test, build]
-    pr_order: 4
     status: done
     notes: >
       Hosted Linux, macOS, Windows, quality, and six-target cross-build CI run
@@ -115,21 +119,21 @@ tasks:
       the exact snapshot and replay without duplicates. A second kill proves migration
       rollback, and an unrelated SQLite fixture remains byte-for-byte unchanged when
       rejected. Physical power-loss and end-to-end GitHub/runner crash windows remain
-      gates for spr-007/spr-011.
+      gates for task-007/task-011.
     acceptance:
       - Message, reservation, and desired execution commit atomically.
       - Crash-boundary integration tests recover without duplicate active executions.
       - Migration failure leaves the original database intact and readiness degraded.
       - Backup and restore exclude OS-keystore secrets.
 
-  - id: spr-005
+  - id: task-005
     title: Implement enrollment and authenticated agent transport
     type: backend
     description: >
       Implement controller identity, fingerprinted one-time join codes, node key
       generation, mDNS discovery, node certificates, outbound mTLS WebSockets, and
       the versioned envelope.
-    depends_on: [spr-003, spr-004]
+    depends_on: [task-003, task-004]
     paths:
       - internal/enroll
       - internal/transport
@@ -138,7 +142,6 @@ tasks:
       - cmd/sparerunner-agent
       - scripts/test-enrollment-cli-linux.sh
     ci_targets: [lint, test, build]
-    pr_order: 5
     status: done
     notes:
       - "2026-07-26: Linux controller init/serve, pinned one-time enrollment, durable same-key response replay, authenticated WSS confirmation, agent reconnect, revocation interruption, strict protocol envelopes, and loopback-only management listener pass race tests."
@@ -150,20 +153,19 @@ tasks:
       - mDNS results are ignored until the pinned fingerprint is verified.
       - Leaf renewal preserves Node ID and rejects expired or superseded certificate serials.
 
-  - id: spr-006
+  - id: task-006
     title: Implement the native runner lifecycle
     type: backend
     description: >
       Implement package caching, runtime preparation, process supervision,
       one-job execution, cleanup verification, and quarantine using a fake runner
       before live GitHub integration.
-    depends_on: [spr-003, spr-005]
+    depends_on: [task-003, task-005]
     paths:
       - internal/runner
       - test/integration/runner
       - scripts/test-runner-linux.sh
     ci_targets: [lint, test, build]
-    pr_order: 6
     status: done
     acceptance:
       - EnsurePrepared and EnsureRunning are idempotent for one ExecutionID.
@@ -205,15 +207,15 @@ tasks:
       cleanup removes runner credential/workspace canaries.
       SQLite-backed runner journal, dedicated OS identity, actual systemd/launchd/
       Job Object ownership, live official-runner execution, and service/process
-      restart recovery remain spr-007/spr-008/spr-009/spr-011 platform gates.
+      restart recovery remain task-007/task-008/task-009/task-011 platform gates.
 
-  - id: spr-007
+  - id: task-007
     title: Complete the Linux vertical slice
     type: platform
     description: >
       Add systemd service-account packaging and run the first real private GitHub
       job through the controller, Linux agent, scale set, and native runner.
-    depends_on: [spr-002, spr-004, spr-005, spr-006]
+    depends_on: [task-002, task-004, task-005, task-006]
     paths:
       - .github/workflows/ci.yml
       - cmd/sparerunner-agent
@@ -227,7 +229,6 @@ tasks:
       - scripts/test-platform-linux.sh
       - test/live/linux
     ci_targets: [lint, test, build, e2e]
-    pr_order: 7
     status: in_progress
     notes:
       - "2026-07-26: The durable single-slot Linux vertical now composes authenticated Agent snapshots, Controller slot claims, prepare/start commands, Agent outbox acknowledgement, official scale-set polling, and a root-owned cgroup-v2 Supervisor behind a fixed local protocol. Local race tests cover command replay, commit-before-ack recovery, fast terminal jobs, disconnect cleanup, unavailable native runtime, and cleanup quarantine."
@@ -236,6 +237,8 @@ tasks:
       - "2026-07-27: The live driver now rejects dirty or mismatched build provenance and builds linked worktrees through a detached non-hardlinked local clone. This prevents Go from stamping an in-repository worktree binary with the containing checkout's unrelated HEAD while reporting vcs.modified=false."
       - "2026-07-27: Ubuntu systemd execution exposed two real packaging mismatches: Delegate=yes had changed the Supervisor cgroup to root:sparerunner-agent, and RuntimeDirectory= reapplied the new root primary group after ExecStartPre=. The unit now keeps its primary group and delegated cgroup root-owned while a separate tmpfiles rule owns only the local socket directory as root:sparerunner-agent; packaging tests reject either ownership regression."
       - "2026-07-27: Ubuntu 24.04 arm64 preflight now starts the Supervisor with a root:root delegated cgroup, root:sparerunner-agent 0750 socket directory, and root:sparerunner-agent 0660 socket. Deliberately changing the socket directory to root:root produced no socket and an explicit failed service result; rerunning the package tmpfiles rule restored the active service."
+      - "2026-07-29: Linux had no installation path of its own: the packaged units, sysusers, and tmpfiles definitions existed as material with a README procedure, while macOS and Windows each owned a verified installer. `packaging/linux/install-service.sh` and `uninstall-service.sh` now own that contract with the same discipline as `packaging/macos/install-service.sh`: a fixed absolute command surface, test indirection that root never accepts, fail-closed preflight before the first mutation, no-clobber publication through staged hard links, and verified rollback that only removes files still matching the package. Preflight rejects a kernel older than 5.14, a hierarchy other than unified cgroup v2, a missing or group-writable agent binary, a symlinked or world-writable installation ancestor, an installed file that differs from this package, an already-running service, and an unmarked Supervisor state root holding foreign content. The declared directory contract is read from the packaged `tmpfiles.d/sparerunner.conf` rather than restated, because systemd-sysusers and systemd-tmpfiles silently adopt an existing tree; an existing declared directory owned by another identity or missing its service identity fails before either tool runs."
+      - "2026-07-29: The installer gates on the Supervisor and its socket, not on both services. Installation precedes enrollment by design, so an Agent that exits not-initialized and is restarted by systemd is reported as a pending enrollment step; once /var/lib/sparerunner-agent holds node state, a non-running Agent fails the install instead. `sprun join --state-dir /var/lib/sparerunner-agent` now prints the systemd restart instruction on Linux for that exact packaged path, so the packaged flow never tells an operator to start a second `sparerunner-agent serve` beside the unit. Uninstall stops both services and removes only files it re-verifies against the package immediately before removal, refuses a locally modified unit, and retains node state, accounts, and directories because a durable node credential is not this script's decision to destroy. `packaging/linux/install_service_integration_test.go` drives both scripts against a faked command surface: clean install, owned retry that republishes nothing, running-service refusal, pending-enrollment reporting, the enrolled dead-Agent gate, eleven preflight rejections each asserted by their own failure reason, rollback convergence after each of six mutation failures, and the uninstall paths. Real-machine install, upgrade, and .deb/.rpm packaging remain task-015."
     acceptance:
       - One private job completes and its workspace and JIT material are absent afterward.
       - Service restart leaves exactly one runner listener and one agent process.
@@ -243,13 +246,13 @@ tasks:
       - Cleanup failure places the Linux node in quarantine.
       - Losing or changing the durable node credential drops native capacity while exact replay and cancel remain available.
 
-  - id: spr-008
+  - id: task-008
     title: Add macOS service and runner support
     type: platform
     description: >
       Implement launchd, Keychain secret storage, process supervision, sleep/reconnect,
       and native runner behavior for macOS arm64 and x64.
-    depends_on: [spr-005, spr-006, spr-007]
+    depends_on: [task-005, task-006, task-007]
     paths:
       - cmd/sparerunner-agent
       - internal/app
@@ -259,7 +262,6 @@ tasks:
       - internal/platform/macos
       - test/live/macos
     ci_targets: [lint, test, build, e2e]
-    pr_order: 8
     status: in_progress
     notes:
       - "2026-07-27: The local macOS vertical now uses one exclusive non-login UID, a durable root-owned start fence, descriptor-pinned workspace cleanup, and a hard platform capability of maxRunners 1. More concurrency requires one independently owned UID per added slot; the current readiness contract must never advertise beyond slot 0."
@@ -273,13 +275,13 @@ tasks:
       - arm64 and x64 package selection is correct.
       - Process tree and workspace cleanup pass on a real macOS node.
 
-  - id: spr-009
+  - id: task-009
     title: Add Windows service and runner support
     type: platform
     description: >
       Implement Windows Service recovery, DPAPI secret storage, Job Object process
       ownership, package selection, and locked-file cleanup handling.
-    depends_on: [spr-005, spr-006, spr-007]
+    depends_on: [task-005, task-006, task-007]
     paths:
       - cmd/sprun
       - cmd/sparerunner-agent
@@ -291,7 +293,6 @@ tasks:
       - internal/platform/windows
       - test/live/windows
     ci_targets: [lint, test, build, e2e]
-    pr_order: 9
     status: in_progress
     notes:
       - "2026-07-27: Windows implementation now includes LocalSystem SCM ownership, a distinct virtual-service runner token, suspended-process Job Object assignment, durable private execution fences, DPAPI user-scope node material, exact protected ACLs, one-shot elevated named-pipe enrollment, and no-clobber persistence."
@@ -315,21 +316,20 @@ tasks:
       - Live evidence rejects path overlap and foreign existing directories without changing contents or security descriptors, while exact config-bound scenario reuse succeeds.
       - SCM evidence rejects duplicate, missing, unknown, wrong-role, wrong-service, or wrong-path command-line arguments after native Windows parsing.
 
-  - id: spr-010
+  - id: task-010
     title: Implement node-affined scheduling
     type: backend
     description: >
       Implement the concrete slot ledger, per-target grants, deterministic
       round-robin, eligibility filters, stable node ranking, and capacity advertisement.
-    depends_on: [spr-002, spr-003, spr-004, spr-007]
+    depends_on: [task-002, task-003, task-004, task-007]
     paths:
       - internal/scheduler
     ci_targets: [lint, test, build]
-    pr_order: 10
     status: in_progress
     notes:
       - "2026-07-26: The in-memory scheduler now wraps the domain SlotLedger with concrete per-target grants, deterministic round-robin, eligibility and ranking, exact bind/release ownership, and stable capacity reporting. Restored reservations are claimed before admission; an Agent-reported active execution without matching durable ownership blocks that node and conservatively consumes fleet capacity rather than being reused."
-      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain spr-011/spr-014 responsibilities."
+      - "2026-07-26: Race, concurrency, table, and randomized history tests cover node/fleet bounds, single-slot exclusivity, stale references, ambiguous restore input, observation drift, all eligibility states, deterministic ranking, and starvation-free round-robin. Controller/store wiring, epoch/cursor restoration, and live multi-Target GitHub evidence remain task-011/task-014 responsibilities."
       - "2026-07-26: Draft PR #9 passed Quality, Go on Ubuntu/macOS/Windows, all supported cross-builds, and the required aggregate gate in hosted CI run 30214294870."
     acceptance:
       - Randomized multi-target histories never exceed node or fleet capacity.
@@ -338,21 +338,20 @@ tasks:
       - Draining, quarantined, offline, and unreconciled nodes are ineligible.
       - Round-robin serves every continuously eligible target.
 
-  - id: spr-011
+  - id: task-011
     title: Implement restart and disconnect reconciliation
     type: backend
     description: >
       Reconcile controller epochs, per-node snapshots, agent disconnects, drain,
       quarantine, cleanup tombstones, stale GitHub state, and runner update state.
-    depends_on: [spr-007, spr-010]
+    depends_on: [task-007, task-010]
     paths:
       - internal/reconcile
       - test/fault
     ci_targets: [lint, test, build]
-    pr_order: 11
     status: in_progress
     notes:
-      - "2026-07-26: spr-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. spr-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
+      - "2026-07-26: task-007 deliberately leaves three fail-closed, zero-capacity reconciliation states for this task: a durable Prepare command from a prior Controller epoch, an acquire_ambiguous GitHub claim, and a start_dispatching/start_ambiguous JIT attempt. task-011 must connect post-restart Agent snapshot authority and GitHub observation/removal before any of these states can be retried or released."
       - "2026-07-26: Controller restart now advances the epoch, restores capacity at zero, and reconciles each fresh Agent snapshot independently. Commands, observations, cleanup tombstones, JIT-generation fences, provider observations, runner-release freshness, and desired execution state use exact SQLite authority and fail-closed compare-and-swap transitions."
       - "2026-07-26: Agent disconnect now revokes native readiness and advances the exact snapshot authority revision before the in-memory offline projection. A deterministic real-SQLite test disconnects after readiness is read but before the claim transaction and proves that no claim, reservation, AcquireJobs call, or GitHub message acknowledgement occurs; another fresh Node continues to advertise capacity."
       - "2026-07-26: Real subprocess fault tests SIGKILL the Controller after queue/claim commit and before GitHub acknowledgement, and SIGKILL the Agent after a Start command is durably accepted but before execution. Restart produces one runtime or a single terminal cleanup outbox respectively, never duplicates JIT delivery or Start, and raw SQLite/WAL/SHM scans confirm that JIT material is absent."
@@ -365,20 +364,20 @@ tasks:
       - "2026-07-28: Runner executions are now created from GitHub's assigned-job demand rather than from JobAvailable alone. SpareRunner previously created a durable execution only from a JobAvailable message, which is not the scale-set protocol: the pinned actions/scaleset listener acquires JobAvailable jobs and creates nothing, driving runner creation entirely from HandleDesiredRunnerCount(Statistics.TotalAssignedJobs), and re-evaluating that count even on an empty long poll. Live evidence with a healthy session showed TotalAssignedJobs=1/TotalAvailableJobs=0, JobAssigned delivered with no runner request ID, and the workflow queued forever while every message was received, committed and acknowledged correctly. Desired active executions now equal TotalAssignedJobs, and the shortfall is created and driven through the existing prepare/JIT/start path. Migration 019 separates identity from provider correlation: `claim_key` is the SpareRunner-owned key every child table references (the request ID for an offered job, negative for assigned demand, disjoint by sign), `runner_request_id` becomes a nullable per-scale-set-unique correlation attribute that is never synthesized because AcquireJobs reads it, and `source_message_id` becomes nullable because an empty poll carries no message. A nullable identity column was rejected because SQLite does not enforce composite foreign keys containing NULL. Reconciliation runs inside the transaction that commits the carrying message (commit-before-ack), converges to a count read from durable state in the same transaction so redelivery and restart cannot duplicate, reuses the same capacity/exclusion/admission/runner-update/audit predicates as the JobAvailable boundary, logs unservable demand instead of dropping it, and never invents a statistic that was never observed."
       - "2026-07-26: Agent Hello acknowledgement records a per-Node command-sequence baseline before snapshot capture. Ordinary and recovery command dispatch shares the Node lifecycle boundary with snapshot commit, so an overlapping replacement snapshot is rejected before SQLite projection and an old actor cannot receive a command after replacement. Prepare, Start, Cancel, replay Prepare, reconciliation Cancel, the reverse commit order, and exact SQLite snapshot/epoch replay CAS have deterministic race tests."
       - "2026-07-26: Snapshot ACK and disconnect persistence no longer hold the Node lifecycle lock. A stalled ACK can be superseded; unresolved disconnect persistence rejects reconnect immediately and is canceled by Controller shutdown. Tests cover stalled ACK replacement, pending-projection retry, shutdown cancellation, command-consumer failure, and ambiguous caller timeout recovery."
-      - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a spr-007/spr-014 release dependency and is not claimed by these deterministic fault tests."
+      - "2026-07-26: Mocked provider 5xx/invalid/timeout failures retain classified last-known scale-set and runner-release state. Live private GitHub job execution remains a task-007/task-014 release dependency and is not claimed by these deterministic fault tests."
     acceptance:
       - Controller and agent kill tests do not create duplicate runners.
       - One offline node does not block restored capacity from reconciled nodes.
       - GitHub 5xx retains last-known state and surfaces stale metadata.
       - Cleanup tombstones survive restart and keep a node quarantined.
 
-  - id: spr-012
+  - id: task-012
     title: Implement the management API and configuration contract
     type: backend
     description: >
       Define OpenAPI, generated clients, REST/SSE handlers, single-admin session,
       CSRF and Origin enforcement, audit persistence, and non-secret YAML import/export.
-    depends_on: [spr-004, spr-010, spr-011]
+    depends_on: [task-004, task-010, task-011]
     paths:
       - api
       - internal/api
@@ -388,26 +387,25 @@ tasks:
       - internal/app
       - cmd/sprun
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 12
     status: done
     notes:
       - "2026-07-26: The first-release management authority is fixed to explicit same-origin loopback session bootstrap. Join codes are one-time loopback credential-delivery responses and GitHub Manifest callback routes remain unavailable until a signed one-time callback-state contract exists."
       - "2026-07-26: The OpenAPI-generated Go and TypeScript contracts now own the loopback REST/SSE surface. Process-local owner sessions, exact Host/Origin/CSRF checks, immediate logout revocation even during audit failure, optimistic configuration revisions, bounded JSON/YAML transport, one-time join-code delivery, typed enrollment and Agent rejection audit, and cursor-bounded audit reads all fail closed under focused race and integration tests."
-      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until spr-013; live GitHub and three-OS authority remain spr-014 release gates."
+      - "2026-07-26: `just check` passes after codegen, formatting, vet, web lint/test, all Go tests, networkless Linux privileged race tests, and production builds. The machine-readable results contain 1,274 Go test passes and 0 failures plus 171 Linux privileged test passes and 0 failures; all Linux, macOS, and Windows amd64/arm64 controller and Agent binaries cross-compile. Direct browser setup remains intentionally unavailable until task-013; live GitHub and three-OS authority remain task-014 release gates."
     acceptance:
       - Generated Go and TypeScript contracts match the checked OpenAPI source.
       - Unauthenticated, unauthorized, and cross-origin mutations return 401 or 403.
       - Stale configuration revisions fail with an optimistic conflict.
       - YAML export and every response exclude all secret material.
 
-  - id: spr-013
+  - id: task-013
     title: Build the embedded management UI
     type: frontend
     description: >
       Add the owner-authorized browser handoff, then build Setup, Overview, Nodes,
       Targets, Runs, and Settings against the generated client and embed the
       production output into the controller.
-    depends_on: [spr-012]
+    depends_on: [task-012]
     paths:
       - spec/sparerunner
       - api
@@ -418,10 +416,9 @@ tasks:
       - web
       - internal/webui
     ci_targets: [lint, typecheck, test, build, e2e]
-    pr_order: 13
     status: done
     notes:
-      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. SPR-013 must show these controls as unavailable rather than fabricate a successful Target journey; SPR-016 now owns that missing provider authority and enables the final setup journey."
+      - "2026-07-26: Existing production wiring has no GitHub App Manifest callback, installation/scope read model, or ManagementTargetVerifier. task-013 must show these controls as unavailable rather than fabricate a successful Target journey; task-016 now owns that missing provider authority and enables the final setup journey."
       - "2026-07-26: Browser bootstrap is fixed to a two-party handoff. The browser-held claim secret never leaves volatile memory except for same-origin claim, while the CLI-visible signed code carries no session authority by itself."
       - "2026-07-27: The process-key-signed two-minute browser handoff now requires exact Host/Origin, owner session and CSRF approval, and the browser-held 256-bit preimage. Approval and claim use rollback-capable fences; 16 concurrent HTTP claims issue exactly one cookie and audit, while audit, entropy, expiry, restart, tamper, wrong-secret, and replay failures remain fail closed without persisting claim or session material."
       - "2026-07-27: The generated-client console implements Setup, Overview, Nodes, Targets, Runs, and Settings with explicit last-known, offline, stale, permission, quarantine, optimistic-conflict, and committed-but-unconfirmed states. Join-code responses racing Close/Escape/hidden/unmount are cancelled and scrubbed; GitHub App and Target controls remain visibly disabled with their missing authority rather than submitting an unverified Target."
@@ -435,7 +432,7 @@ tasks:
       - Component screenshots have no unresolved visual or accessibility defects.
       - A release binary serves the same generated UI with no Node.js runtime.
 
-  - id: spr-020
+  - id: task-020
     title: Implement GitHub App management authority and Target provisioning
     type: integration
     description: >
@@ -443,7 +440,7 @@ tasks:
       ownership, installation and private-scope discovery, fail-closed Target
       verification, durable scale-set provisioning intent, and the corresponding
       Setup and Target UI journey.
-    depends_on: [spr-012, spr-013]
+    depends_on: [task-012, task-013]
     paths:
       - spec/sparerunner
       - api
@@ -456,10 +453,9 @@ tasks:
       - web
       - test/contract/github
     ci_targets: [lint, typecheck, test, build, e2e]
-    pr_order: 14
     status: in_progress
     notes:
-      - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows host evidence remain pending for SPR-014/008/009."
+      - "2026-07-27: Added signed one-use Manifest manager, controller-owned credential store boundary, GitHub App JWT/installation/private-scope/runner-group verification adapter, provisioning-intent migration, optional management API routes, generated API types, and Setup/Target UI. Local Go/Vitest (24 tests)/Playwright CT (24 tests)/typecheck/race/build gates pass; live GitHub sandbox and native macOS/Windows host evidence remain pending for task-014/008/009."
       - "2026-07-27: Runner-group authority now paginates every provider page and rejects a truncated 100-page view before provisioning; a second-page conflict test proves no scale set or group mutation occurs after the complete private-scope check."
       - "2026-07-27: Controller startup now selects the service-user file credential store on Linux and the native private-material boundary (Keychain/DPAPI) on macOS/Windows; metadata decoding rejects unknown or trailing JSON and exact replay is no-clobber. Host credential/service evidence remains a live release gate."
     acceptance:
@@ -468,7 +464,7 @@ tasks:
       - Public, unknown, unsafe runner-group, overlapping, and shared scale-set Targets fail closed before desired configuration commits.
       - The operator can complete GitHub setup and private Target creation from the generated-client UI.
 
-  - id: spr-016
+  - id: task-016
     title: Implement node availability control
     type: backend
     description: >
@@ -476,7 +472,7 @@ tasks:
       endpoint with OS peer authorization, protocol reporting, scheduler
       enforcement, the shared API/CLI availability mutation, and the versioned
       machine-readable CLI document that desktop clients integrate against.
-    depends_on: [spr-010, spr-012]
+    depends_on: [task-010, task-012]
     paths:
       - internal/nodectl
       - internal/agent
@@ -486,12 +482,11 @@ tasks:
       - cmd/sprun
       - cmd/sparerunner-agent
     ci_targets: [lint, test, build]
-    pr_order: 15
     status: in_progress
     notes:
       - "2026-07-27: Durable intent, the same-host endpoint with kernel-verified peer authorization, agent readiness conjunction, transport reporting, and the versioned CLI document are implemented. `scripts/test-node-availability-linux.sh` proves stop, restart durability, pending resume until controller acknowledgement, offline stop, and endpoint refusal without --local-control against real controller, agent, and CLI binaries in a restricted container."
       - "2026-07-27: Remaining for acceptance: the Windows named-pipe endpoint with an explicit DACL fails closed today, the controller does not yet persist an audit event per availability change, and the management API and Web UI do not yet expose the reported intent as a distinct field."
-      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as spr-019, not part of this task's acceptance."
+      - "2026-07-28: Per-target control and display (the deny-list, eligible-Target list, and fail-closed exec-boundary backstop) is specified and tracked separately as task-019, not part of this task's acceptance."
     acceptance:
       - A stopped node receives no execution and remains stopped across agent service restart and reboot.
       - Stopping during a running job leaves the job running and passes normal verified cleanup.
@@ -501,25 +496,24 @@ tasks:
       - The control endpoint exposes no execution logs, JIT material, tokens, certificates, or join codes.
       - "`sprun node status|pause|resume --json` emits a versioned non-secret document covering intent, pending, connection state, observation age, and running executions, and every failure exits non-zero with a machine-readable error class."
 
-  - id: spr-017
+  - id: task-017
     title: Ship the desktop tray client
     type: platform
     description: >
       Build the optional unprivileged per-user tray client for macOS, Windows, and
       StatusNotifierItem Linux desktops, with login-item installation and native
       per-platform build and packaging.
-    depends_on: [spr-007, spr-008, spr-009, spr-016]
+    depends_on: [task-007, task-008, task-009, task-016]
     paths:
       - cmd/sparerunner-tray
       - packaging/tray
       - test/live/tray
     ci_targets: [lint, test, build, e2e]
-    pr_order: 16
     status: in_progress
     notes:
       - "2026-07-27: `cmd/sparerunner-tray` is implemented and built natively on macOS outside the pure-Go cross-build matrix. A live run against a real control endpoint proves periodic status reads, survival of endpoint loss as the unknown state, and an explicit terminal error for an unusable endpoint path."
       - "2026-07-27: Remaining for acceptance: StatusNotifierItem Linux and Windows runs, login-item packaging, and reviewed screenshots of each rendered state."
-      - "2026-07-28: Per-target control/display is specified and tracked as spr-019; this task ships only the global accept/stop toggle."
+      - "2026-07-28: Per-target control/display is specified and tracked as task-019; this task ships only the global accept/stop toggle."
     acceptance:
       - The tray toggles acceptance on macOS, Windows, and a StatusNotifierItem Linux desktop, and the controller and CLI show the same effective state.
       - Unreachable agent, stale observation, pending resume, and quarantine render as distinct explicit states and never as accepting or idle.
@@ -527,7 +521,7 @@ tasks:
       - Removing, stopping, or never installing the tray changes no fleet behavior.
       - Tray build failure does not gate controller or agent artifacts, and the support matrix states which packages include it.
 
-  - id: spr-019
+  - id: task-019
     title: Implement per-target node availability
     type: backend
     description: >
@@ -536,7 +530,7 @@ tasks:
       slot-availability enforcement, the agent-side fail-closed exec-boundary
       backstop, target attribution in the agent journal, and the nodectl protocol
       v2 exclude/include/list surface shared by the tray, CLI, and Raycast.
-    depends_on: [spr-016, spr-020]
+    depends_on: [task-016, task-020]
     paths:
       - spec/sparerunner
       - internal/domain
@@ -552,7 +546,6 @@ tasks:
       - api
       - web
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 17
     status: in_progress
     notes:
       - "2026-07-28: The status was stale at `todo` while the work had already landed. The domain and transport carry eligible and excluded Targets on the agent session, the controller adopts and enforces owner exclusions, the agent enforces them at the exec boundary, and the nodectl v2 surface is exposed through the API, the Web console, the tray, the CLI, and Raycast. Restart, reboot, and disconnected-change acceptance still needs live evidence."
@@ -565,35 +558,34 @@ tasks:
       - Excluding a Target while disconnected, including an unknown Target ID, records locally as a safe no-op and syncs on reconnect.
       - Every exclusion or inclusion change persists an audit event with the node, the requesting surface, the previous and next value, and the result.
 
-  - id: spr-014
+  - id: task-014
     title: Validate cross-platform security and release behavior
     type: verification
     description: >
       Run real three-OS, two-installation E2E and publish the threat model, security
       contract, support matrix, native-isolation limitations, and machine-readable evidence.
-    depends_on: [spr-008, spr-009, spr-011, spr-013, spr-017, spr-020, spr-019]
+    depends_on: [task-008, task-009, task-011, task-013, task-017, task-020, task-019]
     paths:
       - docs/security
       - test/live
       - output/release-evidence
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 18
     status: in_progress
     notes:
-      - "2026-07-27: Added the SPR-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `sparerunner.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
+      - "2026-07-27: Added the task-014 security contract, threat model, support matrix, native-isolation limitations, and a strict `sparerunner.cross-platform-security.v1` evidence validator. It requires real Linux/macOS/Windows observations, two private installations, all routing/fault scenarios, zero secret-scan findings, and trusted commit provenance; missing live evidence fails closed. Real macOS/Windows credential/service gates, the Linux private GitHub job, and the two-installation sandbox remain outstanding and are not claimed by this task."
     acceptance:
       - Private generic and OS-specific jobs route correctly across all three OSes.
       - Public target creation and unsafe runner-group access fail closed.
       - Secret canaries are absent from databases, journals, logs, metrics, UI, and diagnostics.
       - Restart, disconnect, drain, stale-state, and quarantine scenarios pass with real agents.
 
-  - id: spr-015
+  - id: task-015
     title: Package and publish the first OSS release
     type: release
     description: >
       Add installers, service manifests, GoReleaser, signed checksums, SBOM,
       artifact attestations, upgrade/uninstall flows, and public release documentation.
-    depends_on: [spr-014]
+    depends_on: [task-014]
     paths:
       - .github/workflows/release.yml
       - packaging
@@ -606,11 +598,10 @@ tasks:
       - scripts/generate-license-bundle.sh
       - scripts/validate-release-evidence.sh
     ci_targets: [lint, test, build, e2e, deploy-check]
-    pr_order: 19
     status: in_progress
     notes:
       - "2026-07-27: Added a tag-driven GoReleaser draft for controller and Agent archives on Linux/macOS/Windows amd64/arm64, deterministic SHA-256 checksums, CycloneDX archive SBOMs, GitHub artifact attestation, bounded failure artifacts, and a fail-closed local bundle checker. Real tagged release, clean-machine install/upgrade/uninstall, three-OS live evidence, and Apple/Windows signing remain pending."
-      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until SPR-014/live/signing gates pass."
+      - "2026-07-27: Hosted PR #17 run 30264221622 attempt 2 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 11f6d6b. Attempt 1 had two transient Windows test failures and was rerun unchanged; no release artifact was published because the workflow is tag-only and draft until task-014/live/signing gates pass."
       - "2026-07-27: The local release runbook now keeps Syft enabled for snapshots and puts root license files and nested third-party files in the archive with explicit non-overlapping globs. A fresh v2.17.0/Syft v1.49.0 snapshot produced all six archives with no duplicate-entry warnings and passed the artifact checker."
       - "2026-07-27: The release evidence validator now resolves the Go module from its own repository path, so the documented gate can be invoked from an external evidence directory and still fails closed on missing manifests."
       - "2026-07-27: Hosted PR #17 run 30266682090 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 29a1b64. This validates the release plumbing only; no tagged artifact or live-fleet evidence was published."
@@ -619,6 +610,7 @@ tasks:
       - "2026-07-27: Hosted PR #17 run 30268998348 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 1666c79 after recording the hosted gate evidence."
       - "2026-07-27: Hosted PR #17 run 30269475550 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 6e5803b after clarifying that the live sandbox is a release gate rather than an incomplete adapter implementation."
       - "2026-07-27: Hosted PR #17 run 30274496720 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required at release head 61c24e7. Local `just check` and OSV source scan also pass with zero findings; the real private sandbox, signing, and clean-machine gates remain intentionally open."
+      - "2026-07-29: All three platforms now have a scripted, tested service installation and removal contract after task-007 added the Linux pair. The release artifacts are still archives only: `.goreleaser.yaml` declares no `nfpms`, so no `.deb` or `.rpm` calls that contract from a package scriptlet, and the clean-machine install/upgrade/uninstall acceptance remains unmet. Upgrade in particular has no owner on any platform; each installer is an initial-install contract that deliberately refuses changed or running state."
     acceptance:
       - Clean Linux, macOS, and Windows machines can install, join, upgrade, and uninstall.
       - Checksums, SBOM, provenance, and available platform signatures verify.
@@ -629,19 +621,18 @@ tasks:
       - Every release gate and real-fleet evidence check succeeds.
       - The public release documents unsupported signing or platform combinations explicitly.
 
-  - id: spr-018
+  - id: task-018
     title: Ship the Raycast launcher extension
     type: frontend
     description: >
       Build the optional macOS Raycast extension over the versioned CLI contract,
       with status view, pause and resume commands, CLI resolution and compatibility
       checks, and no stored controller credential.
-    depends_on: [spr-008, spr-016]
+    depends_on: [task-008, task-016]
     paths:
       - extensions/raycast
       - docs/integrations
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 20
     status: in_progress
     notes:
       - "Ordered after the first release because Raycast is macOS-only, optional, and its store publication is an external review step. It gates no SpareRunner artifact."
@@ -653,7 +644,7 @@ tasks:
       - The extension stores no controller credential, API token, or fleet address, and controls only the computer it runs on.
       - Removing or never installing the extension changes no fleet behavior, and its build gates no SpareRunner artifact.
 
-  - id: spr-021
+  - id: task-021
     title: Add the opt-in shared runner identity Linux mode
     type: platform
     description: >
@@ -669,7 +660,7 @@ tasks:
       workspace-backend identity, and reports `sharedRunnerIdentity` as node state
       through the agent snapshot and heartbeat, the management API, the CLI status
       output, and the tray.
-    depends_on: [spr-007, spr-016]
+    depends_on: [task-007, task-016]
     paths:
       - internal/platform/linux
       - cmd/sparerunner-agent
@@ -679,10 +670,9 @@ tasks:
       - api/openapi.yaml
       - spec/sparerunner
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 21
     status: in_progress
     notes:
-      - "2026-07-28: The mode is deliberately weaker than spr-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
+      - "2026-07-28: The mode is deliberately weaker than task-007's root Supervisor and is legitimate only because native mode is already a trusted-workflow boundary rather than a sandbox. It must never be selected implicitly; a missing privileged Supervisor still means zero capacity."
     acceptance:
       - Without `--allow-shared-runner-identity`, no shared-identity backend is constructed and a missing privileged Supervisor still advertises zero capacity instead of falling back.
       - Passing the flag together with the privileged Supervisor options is rejected at startup rather than silently preferring one mode.
@@ -691,7 +681,7 @@ tasks:
       - A workspace created under one Linux execution mode cannot be verified or cleaned under the other, because the two modes use different versioned workspace-backend identities.
       - "`sharedRunnerIdentity` is reported through the node-local status document, the agent snapshot and heartbeat, the management API, `sprun node status`, and the tray, and grants no capacity and relaxes no check."
 
-  - id: spr-022
+  - id: task-022
     title: Rename the product to SpareRunner and restate its positioning
     type: foundation
     description: >
@@ -705,7 +695,7 @@ tasks:
       private-scope and trusted-workflow boundary. The rename is a deliberate
       pre-alpha breaking change: enrolled nodes, stored private material, join
       codes, and installed OS services from the previous name are not migrated.
-    depends_on: [spr-021]
+    depends_on: [task-021]
     paths:
       - spec/sparerunner
       - README.md
@@ -727,13 +717,12 @@ tasks:
       - .goreleaser.yaml
       - .github
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 22
     status: in_progress
     notes:
       - "2026-07-28: Task IDs moved from `twk-NNN` to `spr-NNN` positionally. Merged commits and pull requests keep the old prefix because Git history is not rewritten."
       - "The user-facing concepts stay Node, GitHub Target, and Runner Profile. `Machine` was considered and rejected: it would break the API schema, the store, the Web console, and the CLI without changing what the product does."
       - "Container and VM execution modes, NAT traversal and relay for participation outside one LAN, and agent self-update are recorded as future direction, not as first-release scope. gRPC and protobuf stay rejected because the transport is versioned WebSocket JSON."
-      - "2026-07-28: Hosted run 30359476452 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required. Attempt 1 failed two Windows enrollment-bootstrap tests and was rerun unchanged; the cause is pre-existing cross-test contention on the single fixed bootstrap pipe name under FILE_FLAG_FIRST_PIPE_INSTANCE, not the rename. Locally `just check`, `just test-enrollment-cli-linux`, and `just test-node-availability-linux` pass, and the privileged Linux containment suite passes under the renamed build tag. Real macOS and Windows host installation and the live GitHub gates stay owned by spr-008, spr-009, and spr-014."
+      - "2026-07-28: Hosted run 30359476452 passed Quality, Ubuntu, macOS, Windows, six-target cross-build, and ci/required. Attempt 1 failed two Windows enrollment-bootstrap tests and was rerun unchanged; the cause is pre-existing cross-test contention on the single fixed bootstrap pipe name under FILE_FLAG_FIRST_PIPE_INSTANCE, not the rename. Locally `just check`, `just test-enrollment-cli-linux`, and `just test-node-availability-linux` pass, and the privileged Linux containment suite passes under the renamed build tag. Real macOS and Windows host installation and the live GitHub gates stay owned by task-008, task-009, and task-014."
     acceptance:
       - No source file, filename, identifier, or generated artifact carries the previous product name, except the historical mapping note in this manifest.
       - The join code magic stays three bytes, and its encoder and decoder agree, so enrollment succeeds end to end under the new prefix.
@@ -743,7 +732,7 @@ tasks:
       - The README status text matches the manifest status of every task it describes, and no capability is described as planned once it is implemented.
       - Every statement that invites the reader to lend a computer they also use themselves carries the private-scope and not-a-sandbox boundary with it.
 
-  - id: spr-023
+  - id: task-023
     title: Shorten the operator CLI to sprun
     type: foundation
     description: >
@@ -754,7 +743,7 @@ tasks:
       mDNS service, launchd label, service units, service accounts, and the Agent
       and tray binaries keep the formal name, because they are read in process
       lists, logs, and OS state where the long name is the point.
-    depends_on: [spr-022]
+    depends_on: [task-022]
     paths:
       - spec/sparerunner
       - .claude/skills
@@ -769,13 +758,12 @@ tasks:
       - test/live
       - web
     ci_targets: [lint, typecheck, test, build]
-    pr_order: 23
     status: in_progress
     notes:
       - "`sprun` contracts SPAre RUNner instead of abbreviating it. `spr` was rejected as a common three-letter abbreviation that collides and searches poorly, and `srun` as Slurm's job-launch command."
       - "Shipping `sprun` as a second binary beside `sparerunner` was rejected. It would not shorten the CLI, only add one, and it would duplicate the controller artifact and its signing and attestation surface on every supported platform. No unit in `packaging/` runs the controller as an OS service, so renaming the binary an operator invokes by hand does not cost process-list clarity; the Agent, which does run as a service, keeps `sparerunner-agent`."
       - "2026-07-28: `scripts/cross-build.sh` builds `./cmd/$command` from a name list, so it does not contain the literal string `cmd/sparerunner` and was missed by the path search. `just check` does not run the cross-build matrix, so it only failed in CI. `just build-all` now passes for all twelve targets and is part of this task's verification."
-      - "The command surface is unchanged. `invite`, `jobs`, `status`, `doctor`, `dashboard`, and a `machines` vocabulary were raised alongside the short name and deliberately not implemented here: the first four do not exist, and `Machine` conflicts with the Node/GitHub Target/Runner Profile vocabulary that spr-022 settled."
+      - "The command surface is unchanged. `invite`, `jobs`, `status`, `doctor`, `dashboard`, and a `machines` vocabulary were raised alongside the short name and deliberately not implemented here: the first four do not exist, and `Machine` conflicts with the Node/GitHub Target/Runner Profile vocabulary that task-022 settled."
     acceptance:
       - The built controller binary is `sprun`, and no build, script, packaging file, or workflow still refers to a `sparerunner` controller binary.
       - Help output, the join-code instruction the controller prints, and every error that tells the operator what to run next name `sprun`.
@@ -783,7 +771,7 @@ tasks:
       - The Raycast extension finds the renamed binary in the standard install locations.
       - The repository agent skill documents only commands that exist, and its examples run against the real CLI.
 
-  - id: spr-024
+  - id: task-024
     title: Implement the sprun doctor diagnosis command
     type: backend
     description: >
@@ -792,16 +780,15 @@ tasks:
       with explicit pass, fail, and unavailable findings, a versioned `--json`
       document, and machine-readable error classes. The command introduces no
       new API surface and no new privilege.
-    depends_on: [spr-012, spr-016, spr-020]
+    depends_on: [task-012, task-016, task-020]
     paths:
       - spec/sparerunner
       - cmd/sprun
       - .claude/skills
     ci_targets: [lint, test, build]
-    pr_order: 24
     status: in_progress
     notes:
-      - "Promoted from Future Direction: the original product definition proposed a doctor command, and spr-023 recorded that it was raised and deliberately deferred rather than rejected."
+      - "Promoted from Future Direction: the original product definition proposed a doctor command, and task-023 recorded that it was raised and deliberately deferred rather than rejected."
       - "2026-07-29: `sprun doctor` composes controller-state presence, one owner session proving the loopback listener and the overview read, the setup read model for GitHub authority with condition codes, and the nodectl status contract. Deterministic tests cover healthy, disconnected-GitHub, degraded/conditioned, unreachable-listener, uninitialized-controller, and dead-agent-endpoint paths. A pass-path run against a live enrolled agent remains open before the task is done."
     acceptance:
       - The command performs no mutation and changes no admission, availability, capacity, or configuration state.
@@ -809,3 +796,75 @@ tasks:
       - A computer without an installed agent reports an explicit not-installed finding rather than a failure or silence.
       - "`sprun doctor --json` emits a versioned non-secret document, and the exit code is non-zero exactly when a required authority fails."
       - Findings never contain credential, owner-proof, session, join-code, or JIT material.
+
+  - id: task-025
+    title: Spend free hosted runner capacity on fuzzing and whole-module verification
+    type: foundation
+    description: >
+      Add the verification that only needs wall-clock time and therefore cannot
+      live on the merge path: coverage-guided fuzzing of every untrusted
+      decoding boundary, the whole module under the race detector with shuffled
+      repetition on all three operating systems, and every dependency lock file
+      against OSV. Required CI already reports per change; this covers what it
+      deliberately leaves out, on runners that are free and unmetered for a
+      public repository.
+    depends_on: [task-001]
+    paths:
+      - spec/sparerunner
+      - .github/workflows
+      - .mise.toml
+      - internal/config
+      - internal/enroll
+      - internal/transport
+      - test/verification
+      - test/fault
+      - scripts
+      - justfile
+    ci_targets: [lint, test, build]
+    status: in_progress
+    notes:
+      - "Fuzz targets assert differential properties, not the absence of a panic. A join code must re-encode to exactly the accepted bytes, an accepted envelope must survive a marshal and decode fixpoint, and an accepted configuration must be a fixpoint in both codecs and mean the same thing in each. A no-panic assertion would pass while a decoder quietly grew a second accepted representation, which is the property these boundaries exist to deny."
+      - "The nightly race job is the follow-up the required go-race job asks for in its own comment. That job is scoped to the five packages that own the controller's concurrency because internal/app and internal/store are far too slow under the detector to hold a pull request. Off the merge path there is no such budget, so the nightly run covers the whole module, adds shuffling and a second pass to expose order dependence, and runs on Linux, macOS, and Windows."
+      - "2026-07-29: The race and repetition job found a defect on its first run. Three fault helpers waited a fixed ten seconds for a subprocess that is this same race-instrumented test binary, so a loaded machine was reported as a durability failure. The wait now ends on the helper's own stdout, and a true hang is owned by the package `go test -timeout`, which also dumps every goroutine. The previously failing combination passed three consecutive times."
+      - "2026-07-29: An OSV lock-file scan was implemented and then removed. Dependabot already watches gomod, Actions, and all three npm directories, so the gap it was supposed to close was already closed, and its first hosted run failed on a 403 from the OSV API rather than on a finding. A scheduled job that duplicates an existing alert and fails on the scanner's own availability is noise."
+      - "The workflow has no pull_request trigger. A surface that gates nothing must not re-check a pull request's unrelated code, and actionlint and zizmor already gate the definition itself on every change. It is proven after merge with workflow_dispatch."
+      - "zizmor is now pinned in `.mise.toml` and its Action is pinned to the same version. The Action's default is `latest`, which contradicts the CONTRIBUTING promise that a tool version never drifts between a contributor's machine and the required gate, and `just lint-workflows` could not run it at all."
+      - "Mutation testing was evaluated and not adopted. It is the highest-value way to spend surplus runner time in principle, but the Go tools for it are unmaintained: `go-gremlins/gremlins` and `ooze` have had no release since 2023 and do not support the current toolchain. Adopting an unmaintained mutation engine would add a failure surface that reports on itself rather than on this code. Recorded as future direction if a maintained engine appears."
+      - "ClusterFuzzLite was evaluated and not adopted, because Go's native fuzzing already provides coverage-guided fuzzing, corpus management, and crasher reproduction in-tree, and the failing input lands in the package's own testdata as a permanent seed case."
+      - "Semgrep was not adopted because CodeQL with `security-and-quality` covers the same ground for this codebase, and a second general-purpose scanner costs triage rather than coverage. Trivy, Grype, and Syft were not adopted either: the project ships no container image, and release SBOM generation and provenance already exist. OWASP ZAP would need the management console started with an owner session before a scan meant anything, and is recorded as future direction."
+      - "2026-07-29: All four fuzz targets ran past their seed corpus with no finding, both locally and on hosted runners, and zizmor reports no findings. One whole-module pass under the race detector took 24m32s on a hosted ubuntu-24.04 runner and passed, which is what the job timeout is derived from."
+      - "2026-07-29: The first dispatched run on the default branch passed every fuzz job and the macOS and Windows race jobs, and the Linux race job failed on a second defect the merge path cannot see. TestOpenTrustedInjectorRejectsWritableAndSymlinkAncestors created a symlink beside its trusted root, outside what its own cleanup removes, and TestMain gives the whole process one TMPDIR, so a repeated run failed on the existing name instead of on the boundary under test. That is two order-and-repetition defects the job has now found in as many runs, in tests that pass every time required CI runs them once."
+    acceptance:
+      - Every untrusted decoding boundary that an operator or a peer can reach has a fuzz target, and each target asserts a differential property rather than only the absence of a panic.
+      - A fuzz target that exists but is not scheduled in the nightly matrix fails a test, so fuzzing coverage cannot be lost silently.
+      - The whole module passes under the race detector with shuffled repetition, including the two packages required CI excludes, and no test reports a loaded machine as a product failure.
+      - No surface added here runs on a pull request event, so a change is never gated or delayed by verification of code it does not touch.
+      - Nothing added here gates a merge, and every local command that reproduces it is listed in the justfile.
+      - Workflow auditing runs the same pinned version locally and in CI.
+  - id: task-026
+    title: Freeze task identity and define the branch strategy
+    type: foundation
+    description: >
+      Make the task ID a permanent opaque handle that a product rename can never
+      renumber again, delete the `pr_order` field so `depends_on` is the only
+      execution order, and write down the branch, merge, and protection rules the
+      repository already depended on but never stated.
+    depends_on: [task-001]
+    paths:
+      - spec/sparerunner
+      - AGENTS.md
+      - CONTRIBUTING.md
+      - .github
+    ci_targets: [lint, test]
+    status: in_progress
+    notes:
+      - "2026-07-29: The `twk-NNN` to `spr-NNN` migration proved a product-derived prefix is not an identifier: a marketing decision renumbered the whole graph and left a positional-mapping footnote in three files. `task-` names what the identifier refers to, so the same rename cannot recur."
+      - "2026-07-29: `pr_order` was a hand-maintained total order over a DAG that `depends_on` already expressed. It had drifted from ID order at eleven of twenty-four tasks, which made a lower ID look like an earlier task, and it forced a renumber on every insertion. It also carried the acyclicity check, so removing it required implementing real cycle detection."
+      - "2026-07-29: This task was drafted as 025 and renumbered to 026 because task-025 was minted and merged first. That is the rule working as intended: the loser of a race takes the next number rather than the two changes negotiating over one, and no already-merged ID is ever reassigned."
+      - "2026-07-29: Branch protection is recorded as a security control, not a preference: the guarantee that real SpareRunner nodes run only on protected branches is void if `main` is not actually protected. Applying the settings on GitHub is not covered by this task's automated evidence."
+    acceptance:
+      - Every task ID matches `task-NNN`, and no specification, document, workflow, or source comment names a `spr-NNN` or `twk-NNN` task as a current identifier. The recorded history mapping is the only place either prefix survives.
+      - The manifest carries no `pr_order`, and the task manifest test rejects a reintroduced `pr_order` field.
+      - The task manifest test rejects a dependency cycle and a self-dependency, which is the invariant `pr_order` previously enforced by accident.
+      - "`CONTRIBUTING.md` states the branch naming, stacked-dependency, squash-and-merge-queue, protection, and worktree rules, and `AGENTS.md` states the same rules without restating their rationale."
+      - The runtime `spr-exec-` execution ID prefix is unchanged, so no persisted controller row is invalidated by the rename.
