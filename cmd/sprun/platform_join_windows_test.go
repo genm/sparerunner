@@ -10,7 +10,7 @@ import (
 
 func TestWindowsJoinReportsServiceCompletionWithoutWrongUserStateCommand(t *testing.T) {
 	var output bytes.Buffer
-	printPlatformJoinNextStep(&output, "windows", `C:\Users\example\AppData\wrong-state`)
+	printPlatformJoinNextStep(&output, "windows", `C:\Users\example\AppData\wrong-state`, false)
 	if !strings.Contains(output.String(), "service is enrolled and running") {
 		t.Fatalf("join output = %q", output.String())
 	}

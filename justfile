@@ -70,7 +70,7 @@ lint-workflows:
 
 lint-shell:
   shellcheck --severity=style scripts/*.sh packaging/macos/*.sh \
-    test/live/linux/run.sh test/live/macos/run.sh
+    packaging/linux/*.sh test/live/linux/run.sh test/live/macos/run.sh
 
 # Scans the whole history, not just the working tree, so it catches a secret that
 # was committed and then removed. Allowlisted fixtures are justified one by one

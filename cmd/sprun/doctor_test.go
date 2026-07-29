@@ -279,10 +279,30 @@ func TestDoctorReportsUninitializedControllerAsUnavailable(t *testing.T) {
 	if !report.OK {
 		t.Fatalf("report.OK = false: %#v", report.Findings)
 	}
+	installationChecks := map[string]bool{
+		doctorCheckControllerState:   true,
+		doctorCheckManagementSession: true,
+		doctorCheckGitHubAuthority:   true,
+		doctorCheckAgentEndpoint:     true,
+	}
+	seen := 0
 	for _, finding := range report.Findings {
-		if finding.Status != doctorStatusUnavailable {
-			t.Fatalf("finding = %#v, want unavailable", finding)
+		if installationChecks[finding.Check] {
+			seen++
+			if finding.Status != doctorStatusUnavailable {
+				t.Fatalf("finding = %#v, want unavailable", finding)
+			}
+			continue
 		}
+		// Host findings report machine capability, not installation state: a
+		// capable host legitimately passes with nothing installed, but nothing
+		// may fail on a machine with nothing installed.
+		if finding.Status == doctorStatusFail {
+			t.Fatalf("host finding = %#v, want not fail", finding)
+		}
+	}
+	if seen != len(installationChecks) {
+		t.Fatalf("installation findings = %d, want %d: %#v", seen, len(installationChecks), report.Findings)
 	}
 }
 

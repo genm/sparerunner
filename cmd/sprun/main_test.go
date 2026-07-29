@@ -84,7 +84,7 @@ func TestPackagedMacOSJoinPrintsLaunchdInstructionWithoutSecondServe(t *testing.
 // for Darwin only, so the end-to-end command test below cannot run on Windows.
 func TestPackagedLinuxNextStepIsSystemdRestart(t *testing.T) {
 	var output bytes.Buffer
-	printPlatformJoinNextStep(&output, "linux", "/var/lib/sparerunner-agent")
+	printPlatformJoinNextStep(&output, "linux", "/var/lib/sparerunner-agent", false)
 	if !strings.Contains(output.String(), "sudo systemctl restart sparerunner-agent.service") {
 		t.Fatalf("packaged Linux next step = %q", output.String())
 	}
@@ -93,12 +93,65 @@ func TestPackagedLinuxNextStepIsSystemdRestart(t *testing.T) {
 	}
 
 	output.Reset()
-	printPlatformJoinNextStep(&output, "linux", "/home/example/.local/share/sparerunner/agent")
+	printPlatformJoinNextStep(&output, "linux", "/home/example/.local/share/sparerunner/agent", false)
 	if !strings.Contains(
 		output.String(),
 		"sparerunner-agent serve --state-dir /home/example/.local/share/sparerunner/agent",
 	) {
 		t.Fatalf("unpackaged Linux next step = %q", output.String())
+	}
+}
+
+// TestPackagedLinuxUserServiceNextStepIsUserRestart pins the sudo-free packaged
+// path: with the user unit installed the hint is a user-manager restart, and
+// never a second serve process beside the unit.
+func TestPackagedLinuxUserServiceNextStepIsUserRestart(t *testing.T) {
+	var output bytes.Buffer
+	printPlatformJoinNextStep(&output, "linux", "/home/example/.config/sparerunner/agent", true)
+	if !strings.Contains(output.String(), "systemctl --user restart sparerunner-agent.service") {
+		t.Fatalf("packaged user-service next step = %q", output.String())
+	}
+	if strings.Contains(output.String(), "sparerunner-agent serve") ||
+		strings.Contains(output.String(), "sudo ") {
+		t.Fatalf("packaged user-service next step is wrong: %q", output.String())
+	}
+}
+
+func TestLinuxUserServiceOwnsStateRequiresTheExactDefaultAndUnit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the fixture drives os.UserConfigDir through XDG_CONFIG_HOME")
+	}
+	config := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", config)
+	if runtime.GOOS != "linux" {
+		// os.UserConfigDir honors XDG_CONFIG_HOME only on Unix-without-Darwin
+		// rules; on macOS it stays under ~/Library, so only the negative
+		// contract is assertable here.
+		if linuxUserServiceOwnsState("linux", filepath.Join(config, "sparerunner", "agent")) {
+			t.Fatal("user service ownership claimed without the packaged unit")
+		}
+		return
+	}
+	stateDirectory := filepath.Join(config, "sparerunner", "agent")
+	if linuxUserServiceOwnsState("linux", stateDirectory) {
+		t.Fatal("user service ownership claimed without the packaged unit")
+	}
+	unitDirectory := filepath.Join(config, "systemd", "user")
+	if err := os.MkdirAll(unitDirectory, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unit := filepath.Join(unitDirectory, "sparerunner-agent.service")
+	if err := os.WriteFile(unit, []byte("[Service]\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !linuxUserServiceOwnsState("linux", stateDirectory) {
+		t.Fatal("user service ownership not recognized")
+	}
+	if linuxUserServiceOwnsState("linux", "/somewhere/else") {
+		t.Fatal("user service ownership claimed for a foreign state directory")
+	}
+	if linuxUserServiceOwnsState("darwin", stateDirectory) {
+		t.Fatal("user service ownership claimed for a non-linux platform")
 	}
 }
 

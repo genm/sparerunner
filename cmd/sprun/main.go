@@ -224,7 +224,7 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 				return err
 			}
 			fmt.Fprintf(command.OutOrStdout(), "Node %s joined successfully\n", nodeID)
-			printPlatformJoinNextStep(command.OutOrStdout(), goos, directory)
+			printPlatformJoinNextStep(command.OutOrStdout(), goos, directory, linuxUserServiceOwnsState(goos, directory))
 			return nil
 		},
 	}
@@ -235,7 +235,27 @@ func newJoinCommandForPlatform(goos string, joinAgent joinAgentFunc) *cobra.Comm
 	return command
 }
 
-func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
+// linuxUserServiceOwnsState reports whether the packaged `systemd --user`
+// unit owns the default agent state directory this join just wrote. The unit
+// deliberately runs with the default state directory, so unit-file presence at
+// its packaged path is the only extra signal needed.
+func linuxUserServiceOwnsState(goos, stateDirectory string) bool {
+	if goos != "linux" {
+		return false
+	}
+	config, err := os.UserConfigDir()
+	if err != nil {
+		return false
+	}
+	if stateDirectory != filepath.Join(config, "sparerunner", "agent") {
+		return false
+	}
+	unit := filepath.Join(config, "systemd", "user", "sparerunner-agent.service")
+	info, err := os.Lstat(unit)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string, linuxUserService bool) {
 	const macOSServiceState = "/Library/Application Support/SpareRunner/agent"
 	const linuxServiceState = "/var/lib/sparerunner-agent"
 	switch {
@@ -248,6 +268,11 @@ func printPlatformJoinNextStep(output io.Writer, goos, stateDirectory string) {
 		fmt.Fprintln(
 			output,
 			"systemd manages this Agent. Activate it with: sudo systemctl restart sparerunner-agent.service",
+		)
+	case linuxUserService:
+		fmt.Fprintln(
+			output,
+			"systemd manages this Agent. Activate it with: systemctl --user restart sparerunner-agent.service",
 		)
 	case goos == "darwin" && stateDirectory == macOSServiceState:
 		// The path is a platform contract, not a host path to normalize. Comparing

@@ -121,6 +121,7 @@ func runDoctor(ctx context.Context, options doctorOptions) doctorReport {
 		)
 	}
 	findings = append(findings, diagnoseAgentEndpoint(options.agentStateDir, options.agentTimeout))
+	findings = append(findings, diagnoseNodeHost()...)
 	return doctorReport{
 		DoctorVersion: doctorReportVersion,
 		OK:            doctorFindingsHealthy(findings),

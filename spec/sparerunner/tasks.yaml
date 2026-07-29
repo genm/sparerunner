@@ -877,3 +877,34 @@ tasks:
       - The task manifest test rejects a dependency cycle and a self-dependency, which is the invariant `pr_order` previously enforced by accident.
       - "`CONTRIBUTING.md` states the branch naming, stacked-dependency, squash-and-merge-queue, protection, and worktree rules, and `AGENTS.md` states the same rules without restating their rationale."
       - The runtime `spr-exec-` execution ID prefix is unchanged, so no persisted controller row is invalidated by the rename.
+
+  - id: task-027
+    title: Make the sudo-free Linux node path first-class
+    type: platform
+    description: >
+      Close the onboarding gap where a product positioned as easier than manual
+      runner registration was heavier than `./config.sh && ./run.sh` on Linux.
+      The shared-runner-identity mode already exists; what is missing is its
+      delivery: a packaged `systemd --user` unit and unprivileged installer and
+      uninstaller with the same fail-closed discipline as the root pair, a
+      `sprun doctor` host diagnosis that says before enrollment which native
+      mode this machine can run and what to enable, a join hint that points the
+      packaged user service at `systemctl --user` instead of a second serve
+      process, and documentation that states why the vanilla runner needs no
+      prerequisites and what each SpareRunner requirement buys. The containment
+      contract itself is deliberately unchanged: proven descendant ownership is
+      what makes centrally scheduled capacity truthful, so parity is reached by
+      packaging and diagnostics, never by a weaker mode.
+    depends_on: [task-007, task-021]
+    paths:
+      - packaging/linux
+      - cmd/sprun
+      - spec/sparerunner
+    ci_targets: [lint, test, build]
+    status: in_progress
+    acceptance:
+      - A clean modern Linux host reaches a running shared-identity node with no root operation, and the installer refuses hosts that cannot construct the mode before its first mutation.
+      - "The user-mode installer and uninstaller keep the root pair's contract: no-clobber publication, verified rollback, foreign-file refusal, and retained node state on removal."
+      - "`sprun doctor` reports which native runner mode this Linux host can run, and names the missing prerequisite (kernel, cgroup v2, user delegation, linger, root Supervisor) when one cannot."
+      - "`sprun join` against the packaged user-service state directory prints the `systemctl --user` restart instruction and never a second `sparerunner-agent serve` command."
+      - The Linux README states the vanilla-runner comparison and the reason each prerequisite exists, and the sudo-free quickstart is no longer than the manual registration flow it replaces.
