@@ -76,6 +76,24 @@ byte-identical to this package. Node state under `~/.config/sparerunner` and
 the runner roots under `~/.local/share/sparerunner` are retained; discarding
 the node identity is a separate, deliberate decision.
 
+To upgrade, replace the binary and run the upgrade script from the new
+package; node state and enrollment survive unchanged:
+
+```bash
+install -m 0755 ./sparerunner-agent ~/.local/bin/sparerunner-agent
+./packaging/linux/upgrade-user-service.sh
+```
+
+`upgrade-user-service.sh` stops the unit, replaces it only when it is provably
+a SpareRunner package file, and restarts it. A unit already byte-identical to
+the new package needs no proof, so a binary-only upgrade — the common case —
+requires nothing else. When the packaged unit itself changed between releases,
+pass `--previous <extracted-old-package>` so the installed unit's provenance
+can be verified byte for byte; release archives are reproducible and
+checksummed, so the old package can always be re-downloaded. A unit that
+matches neither package is an operator edit and is refused, and any failure
+after the service stops restores the previous unit and restarts it.
+
 The rest of this document describes the root Supervisor mode.
 
 ## Supported host boundary
@@ -223,6 +241,29 @@ This is an initial-install contract, not an upgrade mechanism. If preflight
 reports foreign, partial, or changed state, inspect it; do not add a force-adopt
 option or hand-write the ownership marker at
 `/var/lib/sparerunner-supervisor/.sparerunner-install-ownership-v1`.
+
+Upgrades are owned by `upgrade-service.sh`. Publish the new binaries the same
+way as the initial install, then run the upgrade script from the new package:
+
+```bash
+sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/local/bin/sparerunner-agent
+sudo install -o root -g root -m 0755 ./sprun /usr/local/bin/sprun
+sudo ./packaging/linux/upgrade-service.sh
+```
+
+It requires the ownership marker of an existing installation, stops both
+services, replaces only files it can prove SpareRunner published, re-runs
+`systemd-sysusers` and `systemd-tmpfiles`, and restarts the services. An
+installed file already byte-identical to the new package needs no proof, so a
+binary-only upgrade — the common case — requires nothing else. When a
+packaged unit or definition changed between releases, pass
+`--previous <extracted-old-package>` so each installed file's provenance is
+verified byte for byte before it is replaced; release archives are
+reproducible and checksummed, so the old package can always be re-downloaded
+to supply that proof. A file that matches neither package is an operator edit
+and is refused before any service stops. Node state, enrollment, and the
+service accounts survive unchanged, and any failure after the services stop
+restores the previous files and restarts the previous installation.
 
 `uninstall-service.sh` stops and disables both services and removes only the
 package files it can prove this package published, re-verifying each one
