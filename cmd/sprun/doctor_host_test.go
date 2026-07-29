@@ -4,6 +4,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -52,6 +53,9 @@ func findingByCheck(t *testing.T, findings []doctorFinding, check string) doctor
 }
 
 func TestDiagnoseLinuxHostReportsBothModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the supervisor-socket fixture needs a unix socket file")
+	}
 	root := healthyHostFixture(t)
 	socket := filepath.Join(root, "run/sparerunner-supervisor/supervisor.sock")
 	listener, err := net.Listen("unix", shortSocketPath(t, socket))
