@@ -6,6 +6,7 @@ toolchain go1.26.5
 
 require (
 	fyne.io/systray v1.12.2
+	github.com/Microsoft/go-winio v0.6.2
 	github.com/actions/scaleset v0.4.0
 	github.com/coder/websocket v1.8.15
 	github.com/getkin/kin-openapi v0.144.0

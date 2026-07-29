@@ -68,6 +68,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 	var connectionTimeout, reconnectDelay time.Duration
 	var localControl bool
 	var ownerUIDs []int
+	var ownerSIDs []string
 	native := defaultNativeRunnerOptions()
 	serve := &cobra.Command{
 		Use:   "serve",
@@ -92,6 +93,7 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 				LocalControl: app.AgentLocalControlOptions{
 					Enabled:   localControl,
 					OwnerUIDs: ownerUIDs,
+					OwnerSIDs: ownerSIDs,
 				},
 			})
 		},
@@ -114,7 +116,8 @@ func newRootCommand(stdout, stderr io.Writer) *cobra.Command {
 			"and is reported to the fleet as sharedRunnerIdentity.",
 	)
 	serve.Flags().BoolVar(&localControl, "local-control", false, "serve the same-host availability endpoint used by the tray, launcher, and CLI")
-	serve.Flags().IntSliceVar(&ownerUIDs, "owner-uid", nil, "additional local user IDs authorized to control this node's availability")
+	serve.Flags().IntSliceVar(&ownerUIDs, "owner-uid", nil, "Unix only: additional local user IDs authorized to control this node's availability")
+	serve.Flags().StringSliceVar(&ownerSIDs, "owner-sid", nil, "Windows only: additional local security identifiers authorized to control this node's availability")
 	root.AddCommand(serve)
 	root.AddCommand(platformCommands()...)
 	return root

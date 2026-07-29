@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,10 +35,13 @@ type Authorizer interface {
 }
 
 // Peer is the OS identity of the connecting process as reported by the kernel,
-// not by the client.
+// not by the client. Exactly one identity field is meaningful per platform: Unix
+// reports UID and leaves SID empty, Windows reports SID and leaves UID at -1,
+// because the two systems have no common principal type to collapse them into.
 type Peer struct {
 	UID int
 	PID int
+	SID string
 }
 
 // UIDAllowlist authorizes an explicit set of local user IDs.
@@ -60,6 +64,37 @@ func (allowlist UIDAllowlist) Authorize(peer Peer) error {
 		return ErrUnauthorizedPeer
 	}
 	if _, allowed := allowlist.UIDs[peer.UID]; !allowed {
+		return ErrUnauthorizedPeer
+	}
+	return nil
+}
+
+// SIDAllowlist authorizes an explicit set of Windows security identifiers. It is
+// the Windows counterpart of UIDAllowlist: the pipe DACL keeps an unrelated
+// local account from reaching the endpoint at all, and this decides which of the
+// accounts that can reach it are node owners.
+type SIDAllowlist struct {
+	SIDs map[string]struct{}
+}
+
+// NewSIDAllowlist normalizes case because a SID string is compared, not parsed,
+// here. Malformed input is rejected where the DACL is built, so a value that
+// cannot name a principal never reaches a listening endpoint.
+func NewSIDAllowlist(sids ...string) SIDAllowlist {
+	allowlist := SIDAllowlist{SIDs: make(map[string]struct{}, len(sids))}
+	for _, sid := range sids {
+		if trimmed := strings.TrimSpace(sid); trimmed != "" {
+			allowlist.SIDs[strings.ToUpper(trimmed)] = struct{}{}
+		}
+	}
+	return allowlist
+}
+
+func (allowlist SIDAllowlist) Authorize(peer Peer) error {
+	if peer.SID == "" || len(allowlist.SIDs) == 0 {
+		return ErrUnauthorizedPeer
+	}
+	if _, allowed := allowlist.SIDs[strings.ToUpper(peer.SID)]; !allowed {
 		return ErrUnauthorizedPeer
 	}
 	return nil
@@ -146,6 +181,7 @@ func (server *Server) handle(connection net.Conn) {
 			"error_class", ErrorClassUnauthorizedPeer,
 			"peer_uid", peer.UID,
 			"peer_pid", peer.PID,
+			"peer_sid", peer.SID,
 		)
 		server.write(connection, failure(ErrUnauthorizedPeer))
 		return
