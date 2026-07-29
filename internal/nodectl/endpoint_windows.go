@@ -62,6 +62,16 @@ func Listen(stateDirectory string, owners []string) (net.Listener, error) {
 	}
 	listener, err := winio.ListenPipe(name, &winio.PipeConfig{
 		SecurityDescriptor: descriptor,
+		// A zero quota means the pipe does no buffering at all, so a client's
+		// write blocks until the server reads it. The server refuses an
+		// unauthorized peer before reading anything, so that client would block
+		// in Write until its own deadline and report a timeout instead of the
+		// unauthorized_peer verdict it was actually given. The quota is the
+		// protocol's own frame bound, so any frame the contract accepts fits
+		// without the peers having to be in lockstep. Windows treats it as an
+		// advisory limit and allocates against it on demand rather than up front.
+		InputBufferSize:  MaxMessageBytes,
+		OutputBufferSize: MaxMessageBytes,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrEndpointUnavailable, err)
