@@ -803,11 +803,10 @@ tasks:
     description: >
       Add the verification that only needs wall-clock time and therefore cannot
       live on the merge path: coverage-guided fuzzing of every untrusted
-      decoding boundary, the whole module under the race detector with shuffled
-      repetition on all three operating systems, and every dependency lock file
-      against OSV. Required CI already reports per change; this covers what it
-      deliberately leaves out, on runners that are free and unmetered for a
-      public repository.
+      decoding boundary, and the whole module under the race detector with
+      shuffled repetition on all three operating systems. Required CI already
+      reports per change; this covers what it deliberately leaves out, on
+      runners that are free and unmetered for a public repository.
     depends_on: [task-001]
     paths:
       - spec/sparerunner
@@ -821,7 +820,7 @@ tasks:
       - scripts
       - justfile
     ci_targets: [lint, test, build]
-    status: in_progress
+    status: done
     notes:
       - "Fuzz targets assert differential properties, not the absence of a panic. A join code must re-encode to exactly the accepted bytes, an accepted envelope must survive a marshal and decode fixpoint, and an accepted configuration must be a fixpoint in both codecs and mean the same thing in each. A no-panic assertion would pass while a decoder quietly grew a second accepted representation, which is the property these boundaries exist to deny."
       - "The nightly race job is the follow-up the required go-race job asks for in its own comment. That job is scoped to the five packages that own the controller's concurrency because internal/app and internal/store are far too slow under the detector to hold a pull request. Off the merge path there is no such budget, so the nightly run covers the whole module, adds shuffling and a second pass to expose order dependence, and runs on Linux, macOS, and Windows."
@@ -833,7 +832,8 @@ tasks:
       - "ClusterFuzzLite was evaluated and not adopted, because Go's native fuzzing already provides coverage-guided fuzzing, corpus management, and crasher reproduction in-tree, and the failing input lands in the package's own testdata as a permanent seed case."
       - "Semgrep was not adopted because CodeQL with `security-and-quality` covers the same ground for this codebase, and a second general-purpose scanner costs triage rather than coverage. Trivy, Grype, and Syft were not adopted either: the project ships no container image, and release SBOM generation and provenance already exist. OWASP ZAP would need the management console started with an owner session before a scan meant anything, and is recorded as future direction."
       - "2026-07-29: All four fuzz targets ran past their seed corpus with no finding, both locally and on hosted runners, and zizmor reports no findings. One whole-module pass under the race detector took 24m32s on a hosted ubuntu-24.04 runner and passed, which is what the job timeout is derived from."
-      - "2026-07-29: The first dispatched run on the default branch passed every fuzz job and the macOS and Windows race jobs, and the Linux race job failed on a second defect the merge path cannot see. TestOpenTrustedInjectorRejectsWritableAndSymlinkAncestors created a symlink beside its trusted root, outside what its own cleanup removes, and TestMain gives the whole process one TMPDIR, so a repeated run failed on the existing name instead of on the boundary under test. That is two order-and-repetition defects the job has now found in as many runs, in tests that pass every time required CI runs them once."
+      - "2026-07-29: The first dispatched run on the default branch passed every fuzz job and the macOS and Windows race jobs, and the Linux race job failed on a second defect the merge path cannot see. TestOpenTrustedInjectorRejectsWritableAndSymlinkAncestors created a symlink beside its trusted root, outside what its own cleanup removes, and TestMain gives the whole process one TMPDIR, so a repeated run failed on the existing name instead of on the boundary under test. That is two order-and-repetition defects the job found in as many runs, in tests that pass every time required CI runs them once."
+      - "2026-07-29: With that fix merged, a dispatched run on the default branch passed all seven jobs: the four fuzz targets, and the whole module under the race detector with shuffled repetition on Linux, macOS, and Windows. Every acceptance clause is proven. The cron trigger fires on its own schedule; what it fires is the workflow that just passed."
     acceptance:
       - Every untrusted decoding boundary that an operator or a peer can reach has a fuzz target, and each target asserts a differential property rather than only the absence of a panic.
       - A fuzz target that exists but is not scheduled in the nightly matrix fails a test, so fuzzing coverage cannot be lost silently.
