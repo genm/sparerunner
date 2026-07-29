@@ -891,6 +891,22 @@ func fakeSystemctl(state string, args []string, stderr io.Writer) int {
 			func() error { return deactivateUnits(state, units) },
 		)
 	}
+	if len(args) >= 2 && args[0] == "start" {
+		units := args[1:]
+		return recordMutation(
+			state,
+			recorded,
+			func() error { return activateUnits(state, units) },
+		)
+	}
+	if len(args) >= 2 && args[0] == "stop" {
+		units := args[1:]
+		return recordMutation(
+			state,
+			recorded,
+			func() error { return deactivateUnits(state, units) },
+		)
+	}
 	fmt.Fprintf(stderr, "unexpected systemctl arguments: %q\n", args)
 	return 2
 }
