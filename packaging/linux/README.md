@@ -6,24 +6,34 @@ private GitHub and real systemd acceptance described in
 
 ## Choosing a mode
 
-Linux has two packaged modes. Both keep the full containment contract —
-per-execution cgroup v2 ownership, `cgroup.kill` descendant termination, the
-durable start fence, exec-boundary workspace verification, one-shot JIT
-delivery, and verified cleanup. They differ in exactly one property:
+There is one question, and it is the same one SpareRunner's positioning already
+asks: **what kind of machine is this?**
+
+- **The computer you also work on** → the sudo-free mode
+  (`install-user-service.sh`). Jobs run as your own user, exactly like a
+  manually registered runner, and nothing touches the system.
+- **A surplus machine that serves full time** → the root Supervisor
+  (`install-service.sh`). One `sudo` buys job/Agent UID separation, which
+  matters because one node multiplexes several private Targets and its
+  credential is worth more than a single manual registration.
+
+A machine only ever runs one mode, the choice is made once at install time, and
+`sprun doctor` reports which modes this host can run before you enroll. The
+selection is deliberately never automatic: the two modes differ in a security
+property the owner must consciously accept, so no flag or fallback ever picks
+one silently.
+
+Both modes keep the full containment contract — per-execution cgroup v2
+ownership, `cgroup.kill` descendant termination, the durable start fence,
+exec-boundary workspace verification, one-shot JIT delivery, and verified
+cleanup. The complete difference:
 
 | | Shared runner identity (no root) | Root Supervisor |
 |---|---|---|
-| Installation | `install-user-service.sh`, no root operation | `install-service.sh`, one `sudo` |
 | Job / Agent UID separation | none — the job runs as your user | dedicated per-slot account |
 | Job can read the node credential | yes | no |
 | Concurrent slots | one | one per provisioned slot account |
 | Survives logout | with `loginctl enable-linger` | always (system service) |
-
-Pick the root Supervisor for a machine that serves full time: one `sudo` buys
-UID separation, which matters because one node multiplexes several private
-Targets and its credential is worth more than a single manual registration.
-Pick shared runner identity when you cannot or do not want to use root — for
-example on the computer you also work on.
 
 ### Why GitHub's own runner needs no prerequisites and this does
 
