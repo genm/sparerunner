@@ -104,7 +104,7 @@ func startServer(t *testing.T, controller nodectl.Controller, authorizer nodectl
 	t.Helper()
 	// A short directory keeps the socket path inside the platform sun_path limit.
 	directory := shortTempDir(t)
-	listener, err := nodectl.Listen(directory)
+	listener, err := nodectl.Listen(directory, nil)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}

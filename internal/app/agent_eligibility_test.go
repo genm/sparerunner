@@ -228,8 +228,16 @@ func TestAgentSessionHeartbeatAckEligibleTargetsWireStates(t *testing.T) {
 				connection,
 				&AgentState{NodeID: "node-1", Store: agentStore},
 				nil,
+				// heartbeatInterval must comfortably outlast one real websocket round
+				// trip: the ack this test asserts on has to land before the second
+				// heartbeat fires, or the session ends on "acknowledgement missing"
+				// before the eligibility field is ever processed. 20ms was tight
+				// enough to flake under Windows CI scheduling jitter (Windows CI run
+				// 30353702028: "confirmed eligible targets were reported as absent"
+				// on the empty-list case). 1s matches the interval already proven
+				// reliable by the sibling round-trip tests in agent_runner_test.go.
 				agentSessionOptions{
-					heartbeatInterval: 20 * time.Millisecond,
+					heartbeatInterval: time.Second,
 					readinessTimeout:  5 * time.Millisecond,
 					availability:      availability,
 				},

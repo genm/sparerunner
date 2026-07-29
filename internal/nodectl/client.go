@@ -95,10 +95,20 @@ func (client Client) call(operation Operation, targetID domain.TargetID) (Status
 	// of masking it as an unavailable endpoint.
 	frame, err := readFrame(connection)
 	if err != nil {
+		// Both phases fail closed the same way, but they have different causes,
+		// so the message names the phase. A send failure means the agent never
+		// took the request; a receive failure means it never answered one it may
+		// well have acted on.
 		if writeErr != nil {
-			return Status{}, &Error{Class: ErrorClassEndpointUnavailable, Message: writeErr.Error()}
+			return Status{}, &Error{
+				Class:   ErrorClassEndpointUnavailable,
+				Message: "sending the request failed: " + writeErr.Error(),
+			}
 		}
-		return Status{}, &Error{Class: ErrorClassEndpointUnavailable, Message: err.Error()}
+		return Status{}, &Error{
+			Class:   ErrorClassEndpointUnavailable,
+			Message: "reading the response failed: " + err.Error(),
+		}
 	}
 	var response Response
 	if err := decodeStrict(frame, &response); err != nil {
