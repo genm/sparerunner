@@ -1,0 +1,27 @@
+[Unit]
+Description=SpareRunner shared-identity node agent (no root)
+Documentation=https://github.com/genm/sparerunner
+ConditionPathIsDirectory=/sys/fs/cgroup
+
+[Service]
+Type=simple
+# The default state directory (~/.config/sparerunner/agent) is deliberate: it is
+# the same directory a plain `sprun join` writes, and the join hint recognizes
+# the packaged service by exactly that path. Do not pin an explicit state
+# directory here.
+ExecStart=%h/.local/bin/sparerunner-agent serve \
+    --allow-shared-runner-identity \
+    --require-native-runner
+Restart=on-failure
+RestartSec=5s
+KillMode=control-group
+
+# The agent creates one child cgroup per execution inside its own service
+# cgroup and kills the whole descendant tree through cgroup.kill. Without
+# Delegate= the user manager owns this subtree and construction fails closed
+# to zero capacity, so delegation is a functional requirement, not tuning.
+Delegate=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=default.target

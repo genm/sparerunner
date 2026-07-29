@@ -4,6 +4,70 @@ Status: the local implementation and root-container fault tests pass. The
 private GitHub and real systemd acceptance described in
 [`test/live/linux`](../../test/live/linux) remains a separate release gate.
 
+## Choosing a mode
+
+Linux has two packaged modes. Both keep the full containment contract —
+per-execution cgroup v2 ownership, `cgroup.kill` descendant termination, the
+durable start fence, exec-boundary workspace verification, one-shot JIT
+delivery, and verified cleanup. They differ in exactly one property:
+
+| | Shared runner identity (no root) | Root Supervisor |
+|---|---|---|
+| Installation | `install-user-service.sh`, no root operation | `install-service.sh`, one `sudo` |
+| Job / Agent UID separation | none — the job runs as your user | dedicated per-slot account |
+| Job can read the node credential | yes | no |
+| Concurrent slots | one | one per provisioned slot account |
+| Survives logout | with `loginctl enable-linger` | always (system service) |
+
+Pick the root Supervisor for a machine that serves full time: one `sudo` buys
+UID separation, which matters because one node multiplexes several private
+Targets and its credential is worth more than a single manual registration.
+Pick shared runner identity when you cannot or do not want to use root — for
+example on the computer you also work on.
+
+### Why GitHub's own runner needs no prerequisites and this does
+
+`./config.sh && ./run.sh` requires nothing because it promises nothing: the
+job runs as the same user, can read the runner's stored credential, leaked
+`setsid` daemons survive the job, and the work directory is reused between
+jobs. That is fine for a runner that only ever serves itself.
+
+SpareRunner has a central scheduler. A slot is re-advertised and a workspace
+is reused only after the previous job's complete descendant tree is *provably*
+gone — otherwise fleet capacity accounting, cleanup verification, and
+quarantine would all be claims nobody enforced. Delegated cgroup v2 with
+`cgroup.kill` (Linux 5.14+) is the minimal host feature that makes that proof
+possible, which is why both modes require it and neither will fall back to a
+weaker containment. Even the sudo-free mode is therefore strictly stronger
+than a vanilla runner, not a compromise below it.
+
+## Sudo-free installation (shared runner identity)
+
+Prerequisites are the defaults on any modern systemd distribution: Linux 5.14+,
+the unified cgroup v2 hierarchy, and a `systemd --user` session. Check them
+with `sprun doctor`. Then:
+
+```bash
+install -D -m 0755 ./sparerunner-agent ~/.local/bin/sparerunner-agent
+./packaging/linux/install-user-service.sh
+sprun join spr_...
+systemctl --user restart sparerunner-agent.service
+```
+
+That is the whole flow — the same length as manual runner registration. The
+installer verifies the host and the binary's ownership chain before its first
+mutation, publishes the packaged `systemd --user` unit no-clobber, and rolls
+back verified state on failure, exactly like the root installer. On a machine
+that should keep serving after you log out, additionally run
+`loginctl enable-linger` once (the installer reminds you when it is off).
+
+`uninstall-user-service.sh` stops the service and removes only a unit that is
+byte-identical to this package. Node state under `~/.config/sparerunner` and
+the runner roots under `~/.local/share/sparerunner` are retained; discarding
+the node identity is a separate, deliberate decision.
+
+The rest of this document describes the root Supervisor mode.
+
 ## Supported host boundary
 
 The native Linux adapter requires:
