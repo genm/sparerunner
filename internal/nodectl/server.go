@@ -18,6 +18,12 @@ import (
 // reading must not hold an Agent goroutine open.
 const RequestTimeout = 5 * time.Second
 
+// responseDrainGrace bounds the ordered teardown in write. A client reads its
+// response and closes immediately, so the wait is microseconds in practice. The
+// bound exists so a client that never closes cannot hold a server goroutine, or
+// delay Close, for the whole request timeout.
+const responseDrainGrace = 250 * time.Millisecond
+
 // Controller is the Agent-side implementation of the allowlisted operations.
 // Status must return observation only. SetIntent and SetTargetExclusion must
 // durably record the decision before they return, because a caller that sees a
@@ -246,7 +252,19 @@ func (server *Server) write(connection net.Conn, response Response) {
 		return
 	}
 	payload = append(payload, '\n')
-	_, _ = connection.Write(payload)
+	if _, err := connection.Write(payload); err != nil {
+		return
+	}
+	// Closing a Windows named pipe instance discards what is still buffered in
+	// it, in both directions. A peer refused before its request was ever read
+	// therefore loses the rejection along with its own unread request and sees a
+	// timeout instead of unauthorized_peer, which turns a fail-closed verdict
+	// into an ambiguous one. A Unix socket keeps the written response readable
+	// across the close, which is why only the refusal path exposed this.
+	// Consuming the remaining request and letting the client close first makes
+	// the teardown ordered on every platform.
+	_ = connection.SetReadDeadline(time.Now().Add(responseDrainGrace))
+	_, _ = io.Copy(io.Discard, connection)
 }
 
 func failure(err error) Response {
