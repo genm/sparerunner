@@ -3031,7 +3031,12 @@ func TestAgentSessionHeartbeatTurnsFalseWhenRuntimeProbeStops(t *testing.T) {
 		connection,
 		&AgentState{NodeID: "node-1", Store: agentStore},
 		commandRuntime,
-		agentSessionOptions{heartbeatInterval: 20 * time.Millisecond, readinessTimeout: 5 * time.Millisecond},
+		// heartbeatInterval must outlast one real websocket round trip, or the
+		// second heartbeat can fire (and fail with "acknowledgement missing")
+		// before the server's single ack for the first ever arrives. See the same
+		// reasoning in TestAgentSessionHeartbeatAckEligibleTargetsWireStates,
+		// which flaked on Windows CI at this same 20ms interval.
+		agentSessionOptions{heartbeatInterval: time.Second, readinessTimeout: 5 * time.Millisecond},
 	)
 	if status := websocket.CloseStatus(sessionErr); status != websocket.StatusNormalClosure {
 		t.Fatalf("session error = %v", sessionErr)
@@ -3071,7 +3076,15 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 			return
 		}
 		defer connection.CloseNow()
-		ctx, cancel := context.WithTimeout(request.Context(), 5*time.Second)
+		// The client's AcknowledgeUpdate call below and this handler's own poll
+		// loop share the one store connection agentStore opens (SetMaxOpenConns(1)
+		// in internal/store/store.go): every poll iteration checks that connection
+		// out and back in, competing with the client's write for the same slot.
+		// Windows CI run 30264221622 attempt 1 timed out here ("session error =
+		// failed to write msg: use of closed network connection" at 3.05s, right
+		// at the old 5s/2s/1ms budget's edge), so both this handler's deadline and
+		// the poll cadence need real headroom, not just the client-visible one.
+		ctx, cancel := context.WithTimeout(request.Context(), 30*time.Second)
 		defer cancel()
 		for _, expected := range []transport.MessageType{transport.MessageHello, transport.MessageSnapshot} {
 			envelope, readErr := transport.ReadEnvelope(ctx, connection)
@@ -3120,7 +3133,7 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 			serverResult <- err
 			return
 		}
-		deadline := time.Now().Add(2 * time.Second)
+		deadline := time.Now().Add(15 * time.Second)
 		for {
 			pending, err = agentStore.PendingExecutionUpdates(ctx)
 			if err != nil {
@@ -3134,14 +3147,18 @@ func TestAgentSessionKeepsHeartbeatAndOutboxAcknowledgementsDistinct(t *testing.
 				serverResult <- fmt.Errorf("update ACK was not applied: %#v", pending)
 				return
 			}
-			time.Sleep(time.Millisecond)
+			// A 1ms cadence rechecks the single shared store connection so often
+			// that it can starve the client's own AcknowledgeUpdate call from ever
+			// checking it out (see the contention note above this handler). 20ms
+			// still resolves the fast-path promptly while leaving real gaps.
+			time.Sleep(20 * time.Millisecond)
 		}
 		serverResult <- nil
 		_ = connection.Close(websocket.StatusNormalClosure, "complete")
 	}))
 	defer server.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	connection, _, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(server.URL, "http"), nil)
 	if err != nil {
