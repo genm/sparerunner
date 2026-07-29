@@ -30,10 +30,16 @@ func TestOpenTrustedInjectorRejectsWritableAndSymlinkAncestors(t *testing.T) {
 	if err := os.Chmod(root, 0o700); err != nil {
 		t.Fatal(err)
 	}
+	// The link sits beside the trusted root, which is outside what
+	// secureLinuxTestRoot removes, so it is removed here instead. TestMain
+	// creates one TMPDIR for the whole process, so without this the link
+	// survives into a repeated run of this test and the run fails on an
+	// existing name rather than on the boundary it is meant to prove.
 	link := filepath.Join(filepath.Dir(root), "injector-link")
 	if err := os.Symlink(source, link); err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.Remove(link) })
 	if _, _, err := openTrustedInjector(link, uid); !errors.Is(err, errEvidenceInvalid) {
 		t.Fatalf("symlink error = %v, want errEvidenceInvalid", err)
 	}
