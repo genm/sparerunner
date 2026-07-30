@@ -27,7 +27,7 @@ func TestCaptureProvenanceFailsClosedOnDirtyOrAlteredInputs(t *testing.T) {
 			authority.Agent.ExecutableSHA256 = strings.Repeat("9", 64)
 		}},
 		{name: "installed path differs from running binary", mutate: func(_ *liveConfig, _ *authorityEvidence, probe *fakeAuthorityProbe) {
-			probe.fileDigests["/usr/local/bin/sparerunner-agent"] = strings.Repeat("9", 64)
+			probe.fileDigests["/usr/bin/sparerunner-agent"] = strings.Repeat("9", 64)
 		}},
 		{name: "altered effective unit", mutate: func(_ *liveConfig, authority *authorityEvidence, _ *fakeAuthorityProbe) {
 			authority.Supervisor.EffectiveUnitSHA256 = strings.Repeat("9", 64)
@@ -107,20 +107,20 @@ func provenanceFixture(
 			Unit: "sparerunner-agent.service", FragmentPath: "/etc/systemd/system/sparerunner-agent.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedAgentUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("serve", config.RuntimeRoot),
-			Executable:          "/usr/local/bin/sparerunner-agent",
+			Executable:          "/usr/bin/sparerunner-agent",
 			ExecutableSHA256:    config.Provenance.ExpectedInstalledAgentSHA256,
 		},
 		Supervisor: serviceAuthority{
 			Unit: "sparerunner-supervisor.service", FragmentPath: "/etc/systemd/system/sparerunner-supervisor.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedSupervisorUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("supervisor", config.RuntimeRoot),
-			Executable:          "/usr/local/bin/sparerunner-agent",
+			Executable:          "/usr/bin/sparerunner-agent",
 			ExecutableSHA256:    config.Provenance.ExpectedInstalledAgentSHA256,
 		},
 		GeneratedAt: time.Now().UTC().Format(time.RFC3339Nano),
 	}
 	probe := validAuthorityProbe()
-	probe.fileDigests["/usr/local/bin/sparerunner-agent"] =
+	probe.fileDigests["/usr/bin/sparerunner-agent"] =
 		config.Provenance.ExpectedInstalledAgentSHA256
 	executable, err := os.Executable()
 	if err != nil {
@@ -131,8 +131,8 @@ func provenanceFixture(
 		"false",
 	}
 	probe.trustedFiles[executable] = true
-	probe.trustedFiles["/usr/local/bin/sparerunner-agent"] = true
-	probe.buildVCS["/usr/local/bin/sparerunner-agent"] = [2]string{
+	probe.trustedFiles["/usr/bin/sparerunner-agent"] = true
+	probe.buildVCS["/usr/bin/sparerunner-agent"] = [2]string{
 		config.Provenance.ExpectedCommitSHA,
 		"false",
 	}

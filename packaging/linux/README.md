@@ -190,11 +190,22 @@ the service contract in the meantime, the way `packaging/macos/install-service.s
 and `packaging/windows/install.ps1` do for their platforms. A `.deb` or `.rpm`
 that calls the same contract from its scriptlets remains part of task-015.
 
+The canonical binary path is `/usr/bin`, not `/usr/local/bin`, because a
+future `.deb`/`.rpm` may not install into `/usr/local` (Debian Policy 9.1)
+and the packaged units' `ExecStart` must name one path that is byte-identical
+whether the files arrived by package manager or by these scripts — the
+install, upgrade, and uninstall contracts all prove provenance by exact byte
+comparison, so a second unit variant for a second path would make each
+delivery method foreign to the other's verifier. The script flow installing
+into `/usr/bin` is unconventional for a manually copied binary, but it is a
+root-only operation into a root-owned directory, and one shared layout is
+what keeps the provenance model whole.
+
 The installed layout and the ownership it implies are what the isolation
 contract above requires, so they are not suggestions:
 
 ```text
-/usr/local/bin/sparerunner-agent
+/usr/bin/sparerunner-agent
 /usr/lib/systemd/system/sparerunner-agent.service
 /usr/lib/systemd/system/sparerunner-supervisor.service
 /usr/lib/sysusers.d/sparerunner.conf
@@ -205,8 +216,8 @@ contract above requires, so they are not suggestions:
 and directories, and starts the services. Place the binaries first:
 
 ```bash
-sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/local/bin/sparerunner-agent
-sudo install -o root -g root -m 0755 ./sprun /usr/local/bin/sprun
+sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/bin/sparerunner-agent
+sudo install -o root -g root -m 0755 ./sprun /usr/bin/sprun
 sudo ./packaging/linux/install-service.sh
 ```
 
@@ -229,7 +240,7 @@ only on the Supervisor and its socket. Once `/var/lib/sparerunner-agent` holds
 node state, an Agent that is not running fails the install:
 
 ```bash
-sudo -u sparerunner-agent /usr/local/bin/sprun join spr_... \
+sudo -u sparerunner-agent /usr/bin/sprun join spr_... \
   --state-dir /var/lib/sparerunner-agent
 sudo systemctl restart sparerunner-agent.service
 ```
@@ -246,8 +257,8 @@ Upgrades are owned by `upgrade-service.sh`. Publish the new binaries the same
 way as the initial install, then run the upgrade script from the new package:
 
 ```bash
-sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/local/bin/sparerunner-agent
-sudo install -o root -g root -m 0755 ./sprun /usr/local/bin/sprun
+sudo install -o root -g root -m 0755 ./sparerunner-agent /usr/bin/sparerunner-agent
+sudo install -o root -g root -m 0755 ./sprun /usr/bin/sprun
 sudo ./packaging/linux/upgrade-service.sh
 ```
 

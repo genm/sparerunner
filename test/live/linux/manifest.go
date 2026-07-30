@@ -318,7 +318,7 @@ func validateProvenanceManifest(
 		provenance.HarnessVCSRevision != config.Provenance.ExpectedCommitSHA ||
 		provenance.HarnessVCSModified ||
 		!canonicalAbsolutePath(provenance.HarnessPath) ||
-		provenance.InstalledAgentPath != "/usr/local/bin/sparerunner-agent" ||
+		provenance.InstalledAgentPath != "/usr/bin/sparerunner-agent" ||
 		provenance.InstalledAgentSHA256 !=
 			config.Provenance.ExpectedInstalledAgentSHA256 ||
 		provenance.InstalledAgentVCSRevision != config.Provenance.ExpectedCommitSHA ||

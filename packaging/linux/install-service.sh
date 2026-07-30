@@ -14,7 +14,7 @@ readonly marker_name=".sparerunner-install-ownership-v1"
 readonly marker_version="1"
 readonly agent_unit="sparerunner-agent.service"
 readonly supervisor_unit="sparerunner-supervisor.service"
-readonly binary_path="/usr/local/bin/sparerunner-agent"
+readonly binary_path="/usr/bin/sparerunner-agent"
 readonly unit_directory_path="/usr/lib/systemd/system"
 readonly sysusers_path="/usr/lib/sysusers.d/sparerunner.conf"
 readonly tmpfiles_path="/usr/lib/tmpfiles.d/sparerunner.conf"
@@ -602,7 +602,7 @@ require_package_file "$tmpfiles_source"
 require_safe_ancestor_chain "$unit_directory_path"
 require_safe_ancestor_chain "/usr/lib/sysusers.d"
 require_safe_ancestor_chain "/usr/lib/tmpfiles.d"
-require_safe_ancestor_chain "/usr/local/bin"
+require_safe_ancestor_chain "/usr/bin"
 require_safe_ancestor_chain "/var/lib"
 require_supported_host
 require_regular_contract "$binary" "0:0:0755"
@@ -708,7 +708,7 @@ require_socket_contract
 # real failure and never a pending step.
 if directory_is_empty "$agent_state"; then
   echo "installed; ${agent_unit} stays not-initialized until this node is enrolled"
-  echo "next: sudo -u sparerunner-agent /usr/local/bin/sprun join <join-code> --state-dir ${agent_state_path}"
+  echo "next: sudo -u sparerunner-agent /usr/bin/sprun join <join-code> --state-dir ${agent_state_path}"
   echo "then: systemctl restart ${agent_unit}"
 else
   unit_is_active "$agent_unit" ||

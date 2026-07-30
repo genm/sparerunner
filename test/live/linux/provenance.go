@@ -87,21 +87,21 @@ func captureProvenanceEvidence(
 		runnerSize != officialPackage.Size {
 		return errEvidenceInvalid
 	}
-	if probe.trustedRootFile("/usr/local/bin/sparerunner-agent") != nil {
+	if probe.trustedRootFile("/usr/bin/sparerunner-agent") != nil {
 		return errEvidenceInvalid
 	}
-	installedDigest, err := probe.regularFileDigest("/usr/local/bin/sparerunner-agent")
+	installedDigest, err := probe.regularFileDigest("/usr/bin/sparerunner-agent")
 	if err != nil ||
 		installedDigest != config.Provenance.ExpectedInstalledAgentSHA256 {
 		return errEvidenceInvalid
 	}
 	installedRevision, installedModified, err := probe.goBuildVCS(
-		"/usr/local/bin/sparerunner-agent",
+		"/usr/bin/sparerunner-agent",
 	)
 	if err != nil || installedModified || installedRevision != commit {
 		return errEvidenceInvalid
 	}
-	if authority.Agent.Executable != "/usr/local/bin/sparerunner-agent" ||
+	if authority.Agent.Executable != "/usr/bin/sparerunner-agent" ||
 		authority.Supervisor.Executable != authority.Agent.Executable ||
 		authority.Agent.ExecutableSHA256 != config.Provenance.ExpectedInstalledAgentSHA256 ||
 		authority.Supervisor.ExecutableSHA256 != config.Provenance.ExpectedInstalledAgentSHA256 ||

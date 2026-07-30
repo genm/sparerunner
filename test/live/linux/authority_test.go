@@ -174,7 +174,7 @@ func TestReadServiceAuthorityRejectsDecoyRuntimeFakePIDWrongUIDAndPIDReuse(t *te
 		}},
 		{name: "duplicate binary", mutate: func(probe *fakeAuthorityProbe) {
 			probe.properties["sparerunner-agent.service\x00ExecStart"] +=
-				" /usr/local/bin/sparerunner-agent"
+				" /usr/bin/sparerunner-agent"
 		}},
 		{name: "unexpected flag", mutate: func(probe *fakeAuthorityProbe) {
 			probe.properties["sparerunner-agent.service\x00ExecStart"] = strings.Replace(
@@ -241,8 +241,8 @@ func TestReadSupervisorAuthorityRejectsWrongSocketFenceAndUsers(t *testing.T) {
 
 func TestParseEffectiveExecStartRejectsDuplicateAndPrefixRuntimeArguments(t *testing.T) {
 	for _, value := range []string{
-		"{ /usr/local/bin/sparerunner-agent ; /usr/local/bin/sparerunner-agent serve --runtime-root=/runtime --runtime-root=/decoy ; }",
-		"{ /usr/local/bin/sparerunner-agent ; /usr/local/bin/sparerunner-agent serve --runtime-root=/runtime-extra ; }",
+		"{ /usr/bin/sparerunner-agent ; /usr/bin/sparerunner-agent serve --runtime-root=/runtime --runtime-root=/decoy ; }",
+		"{ /usr/bin/sparerunner-agent ; /usr/bin/sparerunner-agent serve --runtime-root=/runtime-extra ; }",
 		"{ /tmp/sparerunner-agent ; /tmp/sparerunner-agent serve --runtime-root=/runtime ; }",
 	} {
 		argv, err := parseEffectiveExecStart(value)
@@ -255,7 +255,7 @@ func TestParseEffectiveExecStartRejectsDuplicateAndPrefixRuntimeArguments(t *tes
 
 func TestParseEffectiveExecStartAcceptsRealSystemdShowSerialization(t *testing.T) {
 	expected := expectedServiceArgv("serve", "/var/lib/sparerunner-runtime")
-	value := "{ path=/usr/local/bin/sparerunner-agent ; argv[]=" +
+	value := "{ path=/usr/bin/sparerunner-agent ; argv[]=" +
 		strings.Join(expected, " ") +
 		" ; ignore_errors=no ; start_time=[Sun 2026-07-27 12:00:00 JST] ; " +
 		"stop_time=[n/a] ; pid=101 ; code=(null) ; status=0/0 }"
@@ -289,7 +289,7 @@ func validAuthorityProbe() fakeAuthorityProbe {
 		{"sparerunner-supervisor.service", "supervisor", "root", 202, 0, "/system.slice/sparerunner-supervisor.service", 222},
 	} {
 		properties[service.unit+"\x00ExecStart"] =
-			"{ path=/usr/local/bin/sparerunner-agent ; argv[]=" +
+			"{ path=/usr/bin/sparerunner-agent ; argv[]=" +
 				strings.Join(expectedServiceArgv(service.command, "/var/lib/sparerunner-runtime"), " ") +
 				" ; ignore_errors=no ; start_time=[n/a] ; stop_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }"
 		properties[service.unit+"\x00MainPID"] = strconv.Itoa(service.pid)
@@ -313,14 +313,14 @@ func validAuthorityProbe() fakeAuthorityProbe {
 		},
 		files: files,
 		executables: map[int][2]string{
-			101: {"/usr/local/bin/sparerunner-agent", strings.Repeat("a", 64)},
-			202: {"/usr/local/bin/sparerunner-agent", strings.Repeat("a", 64)},
+			101: {"/usr/bin/sparerunner-agent", strings.Repeat("a", 64)},
+			202: {"/usr/bin/sparerunner-agent", strings.Repeat("a", 64)},
 		},
 		fileDigests: map[string]string{
-			"/usr/local/bin/sparerunner-agent": strings.Repeat("a", 64),
+			"/usr/bin/sparerunner-agent": strings.Repeat("a", 64),
 		},
 		buildVCS: map[string][2]string{
-			"/usr/local/bin/sparerunner-agent": {strings.Repeat("1", 40), "false"},
+			"/usr/bin/sparerunner-agent": {strings.Repeat("1", 40), "false"},
 		},
 		runnerAuthority: [3]string{
 			"/var/lib/sparerunner-runtime/.sparerunner-official/test/archive",
