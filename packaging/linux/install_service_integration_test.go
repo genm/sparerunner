@@ -176,7 +176,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 			name:   "missing agent binary",
 			reason: "unsafe or missing regular file",
 			prepare: func(t *testing.T, harness installerHarness) installerHarness {
-				removePath(t, filepath.Join(harness.root, "usr/local/bin/sparerunner-agent"))
+				removePath(t, filepath.Join(harness.root, "usr/bin/sparerunner-agent"))
 				return harness
 			},
 		},
@@ -187,7 +187,7 @@ func TestInstallServiceAcceptsOnlyCleanOwnedState(t *testing.T) {
 				setStatOverride(
 					t,
 					harness.helper,
-					filepath.Join(harness.root, "usr/local/bin/sparerunner-agent"),
+					filepath.Join(harness.root, "usr/bin/sparerunner-agent"),
 					"0:0:0775",
 				)
 				return harness
@@ -368,7 +368,7 @@ func newInstallerHarness(t *testing.T) installerHarness {
 		filepath.Join(root, "usr/lib/systemd/system"),
 		filepath.Join(root, "usr/lib/sysusers.d"),
 		filepath.Join(root, "usr/lib/tmpfiles.d"),
-		filepath.Join(root, "usr/local/bin"),
+		filepath.Join(root, "usr/bin"),
 		filepath.Join(root, "var/cache"),
 		filepath.Join(root, "var/lib"),
 	} {
@@ -376,7 +376,7 @@ func newInstallerHarness(t *testing.T) installerHarness {
 	}
 	writeFile(t, filepath.Join(root, "sys/fs/cgroup/cgroup.controllers"), "cpu memory pids\n")
 	writeFile(t, filepath.Join(root, ".sparerunner-installer-test-root"), "test-only\n")
-	binary := filepath.Join(root, "usr/local/bin/sparerunner-agent")
+	binary := filepath.Join(root, "usr/bin/sparerunner-agent")
 	writeFile(t, binary, "#!/bin/sh\nexit 0\n")
 	if err := os.Chmod(binary, 0o755); err != nil {
 		t.Fatal(err)

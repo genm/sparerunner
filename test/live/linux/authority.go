@@ -317,9 +317,9 @@ func parseEffectiveExecStart(value string) ([]string, error) {
 	for index := range argv {
 		argv[index] = strings.Trim(argv[index], "\"'")
 	}
-	if declaredExecutable != "/usr/local/bin/sparerunner-agent" ||
+	if declaredExecutable != "/usr/bin/sparerunner-agent" ||
 		len(argv) < 2 || argv[0] != declaredExecutable ||
-		strings.Count(value, "/usr/local/bin/sparerunner-agent") != 2 {
+		strings.Count(value, "/usr/bin/sparerunner-agent") != 2 {
 		return nil, errNodeEvidenceInvalid
 	}
 	return argv, nil
@@ -329,7 +329,7 @@ func expectedServiceArgv(subcommand, runtimeRoot string) []string {
 	switch subcommand {
 	case "serve":
 		return []string{
-			"/usr/local/bin/sparerunner-agent", "serve",
+			"/usr/bin/sparerunner-agent", "serve",
 			"--state-dir=/var/lib/sparerunner-agent",
 			"--cache-root=/var/cache/sparerunner-agent",
 			"--runtime-root=" + runtimeRoot,
@@ -338,7 +338,7 @@ func expectedServiceArgv(subcommand, runtimeRoot string) []string {
 		}
 	case "supervisor":
 		return []string{
-			"/usr/local/bin/sparerunner-agent", "supervisor",
+			"/usr/bin/sparerunner-agent", "supervisor",
 			"--socket=/run/sparerunner-supervisor/supervisor.sock",
 			"--runtime-root=" + runtimeRoot,
 			"--cache-root=/var/cache/sparerunner-agent",

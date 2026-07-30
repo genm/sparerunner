@@ -11,7 +11,7 @@ User=root
 # Keep both root-owned so the Supervisor can reject a replaced cgroup boundary;
 # tmpfiles owns the separate local socket directory for the Agent group.
 Group=root
-ExecStart=/usr/local/bin/sparerunner-agent supervisor \
+ExecStart=/usr/bin/sparerunner-agent supervisor \
     --socket=/run/sparerunner-supervisor/supervisor.sock \
     --runtime-root=/var/lib/sparerunner-runtime \
     --cache-root=/var/cache/sparerunner-agent \

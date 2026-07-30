@@ -16,8 +16,8 @@ import (
 
 func TestCollectProcessEvidenceUsesOnlyAllowlistedRoles(t *testing.T) {
 	procRoot := t.TempDir()
-	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/local/bin/sparerunner-agent", "serve", "--state-dir=/secret/path"})
-	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/local/bin/sparerunner-agent", "supervisor", "--socket=/run/private.sock"})
+	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/bin/sparerunner-agent", "serve", "--state-dir=/secret/path"})
+	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/bin/sparerunner-agent", "supervisor", "--socket=/run/private.sock"})
 	writeFakeProcess(t, procRoot, 303, 1001, []string{"/usr/bin/unrelated", "private-canary"})
 
 	evidence, err := collectProcessEvidence(procRoot, "before")
@@ -35,8 +35,8 @@ func TestCollectProcessEvidenceUsesOnlyAllowlistedRoles(t *testing.T) {
 
 func TestCollectProcessEvidenceRejectsIdleRunnerListener(t *testing.T) {
 	procRoot := t.TempDir()
-	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/local/bin/sparerunner-agent", "serve"})
-	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/local/bin/sparerunner-agent", "supervisor"})
+	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/bin/sparerunner-agent", "serve"})
+	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/bin/sparerunner-agent", "supervisor"})
 	writeFakeProcess(t, procRoot, 303, 1002, []string{"/var/lib/runner/Runner.Listener", "run"})
 	if _, err := collectProcessEvidence(procRoot, "after"); !errors.Is(err, errNodeEvidenceInvalid) {
 		t.Fatalf("collectProcessEvidence() error = %v, want errNodeEvidenceInvalid", err)
@@ -45,8 +45,8 @@ func TestCollectProcessEvidenceRejectsIdleRunnerListener(t *testing.T) {
 
 func TestCollectProcessEvidenceRequiresExactlyOneRunningListener(t *testing.T) {
 	procRoot := t.TempDir()
-	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/local/bin/sparerunner-agent", "serve"})
-	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/local/bin/sparerunner-agent", "supervisor"})
+	writeFakeProcess(t, procRoot, 101, 1001, []string{"/usr/bin/sparerunner-agent", "serve"})
+	writeFakeProcess(t, procRoot, 202, 0, []string{"/usr/bin/sparerunner-agent", "supervisor"})
 	writeFakeProcess(t, procRoot, 303, 1002, []string{"/var/lib/runner/Runner.Listener", "run"})
 	evidence, err := collectProcessEvidence(procRoot, "running-before-restart")
 	if err != nil {

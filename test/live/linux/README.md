@@ -86,7 +86,7 @@ the repository and replace every placeholder. Important values:
 - `provenance.expectedCommitSha`: the exact clean `HEAD` used to build the
   harness. Untracked files and every staged or unstaged change fail the gate.
 - `provenance.expectedInstalledAgentSha256`: SHA-256 of the installed
-  `/usr/local/bin/sparerunner-agent`. Both this binary and the harness must contain
+  `/usr/bin/sparerunner-agent`. Both this binary and the harness must contain
   Go build metadata whose `vcs.revision` equals `expectedCommitSha` and whose
   `vcs.modified` is false.
 - `provenance.expectedAgentUnitFragmentPath` and
@@ -158,8 +158,8 @@ Populate the explicit provenance values immediately before a protected run:
 ```bash
 git rev-parse --verify HEAD
 git status --porcelain=v1 --untracked-files=all
-sha256sum /usr/local/bin/sparerunner-agent
-go version -m /usr/local/bin/sparerunner-agent
+sha256sum /usr/bin/sparerunner-agent
+go version -m /usr/bin/sparerunner-agent
 systemctl cat --no-pager sparerunner-agent.service | sha256sum
 systemctl cat --no-pager sparerunner-supervisor.service | sha256sum
 ```

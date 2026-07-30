@@ -477,7 +477,7 @@ func writeValidFinalManifest(
 		HarnessPath:               "/run/sparerunner-live-linux.test/harness",
 		HarnessSHA256:             harnessDigest,
 		HarnessVCSRevision:        config.Provenance.ExpectedCommitSHA,
-		InstalledAgentPath:        "/usr/local/bin/sparerunner-agent",
+		InstalledAgentPath:        "/usr/bin/sparerunner-agent",
 		InstalledAgentSHA256:      config.Provenance.ExpectedInstalledAgentSHA256,
 		InstalledAgentVCSRevision: config.Provenance.ExpectedCommitSHA,
 		AgentUnit: unitProvenance{
@@ -641,7 +641,7 @@ func validProcessEvidence(phase string, generatedAt time.Time) processEvidence {
 				SystemdUnit:    "sparerunner-agent.service",
 				ControlGroup:   "/system.slice/sparerunner-agent.service",
 				StartTimeTicks: 111, BootID: "01234567-89ab-cdef-0123-456789abcdef",
-				Executable:       "/usr/local/bin/sparerunner-agent",
+				Executable:       "/usr/bin/sparerunner-agent",
 				ExecutableSHA256: strings.Repeat("a", 64),
 			},
 			{
@@ -649,7 +649,7 @@ func validProcessEvidence(phase string, generatedAt time.Time) processEvidence {
 				SystemdUnit:    "sparerunner-supervisor.service",
 				ControlGroup:   "/system.slice/sparerunner-supervisor.service",
 				StartTimeTicks: 222, BootID: "01234567-89ab-cdef-0123-456789abcdef",
-				Executable:       "/usr/local/bin/sparerunner-agent",
+				Executable:       "/usr/bin/sparerunner-agent",
 				ExecutableSHA256: strings.Repeat("a", 64),
 			},
 		},
@@ -693,7 +693,7 @@ func validAuthorityEvidence(config liveConfig, generatedAt time.Time) authorityE
 		BootID:      "01234567-89ab-cdef-0123-456789abcdef",
 		RuntimeRoot: config.RuntimeRoot, RunnerUID: 1002,
 		Agent: serviceAuthority{
-			Unit: "sparerunner-agent.service", Executable: "/usr/local/bin/sparerunner-agent",
+			Unit: "sparerunner-agent.service", Executable: "/usr/bin/sparerunner-agent",
 			FragmentPath:        "/etc/systemd/system/sparerunner-agent.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedAgentUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("serve", config.RuntimeRoot),
@@ -702,7 +702,7 @@ func validAuthorityEvidence(config liveConfig, generatedAt time.Time) authorityE
 			ProcessStartTicks: 111, ExecutableSHA256: strings.Repeat("a", 64),
 		},
 		Supervisor: serviceAuthority{
-			Unit: "sparerunner-supervisor.service", Executable: "/usr/local/bin/sparerunner-agent",
+			Unit: "sparerunner-supervisor.service", Executable: "/usr/bin/sparerunner-agent",
 			FragmentPath:        "/etc/systemd/system/sparerunner-supervisor.service",
 			EffectiveUnitSHA256: config.Provenance.ExpectedSupervisorUnitSHA256,
 			ExecStartArgv:       expectedServiceArgv("supervisor", config.RuntimeRoot),
