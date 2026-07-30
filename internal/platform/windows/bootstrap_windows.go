@@ -157,7 +157,18 @@ func receiveBootstrapRequest(
 	connected := make(chan error, 1)
 	go func() {
 		connectErr := syswindows.ConnectNamedPipe(handle, nil)
-		if errors.Is(connectErr, syswindows.ERROR_PIPE_CONNECTED) {
+		// ERROR_PIPE_CONNECTED: the client connected in the window between
+		// CreateNamedPipe and this call. ERROR_NO_DATA: it additionally closed
+		// its handle inside that same window. Both mean a real client
+		// completed a connection; in the second case its request frame is
+		// still buffered in the pipe and readable, and the disconnect is
+		// observed by the peek monitor and by Complete exactly as if the
+		// client had closed one instant after this call returned. Refusing
+		// ERROR_NO_DATA would make the same client behavior — write the
+		// frame, then crash or exit before the acknowledgement — succeed or
+		// fail depending on which side won a scheduler race.
+		if errors.Is(connectErr, syswindows.ERROR_PIPE_CONNECTED) ||
+			errors.Is(connectErr, syswindows.ERROR_NO_DATA) {
 			connectErr = nil
 		}
 		connected <- connectErr
