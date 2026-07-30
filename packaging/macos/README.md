@@ -4,6 +4,22 @@ Status: local adapter, package, launchd contract, and process-table fault tests
 pass on macOS. A reboot/sleep cycle, root LaunchDaemon run, Keychain ACL
 inspection, and private GitHub job remain live acceptance gates.
 
+## Uninstallation
+
+`uninstall-service.sh` unloads the LaunchDaemon and removes only the property
+list this package published, re-verifying it immediately before removal:
+
+```bash
+sudo ./packaging/macos/uninstall-service.sh
+```
+
+It refuses to remove a property list that differs from this package before
+stopping anything. Node state, the runner package cache, and the dedicated
+non-login `sparerunner-runner-0` account and group are deliberately retained,
+because the node credential is durable material this script cannot decide to
+destroy; the command prints the exact paths and `dscl` commands to remove them
+as a separate, explicit operator decision.
+
 ## Ownership boundary
 
 The packaged `com.genm.sparerunner.agent` job is a system LaunchDaemon. The macOS
@@ -132,10 +148,10 @@ private key into the state directory or pass it through an environment
 variable. This packaged join path prints the launchd activation command above;
 it does not tell the operator to start a second `sparerunner-agent serve` process.
 
-This is an initial-install contract, not an upgrade or uninstall mechanism. If
-preflight reports foreign, partial, or changed state, inspect it and use the
-future documented upgrade/recovery flow; do not add a force-adopt option or
-manually rewrite the ownership marker.
+This is an initial-install contract, not an upgrade mechanism. If preflight
+reports foreign, partial, or changed state, inspect it and use the future
+documented upgrade/recovery flow; do not add a force-adopt option or manually
+rewrite the ownership marker. See "Uninstallation" above for removal.
 
 Inspect the non-secret service state with:
 
