@@ -184,7 +184,24 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+          # Same reason `cross-build` opts out: setup-go keys on runner OS plus
+          # go.sum, so every ubuntu Go job competes for one key and only the
+          # first to finish saves. This job compiles a test binary for every
+          # package, which no faster job does, so that work was never the copy
+          # that got kept.
+          cache: false
+
+      # Keyed on the module graph, not the source. The Go build cache is
+      # content-addressed, so an entry for changed source is unused rather than
+      # wrong, and what this keeps warm is the standard library, the module
+      # dependencies, and every package that did not change.
+      - name: Cache the test build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       # Naming the files is the difference between a fixable failure and a
       # one-line "exit code 1".
