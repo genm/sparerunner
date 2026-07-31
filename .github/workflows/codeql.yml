@@ -3,11 +3,22 @@ name: CodeQL
 # Code scanning is free for public repositories. This runs the analysis on every
 # pull request so a finding lands as review feedback, and on a weekly schedule so
 # a newly published query catches code that has not changed since it was written.
+#
+# paths-ignore keeps a prose-only change from spending three analyses on a tree
+# CodeQL cannot have a finding in. CodeQL is not a required check, so a skipped
+# run here blocks nothing; ci.yml makes the same distinction through its
+# `changes` job, where it has to stay reportable.
 on:
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   push:
     branches:
       - main
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   schedule:
     # Monday 04:17 UTC. Off the hour so the run does not queue behind the burst
     # of workflows every other repository schedules at :00.

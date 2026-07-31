@@ -1,0 +1,83 @@
+name: Cache cleanup
+
+# Actions gives a repository 10 GB of cache and evicts least-recently-used
+# entries past it. A cache written by a pull request run is scoped to that pull
+# request's own ref, so once the pull request closes nothing can ever read it
+# again — but it still occupies the budget and still pushes out the caches on
+# `main`, which are the ones every future run restores from.
+#
+# Measured before this workflow existed: 10,499 MiB across 96 entries, of which
+# 6,387 MiB belonged to 50 caches on already-closed pull requests. The repository
+# was permanently at the ceiling, so `main`'s Go and Playwright caches were being
+# evicted and rebuilt continuously.
+#
+# Weekly rather than on `pull_request: closed`, because a fork's token is
+# read-only and cannot delete a cache. Solving that would mean
+# `pull_request_target`, which is not worth a privileged trigger for a
+# housekeeping job that a schedule does just as well.
+on:
+  schedule:
+    # Monday 03:11 UTC, before the CodeQL, Scorecard, and security-drift runs, so
+    # they start against a budget that has already been swept.
+    - cron: "11 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cache-cleanup
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Delete caches belonging to closed pull requests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      # Deleting a cache entry.
+      actions: write
+      # Reading which pull requests are still open.
+      pull-requests: read
+    steps:
+      - name: Delete caches whose pull request is closed
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Fail closed. Under `set -e` a failed listing aborts the job rather
+          # than leaving `open` empty, which would read as "every pull request is
+          # closed" and delete the caches of live ones.
+          open="$(gh pr list --state open --limit 500 --json number --jq '.[].number')"
+          printf 'open pull requests: %s\n' "$(echo "${open}" | tr '\n' ' ')"
+
+          deleted=0
+          reclaimed=0
+          while IFS=$'\t' read -r id ref size; do
+            # Only pull request refs are ever unreachable. A cache on a branch —
+            # `main` above all — is the whole point of having a cache.
+            case "${ref}" in
+              refs/pull/*/merge | refs/pull/*/head) ;;
+              *) continue ;;
+            esac
+            number="${ref#refs/pull/}"
+            number="${number%/*}"
+            if printf '%s\n' "${open}" | grep -qx "${number}"; then
+              continue
+            fi
+            printf 'deleting cache %s (%s MiB) from closed pull request %s\n' \
+              "${id}" "$((size / 1048576))" "${number}"
+            gh api -X DELETE "repos/${GH_REPO}/actions/caches/${id}"
+            deleted=$((deleted + 1))
+            reclaimed=$((reclaimed + size))
+          done < <(
+            gh api "repos/${GH_REPO}/actions/caches?per_page=100" --paginate \
+              --jq '.actions_caches[] | [.id, .ref, .size_in_bytes] | @tsv'
+          )
+
+          printf 'deleted %s caches, reclaimed %s MiB\n' \
+            "${deleted}" "$((reclaimed / 1048576))" >> "${GITHUB_STEP_SUMMARY}"

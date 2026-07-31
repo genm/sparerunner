@@ -156,8 +156,12 @@ you did not, and the names of the normal-path and failure-path tests. "Not yet
 proven" is a valid and useful answer; a missing answer is not.
 
 Required CI runs on GitHub-hosted runners only, and it does not skip draft pull
-requests — the draft state is where evidence is produced. Alongside it, CodeQL,
-OpenSSF Scorecard, and dependency review report on every pull request. A
+requests — the draft state is where evidence is produced. A pull request that
+changes nothing but prose (`docs/**` and any `*.md`) skips the language gates;
+anything else, and any event that is not a pull request, runs all of them.
+Alongside required CI, CodeQL and dependency review report on every pull request
+that touches code. OpenSSF Scorecard grades repository configuration rather than
+a diff, so it runs weekly against `main` instead of per pull request. A
 dependency review failure on a licence is a product decision, not a lint nit:
 release archives redistribute dependencies under Apache-2.0, so an exception is
 added to `.github/workflows/dependency-review.yml` deliberately or the dependency
