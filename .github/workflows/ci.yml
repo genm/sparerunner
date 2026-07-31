@@ -233,6 +233,19 @@ jobs:
       # failing test inline, while still writing the machine-readable evidence.
       # Redirecting `go test -json` to a file instead leaves a failed run showing
       # nothing but the exit code.
+      # -count=1 is what keeps this a test run rather than a replay. `go test`
+      # caches successful results inside the same GOCACHE this job now restores,
+      # so without it a package whose inputs are unchanged reports PASS without
+      # executing anything. That was already happening before this cache existed:
+      # on run 30595306032, `Go (macos-15)` reported 23 of 61 packages `(cached)`
+      # and `Go (windows-2025)` 21 of 36, because those two are the only Go job
+      # on their runner OS and so always restore their own results. A green gate
+      # has to mean the tests ran.
+      #
+      # The build cache still does the expensive part. Measured on this job: 81s
+      # with a cold cache, and 17s when a warm cache was allowed to replay
+      # results — which is the number this flag deliberately gives up, because
+      # 23 of those packages never ran.
       - name: Test Go
         shell: bash
         run: |
@@ -242,7 +255,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-junit.xml \
             --jsonfile output/test-results/go-test.json \
-            -- ./...
+            -- -count=1 ./...
 
       - name: Upload failure evidence
         if: failure()
@@ -338,7 +351,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-race-junit.xml \
             --jsonfile output/test-results/go-race.json \
-            -- -race -timeout=15m \
+            -- -count=1 -race -timeout=15m \
             ./internal/reconcile/... \
             ./internal/scheduler/... \
             ./internal/transport/... \
@@ -672,6 +685,11 @@ jobs:
       # detector is worth doing, but it needs its own scoped job over the
       # concurrency-owning packages with a measured timeout — not a flag added
       # here.
+      # -count=1 for the reason written out on `go-quality`'s test step, and
+      # this is the job where it was actually costing coverage: macOS and Windows
+      # are each the only Go job on their runner OS, so setup-go's cache is
+      # uncontended there and reliably carries `go test`'s result cache from one
+      # run to the next.
       - name: Test
         shell: bash
         run: |
@@ -681,7 +699,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile "output/test-results/go-junit-${{ matrix.os }}.xml" \
             --jsonfile "output/test-results/go-test-${{ matrix.os }}.json" \
-            -- ./...
+            -- -count=1 ./...
 
       # The Windows enrollment bootstrap pipe is single-instance by design, so a
       # test that leaks its server makes later tests fail with
