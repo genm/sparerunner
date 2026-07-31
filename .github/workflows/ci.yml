@@ -22,9 +22,56 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
 
 jobs:
+  # A prose-only pull request does not need three operating systems, two browser
+  # engines, and a cross-compile of every target. This job decides that once, and
+  # only for pull requests: pushes to main, merge queue entries, and every other
+  # event fall through to running everything, so the skip can never be the reason
+  # an untested tree reaches main.
+  changes:
+    name: Detect what changed
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - name: Check out repository with full history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether the code gates need to run
+        id: filter
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            echo "code=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          # Three dots: the diff against the merge base, so a pull request does
+          # not inherit whatever landed on main after it was opened.
+          if ! changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>&1)"; then
+            printf 'could not diff against the base, running every gate:\n%s\n' \
+              "${changed}" >&2
+            echo "code=true" >> "${GITHUB_OUTPUT}"
+            exit 0
+          fi
+          printf 'changed files:\n%s\n' "${changed}"
+          # Prose only. Everything else — .github, scripts, packaging, and the Go
+          # that lives under spec/ — is code as far as this gate is concerned, and
+          # an empty diff also lands here, so the fallthrough is always "run it".
+          if printf '%s\n' "${changed}" | grep -qvE '(^docs/|\.md$)'; then
+            echo "code=true" >> "${GITHUB_OUTPUT}"
+          else
+            echo "code=false" >> "${GITHUB_OUTPUT}"
+          fi
+
   # Cheapest signal first: nothing here needs a language toolchain, so a broken
   # workflow or shell script reports in about a minute instead of behind a
-  # fifteen-minute test run.
+  # fifteen-minute test run. Not gated on `changes` — it is a minute, it scans
+  # history for secrets, and a documentation commit can still carry one.
   static:
     name: Static analysis (workflows and shell)
     runs-on: ubuntu-24.04
@@ -79,6 +126,8 @@ jobs:
 
   generated:
     name: Generated contracts
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -121,6 +170,8 @@ jobs:
 
   go-quality:
     name: Go quality
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -156,8 +207,10 @@ jobs:
           go mod tidy
           git diff --exit-code -- go.mod go.sum
 
-      - name: Check Go code
-        run: go vet ./...
+      # No `go vet ./...` here. The `go-lint` job runs golangci-lint with
+      # `govet: enable-all` (minus fieldalignment and shadow) across
+      # GOOS=linux/darwin/windows, so a host-only vet is a strict subset of a
+      # check that already runs three times.
 
       # gotestsum streams a readable per-package result to the log and expands the
       # failing test inline, while still writing the machine-readable evidence.
@@ -190,6 +243,8 @@ jobs:
     # only type-checks, so cross-compiling all three targets on one free ubuntu
     # runner covers them without spending macOS or Windows runner time.
     name: Lint Go (GOOS=${{ matrix.goos }})
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -241,6 +296,8 @@ jobs:
     # Go's 10-minute default per-package timeout before a 4-vCPU runner is even
     # considered. Bringing those two under the detector is worth its own task.
     name: Go race detector (concurrency-owning packages)
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -282,6 +339,8 @@ jobs:
 
   govulncheck:
     name: Go vulnerability scan
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -311,6 +370,8 @@ jobs:
 
   go-platform:
     name: Privileged Linux runner boundary
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -339,6 +400,8 @@ jobs:
 
   web:
     name: Web quality
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -388,6 +451,8 @@ jobs:
 
   raycast:
     name: Raycast extension
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -419,6 +484,8 @@ jobs:
 
   web-components:
     name: Web component tests
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -483,6 +550,8 @@ jobs:
 
   browser-journey:
     name: Management journey in a real browser
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -513,6 +582,10 @@ jobs:
       - name: Install Web dependencies
         run: pnpm --dir web install --frozen-lockfile
 
+      # Deliberately uncached, unlike `web-components`. Measured on this job: the
+      # whole step is 22s, and caching the browser leaves 21s of `install-deps`
+      # apt work behind. The browser archive is about a second of it, and a 269
+      # MiB cache entry is not worth a second.
       - name: Install Playwright Chromium
         run: pnpm --dir web exec playwright install --with-deps chromium
 
@@ -544,14 +617,21 @@ jobs:
           retention-days: 3
 
   go:
+    # Linux is deliberately absent. `go-quality` already runs the identical
+    # `gotestsum -- ./...` on ubuntu-24.04, and `cross-build` already builds
+    # linux/amd64 and linux/arm64 for both commands, so an ubuntu leg here was a
+    # second copy of two checks that were already blocking — about two minutes of
+    # runner time per run for no additional coverage. macOS and Windows stay,
+    # because their platform adapters only compile and only run there.
     name: Go (${{ matrix.os }})
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
         os:
-          - ubuntu-24.04
           - macos-15
           - windows-2025
     steps:
@@ -615,6 +695,8 @@ jobs:
 
   cross-build:
     name: Cross-build (all supported targets)
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -627,7 +709,26 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+          # setup-go derives its cache key from the runner OS and go.sum, so every
+          # Go job on ubuntu competes for one key and only the first to finish
+          # saves. This is the slowest of them and the only one that compiles a
+          # standard library for darwin and windows, so under the shared key its
+          # cross-compiled output was never the copy that got kept. It owns its
+          # cache below instead.
+          cache: false
+
+      # Keyed on the module graph, not the source: the Go build cache is
+      # content-addressed, so entries for changed source are simply unused rather
+      # than wrong, and what this is really keeping warm is six platforms' worth
+      # of standard library. Actions scopes a cache written by a fork run to that
+      # pull request's own ref, so it cannot reach the base repository.
+      - name: Cache the cross-compilation build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-cross-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       - name: Cross-build controller and agent for every supported target
         run: ./scripts/cross-build.sh
@@ -636,6 +737,7 @@ jobs:
     name: ci/required
     if: ${{ always() }}
     needs:
+      - changes
       - static
       - generated
       - go-quality
@@ -652,18 +754,31 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      # Fails closed: anything other than success — failure, cancelled, or
-      # skipped — leaves the required check red. Job results are a closed enum
+      # Fails closed: failure and cancelled always leave the required check red.
+      # `skipped` is accepted only when the `changes` job established that this
+      # pull request touches nothing but prose — so on any code change the gate
+      # is exactly as strict as it was before, and a job that skips because
+      # someone broke its `if` is still red. Job results are a closed enum
       # produced by Actions, not contributor-controlled text.
       - name: Enforce required quality gates
         shell: bash
         env:
           RESULTS: ${{ join(needs.*.result, ' ') }}
+          CODE_CHANGED: ${{ needs.changes.outputs.code }}
         run: |
-          echo "job results: ${RESULTS}"
+          echo "job results: ${RESULTS} (code changed: ${CODE_CHANGED})"
           for result in ${RESULTS}; do
-            if [[ "${result}" != success ]]; then
-              echo "a required job did not succeed: ${result}" >&2
-              exit 1
-            fi
+            case "${result}" in
+              success) ;;
+              skipped)
+                if [[ "${CODE_CHANGED}" != false ]]; then
+                  echo "a required job was skipped on a code change" >&2
+                  exit 1
+                fi
+                ;;
+              *)
+                echo "a required job did not succeed: ${result}" >&2
+                exit 1
+                ;;
+            esac
           done

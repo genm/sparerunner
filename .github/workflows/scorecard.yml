@@ -8,10 +8,13 @@ name: OpenSSF Scorecard
 # the default branch with the repository's own token. It deliberately does not
 # run on pull_request: a fork's token cannot read those settings, and a check
 # that always fails for outside contributors is noise, not a gate.
+#
+# Deliberately not on `push`. Scorecard grades repository configuration —
+# branch protection, token permissions, signed releases, workflow patterns —
+# which a merge almost never changes, and the run costs about six minutes. The
+# weekly schedule is what keeps the published score and the badge fresh;
+# workflow_dispatch is there for the merge that does change the posture.
 on:
-  push:
-    branches:
-      - main
   schedule:
     # Monday 05:23 UTC, after the CodeQL schedule so the two do not contend.
     - cron: "23 5 * * 1"

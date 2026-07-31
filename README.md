@@ -203,7 +203,8 @@ the management API or controller-backed UI flows are available.
 Tests write machine-readable results below `output/test-results/`, which is ignored
 by Git.
 
-Pull requests also run CodeQL, OpenSSF Scorecard, and dependency review. See
+Pull requests that touch code also run CodeQL and dependency review; OpenSSF
+Scorecard and a reachable-vulnerability drift scan run weekly against `main`. See
 [.github/workflows](.github/workflows) for what each one gates on.
 
 ## Security
