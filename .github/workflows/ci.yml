@@ -242,10 +242,11 @@ jobs:
       # on their runner OS and so always restore their own results. A green gate
       # has to mean the tests ran.
       #
-      # The build cache still does the expensive part. Measured on this job: 81s
-      # with a cold cache, and 17s when a warm cache was allowed to replay
-      # results — which is the number this flag deliberately gives up, because
-      # 23 of those packages never ran.
+      # The build cache still does the expensive part. Measured on this step:
+      # 94s on main before any of this, 81s with a cold dedicated cache, and 61s
+      # with a warm one and every test executing. The 17s a warm cache reported
+      # before this flag was added is the number deliberately given up — 23 of
+      # those packages never ran.
       - name: Test Go
         shell: bash
         run: |
