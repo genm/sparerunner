@@ -68,7 +68,18 @@ func declaredFuzzTargets(t *testing.T, root string) map[string]string {
 
 	targets := make(map[string]string)
 	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+		// test/live/linux creates its own scratch tree inside the repository
+		// (TestMain in security_path_test.go) and removes it when that
+		// package's tests finish. go test ./... runs packages concurrently, so
+		// this walk can observe a directory entry that is already gone by the
+		// time it descends into it or reads it. That vanished path was never a
+		// stable part of the tree this test needs to reason about, so it is
+		// skipped rather than treated as a walk failure. A permission error or
+		// anything else still fails the test.
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if entry.IsDir() {
@@ -83,6 +94,9 @@ func declaredFuzzTargets(t *testing.T, root string) map[string]string {
 		}
 		source, err := os.ReadFile(path)
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		matches := fuzzTargetPattern.FindAllSubmatch(source, -1)

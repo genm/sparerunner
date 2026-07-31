@@ -184,7 +184,24 @@ jobs:
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
-          cache: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+          # Same reason `cross-build` opts out: setup-go keys on runner OS plus
+          # go.sum, so every ubuntu Go job competes for one key and only the
+          # first to finish saves. This job compiles a test binary for every
+          # package, which no faster job does, so that work was never the copy
+          # that got kept.
+          cache: false
+
+      # Keyed on the module graph, not the source. The Go build cache is
+      # content-addressed, so an entry for changed source is unused rather than
+      # wrong, and what this keeps warm is the standard library, the module
+      # dependencies, and every package that did not change.
+      - name: Cache the test build output
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: go-test-${{ runner.os }}-${{ hashFiles('go.sum') }}
 
       # Naming the files is the difference between a fixable failure and a
       # one-line "exit code 1".
@@ -216,6 +233,20 @@ jobs:
       # failing test inline, while still writing the machine-readable evidence.
       # Redirecting `go test -json` to a file instead leaves a failed run showing
       # nothing but the exit code.
+      # -count=1 is what keeps this a test run rather than a replay. `go test`
+      # caches successful results inside the same GOCACHE this job now restores,
+      # so without it a package whose inputs are unchanged reports PASS without
+      # executing anything. That was already happening before this cache existed:
+      # on run 30595306032, `Go (macos-15)` reported 23 of 61 packages `(cached)`
+      # and `Go (windows-2025)` 21 of 36, because those two are the only Go job
+      # on their runner OS and so always restore their own results. A green gate
+      # has to mean the tests ran.
+      #
+      # The build cache still does the expensive part. Measured on this step:
+      # 94s on main before any of this, 81s with a cold dedicated cache, and 61s
+      # with a warm one and every test executing. The 17s a warm cache reported
+      # before this flag was added is the number deliberately given up — 23 of
+      # those packages never ran.
       - name: Test Go
         shell: bash
         run: |
@@ -225,7 +256,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-junit.xml \
             --jsonfile output/test-results/go-test.json \
-            -- ./...
+            -- -count=1 ./...
 
       - name: Upload failure evidence
         if: failure()
@@ -321,7 +352,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile output/test-results/go-race-junit.xml \
             --jsonfile output/test-results/go-race.json \
-            -- -race -timeout=15m \
+            -- -count=1 -race -timeout=15m \
             ./internal/reconcile/... \
             ./internal/scheduler/... \
             ./internal/transport/... \
@@ -655,6 +686,11 @@ jobs:
       # detector is worth doing, but it needs its own scoped job over the
       # concurrency-owning packages with a measured timeout — not a flag added
       # here.
+      # -count=1 for the reason written out on `go-quality`'s test step, and
+      # this is the job where it was actually costing coverage: macOS and Windows
+      # are each the only Go job on their runner OS, so setup-go's cache is
+      # uncontended there and reliably carries `go test`'s result cache from one
+      # run to the next.
       - name: Test
         shell: bash
         run: |
@@ -664,7 +700,7 @@ jobs:
             --format-hide-empty-pkg \
             --junitfile "output/test-results/go-junit-${{ matrix.os }}.xml" \
             --jsonfile "output/test-results/go-test-${{ matrix.os }}.json" \
-            -- ./...
+            -- -count=1 ./...
 
       # The Windows enrollment bootstrap pipe is single-instance by design, so a
       # test that leaks its server makes later tests fail with
