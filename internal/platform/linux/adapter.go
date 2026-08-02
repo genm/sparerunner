@@ -353,7 +353,14 @@ func (adapter *Adapter) Stop(ctx context.Context, process runner.Process) error 
 	if !adapter.validContainment(process.Containment) {
 		return runner.ErrCleanupFailed
 	}
-	fence, err := adapter.runtime.LockFence(ctx, process.Containment)
+	return stopContainment(ctx, adapter.runtime, process.Containment)
+}
+
+// stopContainment keeps the revoke-before-kill ordering identical for both
+// Linux execution modes. Diverging here could let one mode release a slot while
+// descendants from its previous execution are still alive.
+func stopContainment(ctx context.Context, runtime Runtime, containment runner.ContainmentRef) error {
+	fence, err := runtime.LockFence(ctx, containment)
 	if err != nil {
 		return runner.ErrCleanupFailed
 	}
@@ -366,7 +373,7 @@ func (adapter *Adapter) Stop(ctx context.Context, process runner.Process) error 
 	if err := fence.Revoke(ctx); err != nil {
 		return runner.ErrCleanupFailed
 	}
-	if err := adapter.runtime.KillAndWait(ctx, process.Containment); err != nil {
+	if err := runtime.KillAndWait(ctx, containment); err != nil {
 		return runner.ErrCleanupFailed
 	}
 	if err := fence.Close(); err != nil {
