@@ -38,6 +38,11 @@ func unsafeCacheRoots(t *testing.T) map[string]string {
 	if err := os.Mkdir(exposedRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// Mkdir applies the process umask. Set the mode explicitly so this fixture
+	// remains non-private under hardened developer and CI environments.
+	if err := os.Chmod(exposedRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	writableParent := filepath.Join(canonicalTempDir(t), "writable")
 	if err := os.Mkdir(writableParent, 0o777); err != nil {
 		t.Fatal(err)
