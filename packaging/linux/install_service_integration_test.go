@@ -645,6 +645,11 @@ func writeFile(t *testing.T, path, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// WriteFile applies the process umask. Preserve the fixture's declared mode
+	// so hardened environments exercise content checks instead of mode checks.
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func removePath(t *testing.T, path string) {

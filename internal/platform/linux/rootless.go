@@ -245,28 +245,7 @@ func (adapter *RootlessAdapter) Stop(ctx context.Context, process runner.Process
 	if !adapter.validContainment(process.Containment) {
 		return runner.ErrCleanupFailed
 	}
-	fence, err := adapter.runtime.LockFence(ctx, process.Containment)
-	if err != nil {
-		return runner.ErrCleanupFailed
-	}
-	fenceClosed := false
-	defer func() {
-		if !fenceClosed {
-			_ = fence.Close()
-		}
-	}()
-	if err := fence.Revoke(ctx); err != nil {
-		return runner.ErrCleanupFailed
-	}
-	if err := adapter.runtime.KillAndWait(ctx, process.Containment); err != nil {
-		return runner.ErrCleanupFailed
-	}
-	if err := fence.Close(); err != nil {
-		fenceClosed = true
-		return runner.ErrCleanupFailed
-	}
-	fenceClosed = true
-	return nil
+	return stopContainment(ctx, adapter.runtime, process.Containment)
 }
 
 func (adapter *RootlessAdapter) FinalizeCleanup(
