@@ -445,6 +445,9 @@ identical operation against the local agent, so none of them is a privileged pat
 - `--json` shall emit a versioned machine-readable document, and the process
   shall exit non-zero exactly when a required authority fails, carrying the same
   machine-readable error classes the underlying surfaces emit.
+- Host prerequisite diagnosis shall distinguish an absent prerequisite from an
+  unreadable or malformed prerequisite path. Read failures shall produce a failed
+  finding rather than an installation hint or a successful report.
 - Findings shall contain no credential, owner-proof, session, join-code, or JIT
   material.
 

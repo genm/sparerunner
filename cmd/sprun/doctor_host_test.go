@@ -68,6 +68,10 @@ func TestDiagnoseLinuxHostReportsBothModes(t *testing.T) {
 	if len(findings) != 2 {
 		t.Fatalf("findings = %#v", findings)
 	}
+	privileged := findingByCheck(t, findings, doctorCheckPrivilegedRunnerHost)
+	if privileged.Status != doctorStatusPass {
+		t.Fatalf("privileged finding = %#v", privileged)
+	}
 	shared := findingByCheck(t, findings, doctorCheckSharedRunnerHost)
 	if shared.Status != doctorStatusPass ||
 		!strings.Contains(shared.Detail, "prerequisites are met") ||
@@ -93,12 +97,11 @@ func shortSocketPath(t *testing.T, socket string) string {
 			t.Errorf("cannot remove %s: %v", short, err)
 		}
 	})
-	bound := filepath.Join(short, "supervisor.sock")
-	t.Cleanup(func() { _ = os.Remove(socket) })
-	if err := os.Symlink(bound, socket); err != nil {
+	parent := filepath.Join(short, "host")
+	if err := os.Symlink(filepath.Dir(socket), parent); err != nil {
 		t.Fatal(err)
 	}
-	return bound
+	return filepath.Join(parent, filepath.Base(socket))
 }
 
 func TestDiagnoseLinuxHostPrivilegedModeStates(t *testing.T) {
