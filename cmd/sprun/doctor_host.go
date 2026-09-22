@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,9 +58,12 @@ func diagnosePrivilegedRunnerHost(probe hostProbe) doctorFinding {
 	case err == nil:
 		finding.Status = doctorStatusFail
 		finding.Detail = "the root Supervisor socket path exists but is not a socket"
-	default:
+	case errors.Is(err, os.ErrNotExist):
 		finding.Status = doctorStatusUnavailable
 		finding.Detail = "root Supervisor is not installed; packaging/linux/install-service.sh provides the privileged mode"
+	default:
+		finding.Status = doctorStatusFail
+		finding.Detail = "cannot inspect the root Supervisor socket; check directory permissions and host filesystem state"
 	}
 	return finding
 }
@@ -89,21 +93,26 @@ func diagnoseSharedRunnerHost(probe hostProbe) doctorFinding {
 		)
 		return finding
 	}
-	if !regularFileExists(filepath.Join(probe.Root, "sys/fs/cgroup/cgroup.controllers")) {
-		finding.Status = doctorStatusUnavailable
-		finding.Detail = "the unified cgroup v2 hierarchy is not mounted at /sys/fs/cgroup"
+	if status, detail := inspectHostControlFile(
+		filepath.Join(probe.Root, "sys/fs/cgroup/cgroup.controllers"), "cgroup v2 hierarchy"); status != doctorStatusPass {
+		finding.Status, finding.Detail = status, detail
+		if status == doctorStatusUnavailable {
+			finding.Detail = "the unified cgroup v2 hierarchy is not mounted at /sys/fs/cgroup"
+		}
 		return finding
 	}
 	delegated := filepath.Join(
 		probe.Root,
 		fmt.Sprintf("sys/fs/cgroup/user.slice/user-%d.slice/user@%d.service/cgroup.controllers", probe.UID, probe.UID),
 	)
-	if !regularFileExists(delegated) {
-		finding.Status = doctorStatusUnavailable
-		finding.Detail = fmt.Sprintf(
-			"no delegated systemd user subtree for uid %d; start a systemd --user session first",
-			probe.UID,
-		)
+	if status, detail := inspectHostControlFile(delegated, "delegated systemd user subtree"); status != doctorStatusPass {
+		finding.Status, finding.Detail = status, detail
+		if status == doctorStatusUnavailable {
+			finding.Detail = fmt.Sprintf(
+				"no delegated systemd user subtree for uid %d; start a systemd --user session first",
+				probe.UID,
+			)
+		}
 		return finding
 	}
 	finding.Status = doctorStatusPass
@@ -130,7 +139,18 @@ func parseKernelRelease(release string) (major, minor int, ok bool) {
 	return major, minor, true
 }
 
-func regularFileExists(path string) bool {
+// Only absence is an installation gap. Collapsing inspection errors into
+// absence would let doctor report a broken host as healthy.
+func inspectHostControlFile(path, subject string) (status, detail string) {
 	info, err := os.Lstat(path)
-	return err == nil && info.Mode().IsRegular()
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return doctorStatusUnavailable, ""
+	case err != nil:
+		return doctorStatusFail, "cannot inspect the " + subject + "; check directory permissions and host filesystem state"
+	case !info.Mode().IsRegular():
+		return doctorStatusFail, "the " + subject + " control path is not a regular file"
+	default:
+		return doctorStatusPass, ""
+	}
 }

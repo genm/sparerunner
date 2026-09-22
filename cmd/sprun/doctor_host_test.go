@@ -68,6 +68,10 @@ func TestDiagnoseLinuxHostReportsBothModes(t *testing.T) {
 	if len(findings) != 2 {
 		t.Fatalf("findings = %#v", findings)
 	}
+	privileged := findingByCheck(t, findings, doctorCheckPrivilegedRunnerHost)
+	if privileged.Status != doctorStatusPass {
+		t.Fatalf("privileged finding = %#v", privileged)
+	}
 	shared := findingByCheck(t, findings, doctorCheckSharedRunnerHost)
 	if shared.Status != doctorStatusPass ||
 		!strings.Contains(shared.Detail, "prerequisites are met") ||
@@ -93,12 +97,75 @@ func shortSocketPath(t *testing.T, socket string) string {
 			t.Errorf("cannot remove %s: %v", short, err)
 		}
 	})
-	bound := filepath.Join(short, "supervisor.sock")
-	t.Cleanup(func() { _ = os.Remove(socket) })
-	if err := os.Symlink(bound, socket); err != nil {
+	parent := filepath.Join(short, "host")
+	if err := os.Symlink(filepath.Dir(socket), parent); err != nil {
 		t.Fatal(err)
 	}
-	return bound
+	return filepath.Join(parent, filepath.Base(socket))
+}
+
+// Missing prerequisites are ordinary on a new host. Broken paths are not:
+// neither their findings nor the aggregate report may claim a healthy host.
+func TestDiagnoseLinuxHostRejectsMalformedPrerequisitePaths(t *testing.T) {
+	for _, target := range []struct {
+		name, path, check string
+	}{
+		{"supervisor", "run/sparerunner-supervisor/supervisor.sock", doctorCheckPrivilegedRunnerHost},
+		{"cgroup hierarchy", "sys/fs/cgroup/cgroup.controllers", doctorCheckSharedRunnerHost},
+		{"user delegation", "sys/fs/cgroup/user.slice/user-1000.slice/user@1000.service/cgroup.controllers", doctorCheckSharedRunnerHost},
+	} {
+		for _, kind := range []string{"directory", "parent is a file", "symlink", "permission denied"} {
+			t.Run(target.name+"/"+kind, func(t *testing.T) {
+				if runtime.GOOS == "windows" && (kind == "symlink" || kind == "permission denied") {
+					t.Skip("Unix host filesystem semantics")
+				}
+				if kind == "permission denied" && os.Geteuid() == 0 {
+					t.Skip("root bypasses directory permissions")
+				}
+				root := healthyHostFixture(t)
+				path := filepath.Join(root, target.path)
+				if err := os.RemoveAll(path); err != nil {
+					t.Fatal(err)
+				}
+				switch kind {
+				case "directory":
+					if err := os.Mkdir(path, 0o755); err != nil {
+						t.Fatal(err)
+					}
+				case "parent is a file":
+					parent := filepath.Dir(path)
+					if err := os.RemoveAll(parent); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(parent, []byte("private fixture content"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				case "symlink":
+					if err := os.Symlink(filepath.Join(root, "missing"), path); err != nil {
+						t.Fatal(err)
+					}
+				case "permission denied":
+					parent := filepath.Dir(path)
+					if err := os.Chmod(parent, 0); err != nil {
+						t.Fatal(err)
+					}
+					t.Cleanup(func() {
+						if err := os.Chmod(parent, 0o755); err != nil {
+							t.Error(err)
+						}
+					})
+				}
+				findings := diagnoseLinuxHost(fixtureProbe(root))
+				finding := findingByCheck(t, findings, target.check)
+				if finding.Status != doctorStatusFail || doctorFindingsHealthy(findings) {
+					t.Fatalf("broken prerequisite must fail: %#v", findings)
+				}
+				if strings.Contains(finding.Detail, root) || strings.Contains(finding.Detail, "private fixture content") {
+					t.Fatalf("finding leaks filesystem details: %#v", finding)
+				}
+			})
+		}
+	}
 }
 
 func TestDiagnoseLinuxHostPrivilegedModeStates(t *testing.T) {
