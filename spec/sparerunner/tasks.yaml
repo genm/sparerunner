@@ -912,6 +912,7 @@ tasks:
       - "The user-mode installer and uninstaller keep the root pair's contract: no-clobber publication, verified rollback, foreign-file refusal, and retained node state on removal."
       - "`sprun doctor` reports which native runner mode this Linux host can run, and names the missing prerequisite (kernel, cgroup v2, user delegation, linger, root Supervisor) when one cannot."
       - "`sprun join` against the packaged user-service state directory prints the `systemctl --user` restart instruction and never a second `sparerunner-agent serve` command."
+      - Host diagnosis distinguishes missing prerequisites from inspection errors and unexpected file types; the latter fail the report without exposing raw OS errors.
       - The Linux README states the vanilla-runner comparison and the reason each prerequisite exists, and the sudo-free quickstart is no longer than the manual registration flow it replaces.
 
   - id: task-028

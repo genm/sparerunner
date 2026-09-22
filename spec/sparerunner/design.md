@@ -1055,6 +1055,12 @@ process exits non-zero exactly when a required authority fails. A finding names
 authorities and error classes, never credentials, proofs, session material, join
 codes, or JIT state.
 
+Linux host prerequisite checks inspect the Supervisor socket and cgroup control
+files without following final-path symlinks. Only a missing path is unavailable;
+other inspection errors and unexpected file types fail the owning check. Findings
+use fixed descriptions so OS error text cannot leak into the report. A missing
+optional runner mode remains unavailable and does not fail the report.
+
 The tray and the Raycast extension are presentation surfaces, not new authorities.
 They show the node's own state and control two things: whether this computer
 accepts new jobs at all, and — since one node can be eligible for many GitHub
