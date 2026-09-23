@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -120,16 +121,59 @@ func TestManifestStateIsSignedOneUseAndCredentialIsRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(start.Manifest+start.State, credential.privateKey) {
-		t.Fatal("manifest state exposed the private key")
-	}
-	if _, err := manager.Complete(context.Background(), "one-time-code", start.State); err != nil {
+	action, err := url.Parse(start.ActionURL)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := manager.Complete(context.Background(), "one-time-code", start.State); !errors.Is(err, ErrManifestStateConsumed) {
+	state := action.Query().Get("state")
+	if state != start.State {
+		t.Fatalf("manifest action state = %q, want signed state", state)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal([]byte(start.Manifest), &manifest); err != nil {
+		t.Fatal(err)
+	}
+	if manifest["url"] != "https://github.com/genm/sparerunner" || manifest["public"] != false {
+		t.Fatalf("manifest identity settings = %#v", manifest)
+	}
+	if manifest["name"] != "SpareRunner" || manifest["redirect_url"] != "http://127.0.0.1:7443/api/v1/github/app/callback" {
+		t.Fatalf("manifest registration callback = %#v", manifest)
+	}
+	if manifest["description"] != "Trusted private GitHub Actions runner fleet" {
+		t.Fatalf("manifest description = %#v", manifest["description"])
+	}
+	hook, ok := manifest["hook_attributes"].(map[string]any)
+	if !ok || hook["url"] != "https://github.com/genm/sparerunner" || hook["active"] != false {
+		t.Fatalf("manifest webhook settings = %#v", manifest["hook_attributes"])
+	}
+	if events, ok := manifest["default_events"].([]any); !ok || len(events) != 0 {
+		t.Fatalf("manifest webhook events = %#v", manifest["default_events"])
+	}
+	permissions, ok := manifest["default_permissions"].(map[string]any)
+	wantPermissions := map[string]any{
+		"actions":                          "write",
+		"administration":                   "read",
+		"metadata":                         "read",
+		"organization_self_hosted_runners": "write",
+	}
+	if !ok || len(permissions) != len(wantPermissions) {
+		t.Fatalf("manifest permissions = %#v", manifest["default_permissions"])
+	}
+	for name, want := range wantPermissions {
+		if permissions[name] != want {
+			t.Fatalf("manifest permission %q = %#v, want %#v", name, permissions[name], want)
+		}
+	}
+	if strings.Contains(start.Manifest+state, credential.privateKey) {
+		t.Fatal("manifest state exposed the private key")
+	}
+	if _, err := manager.Complete(context.Background(), "one-time-code", state); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Complete(context.Background(), "one-time-code", state); !errors.Is(err, ErrManifestStateConsumed) {
 		t.Fatalf("replay error = %v", err)
 	}
-	tampered := start.State[:len("twm1_")] + "A" + start.State[len("twm1_")+1:]
+	tampered := state[:len("twm1_")] + "A" + state[len("twm1_")+1:]
 	if _, err := manager.Complete(context.Background(), "one-time-code", tampered); !errors.Is(err, ErrManifestStateInvalid) {
 		t.Fatalf("tampered state error = %v", err)
 	}

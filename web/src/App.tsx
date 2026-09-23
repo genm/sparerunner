@@ -1385,16 +1385,12 @@ function ConnectGitHubButton({
     setMessage(undefined);
     try {
       const start = await api.startGitHubAppManifest(undefined, csrfToken);
-      // GitHub's Manifest flow is a browser POST. The state is signed and
-      // one-use, so it is safe to carry in this short-lived form but never
-      // store it in controller configuration or diagnostics.
+      // GitHub returns the signed, one-use state from the action URL's query.
+      // The POST body carries only the unsigned App Manifest.
       const form = document.createElement("form");
       form.method = "post";
       form.action = start.actionUrl;
-      for (const [name, value] of [
-        ["manifest", start.manifest],
-        ["state", start.state],
-      ] as const) {
+      for (const [name, value] of [["manifest", start.manifest]] as const) {
         const input = document.createElement("input");
         input.type = "hidden";
         input.name = name;

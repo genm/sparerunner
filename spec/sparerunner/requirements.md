@@ -142,6 +142,9 @@ fork-originated code.
    Neither path is privileged: both write through the controller-owned platform
    credential store, and the documented CLI path requires no browser session
    with the controller.
+   The Manifest flow shall pass its signed, one-use callback state through
+   GitHub's `state` query parameter and register a private App with webhook
+   delivery disabled and only the permissions required to operate scale sets.
 2. Install that App into one or more accounts or organizations.
 3. Create a GitHub Target for a private repository or organization scope.
 4. Reject public scopes, unverifiable visibility, unsafe runner-group access, and

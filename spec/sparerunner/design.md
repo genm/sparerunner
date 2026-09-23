@@ -843,8 +843,12 @@ available to the dedicated runner account.
 The API is versioned under `/api/v1`. CLI and Web UI use the same contract. The API
 provides:
 
-- setup state; GitHub App Manifest setup is exposed through a signed, one-use
-  callback state and controller-owned credential-store boundary. Native
+- setup state; GitHub App Manifest setup carries its signed, one-use callback
+  state in GitHub's registration URL and uses the POST body for the unsigned
+  manifest. The manifest creates a private App with webhook delivery disabled,
+  no subscribed events, and only `actions:write`, `administration:read`,
+  `metadata:read`, and `organization_self_hosted_runners:write`. Credentials
+  remain inside the controller-owned credential-store boundary. Native
   Keychain/DPAPI adapters remain platform-task work; Linux uses the service-user
   private credential file boundary until those adapters land
 - node inventory, join-code creation/cancellation, drain/resume, revoke, the

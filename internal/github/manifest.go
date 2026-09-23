@@ -262,6 +262,13 @@ func (manager *ManifestManager) Start(callbackURL, registrationAccount string) (
 		"redirect_url": callbackURL,
 		"public":       false,
 		"description":  "Trusted private GitHub Actions runner fleet",
+		// SpareRunner uses GitHub Actions scale sets, not webhook events.
+		// GitHub still requires a URL in the manifest's hook settings.
+		"hook_attributes": map[string]any{
+			"url":    "https://github.com/genm/sparerunner",
+			"active": false,
+		},
+		"default_events": []string{},
 		"default_permissions": map[string]string{
 			"actions":                          "write",
 			"administration":                   "read",
@@ -277,7 +284,14 @@ func (manager *ManifestManager) Start(callbackURL, registrationAccount string) (
 	if registrationAccount != "" {
 		actionURL = "https://github.com/organizations/" + url.PathEscape(registrationAccount) + "/settings/apps/new"
 	}
-	return ManifestStart{ActionURL: actionURL, Manifest: string(manifestBytes), State: state, ExpiresAt: expiresAt.UTC()}, nil
+	action, err := url.Parse(actionURL)
+	if err != nil {
+		return ManifestStart{}, ErrManifestUnavailable
+	}
+	query := action.Query()
+	query.Set("state", state)
+	action.RawQuery = query.Encode()
+	return ManifestStart{ActionURL: action.String(), Manifest: string(manifestBytes), State: state, ExpiresAt: expiresAt.UTC()}, nil
 }
 
 func (manager *ManifestManager) Complete(ctx context.Context, code, state string) (AppCredential, error) {
