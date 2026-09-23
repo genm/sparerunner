@@ -1355,6 +1355,7 @@ func TestUserAgentUnitStaysUnprivilegedAndDelegated(t *testing.T) {
 	for _, required := range []string{
 		"--allow-shared-runner-identity",
 		"--require-native-runner",
+		"--local-control",
 		"Delegate=yes",
 		"NoNewPrivileges=yes",
 		"KillMode=control-group",
