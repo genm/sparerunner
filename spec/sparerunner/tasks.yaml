@@ -221,6 +221,7 @@ tasks:
       - cmd/sparerunner-agent
       - internal/app
       - internal/github
+      - internal/webui/assets
       - packaging/linux
       - internal/platform/linux
       - internal/store
@@ -228,6 +229,7 @@ tasks:
       - justfile
       - scripts/test-platform-linux.sh
       - test/live/linux
+      - web/src/App.tsx
     ci_targets: [lint, test, build, e2e]
     status: in_progress
     notes:
@@ -240,6 +242,7 @@ tasks:
       - "2026-07-29: Linux had no installation path of its own: the packaged units, sysusers, and tmpfiles definitions existed as material with a README procedure, while macOS and Windows each owned a verified installer. `packaging/linux/install-service.sh` and `uninstall-service.sh` now own that contract with the same discipline as `packaging/macos/install-service.sh`: a fixed absolute command surface, test indirection that root never accepts, fail-closed preflight before the first mutation, no-clobber publication through staged hard links, and verified rollback that only removes files still matching the package. Preflight rejects a kernel older than 5.14, a hierarchy other than unified cgroup v2, a missing or group-writable agent binary, a symlinked or world-writable installation ancestor, an installed file that differs from this package, an already-running service, and an unmarked Supervisor state root holding foreign content. The declared directory contract is read from the packaged `tmpfiles.d/sparerunner.conf` rather than restated, because systemd-sysusers and systemd-tmpfiles silently adopt an existing tree; an existing declared directory owned by another identity or missing its service identity fails before either tool runs."
       - "2026-07-29: The installer gates on the Supervisor and its socket, not on both services. Installation precedes enrollment by design, so an Agent that exits not-initialized and is restarted by systemd is reported as a pending enrollment step; once /var/lib/sparerunner-agent holds node state, a non-running Agent fails the install instead. `sprun join --state-dir /var/lib/sparerunner-agent` now prints the systemd restart instruction on Linux for that exact packaged path, so the packaged flow never tells an operator to start a second `sparerunner-agent serve` beside the unit. Uninstall stops both services and removes only files it re-verifies against the package immediately before removal, refuses a locally modified unit, and retains node state, accounts, and directories because a durable node credential is not this script's decision to destroy. `packaging/linux/install_service_integration_test.go` drives both scripts against a faked command surface: clean install, owned retry that republishes nothing, running-service refusal, pending-enrollment reporting, the enrolled dead-Agent gate, eleven preflight rejections each asserted by their own failure reason, rollback convergence after each of six mutation failures, and the uninstall paths. Real-machine install, upgrade, and .deb/.rpm packaging remain task-015."
     acceptance:
+      - GitHub App Manifest registration carries its signed callback state in the action URL, creates a private App with webhook delivery disabled and no subscribed events, and requests only the documented scale-set permissions.
       - One private job completes and its workspace and JIT material are absent afterward.
       - Service restart leaves exactly one runner listener and one agent process.
       - Killing after DB commit and before GitHub ack causes safe replay without duplicate execution.
