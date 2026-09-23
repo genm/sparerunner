@@ -11,7 +11,8 @@ Type=simple
 # directory here.
 ExecStart=%h/.local/bin/sparerunner-agent serve \
     --allow-shared-runner-identity \
-    --require-native-runner
+    --require-native-runner \
+    --local-control
 Restart=on-failure
 RestartSec=5s
 KillMode=control-group

@@ -914,6 +914,7 @@ tasks:
       - "`sprun join` against the packaged user-service state directory prints the `systemctl --user` restart instruction and never a second `sparerunner-agent serve` command."
       - Host diagnosis distinguishes missing prerequisites from inspection errors and unexpected file types; the latter fail the report without exposing raw OS errors.
       - The Linux README states the vanilla-runner comparison and the reason each prerequisite exists, and the sudo-free quickstart is no longer than the manual registration flow it replaces.
+      - "The packaged user service serves the node-local control endpoint, so an installed node answers `sprun node status`, the tray, and the `agent_endpoint` doctor check instead of reporting a failing endpoint on a healthy install."
 
   - id: task-028
     title: Evaluate user-namespace UID separation as the single Linux mode
