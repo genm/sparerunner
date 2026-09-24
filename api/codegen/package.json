@@ -7,6 +7,7 @@
     "generate": "openapi-typescript ../openapi.yaml --output ../../web/src/api/generated/schema.ts"
   },
   "devDependencies": {
+    "@typescript/native": "npm:typescript@7.0.2",
     "openapi-typescript": "7.13.0",
     "typescript": "5.9.3"
   },
