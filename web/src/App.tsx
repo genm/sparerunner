@@ -47,7 +47,6 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
   const [liveUpdates, setLiveUpdates] = useState<"connected" | "reconnecting">("reconnecting");
   const [auditRevision, setAuditRevision] = useState(0);
   const [toast, setToast] = useState<Toast>();
-  const headingRef = useRef<HTMLHeadingElement>(null);
   const snapshotRef = useRef<Snapshot | undefined>(undefined);
 
   useEffect(() => {
@@ -119,10 +118,6 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
   }, []);
 
   useEffect(() => {
-    if (loadState === "ready") headingRef.current?.focus();
-  }, [route, loadState]);
-
-  useEffect(() => {
     if (!session) return undefined;
     return api.subscribe(session.csrfToken, undefined, {
       onEvent: (event) => {
@@ -155,7 +150,7 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
   }, [api, refresh, route, session]);
 
   const navigate = (next: ScreenName) => {
-    if (window.location.hash !== `#/${next}`) window.location.hash = `/${next}`;
+    writeRouteHash(next);
     setRoute(next);
   };
 
@@ -213,7 +208,6 @@ export function App({ api: suppliedAPI, initialRoute }: AppProps) {
           <Page
             api={api}
             csrfToken={session.csrfToken}
-            headingRef={headingRef}
             onRefresh={refresh}
             onToast={setToast}
             route={route}
@@ -401,7 +395,6 @@ function BrowserHandoff({
 function Page({
   api,
   csrfToken,
-  headingRef,
   onRefresh,
   onToast,
   route,
@@ -411,7 +404,6 @@ function Page({
 }: {
   readonly api: ManagementClient;
   readonly csrfToken: string;
-  readonly headingRef: React.RefObject<HTMLHeadingElement | null>;
   readonly onRefresh: () => Promise<boolean>;
   readonly onToast: (value: Toast) => void;
   readonly route: ScreenName;
@@ -477,7 +469,8 @@ function Page({
     <>
       <header className="page-header">
         <p className="eyebrow">SpareRunner management</p>
-        <h1 ref={headingRef} tabIndex={-1}>
+        {/* Keyed by route so each destination mounts a fresh heading that takes focus. */}
+        <h1 key={route} ref={focusHeading} tabIndex={-1}>
           {heading}
         </h1>
       </header>
@@ -780,28 +773,23 @@ function SettingsPage({
   const [problem, setProblem] = useState<Problem>();
   const [yaml, setYAML] = useState<string>();
   const schedulerMaxError = fieldProblem(problem, "scheduler.maxRunners");
-  // `draft`'s initializer above already reads `snapshot.configuration`, so this
-  // effect has nothing to reconcile on its first run — skip it. Running it
-  // anyway is not just redundant: if a passive effect from mount is still
-  // unflushed when the operator's first keystroke lands (they can race in the
-  // same commit under load), this effect's unconditional setDraft(snapshot.
-  // configuration) would win the batch and silently discard that edit.
-  const settingsHydratedRef = useRef(false);
-  useEffect(() => {
-    if (!settingsHydratedRef.current) {
-      settingsHydratedRef.current = true;
-      return;
-    }
+  // Reconcile the draft when a fresh confirmed configuration arrives. This is
+  // derived from props, so it is adjusted during render rather than in an effect:
+  // an effect would run after commit and could race the operator's first
+  // keystroke, with its setDraft(snapshot.configuration) winning the batch and
+  // silently discarding that edit. `seenConfiguration` starts equal to the
+  // initial `draft`, so mount has nothing to reconcile.
+  const [seenConfiguration, setSeenConfiguration] = useState(snapshot.configuration);
+  if (seenConfiguration !== snapshot.configuration) {
+    setSeenConfiguration(snapshot.configuration);
     if (!dirty && !reloadRequired) {
       setDraft(snapshot.configuration);
       setRemoteChanged(false);
-      return;
-    }
-    if (snapshot.configuration.revision !== draft.revision) {
+    } else if (snapshot.configuration.revision !== draft.revision) {
       // Live invalidations must not silently discard an operator's in-progress draft.
       setRemoteChanged(true);
     }
-  }, [dirty, draft.revision, reloadRequired, snapshot.configuration]);
+  }
   const apply = async () => {
     setSaving(true);
     setProblem(undefined);
@@ -958,15 +946,20 @@ function AuditEvents({
     [api],
   );
 
+  // A new invalidation while the operator has not reached the previous tail must
+  // preserve pagination order: flag the newer activity instead of appending it out
+  // of order or skipping history. Derived from the prop change, so it is adjusted
+  // during render rather than by setting state inside an effect.
+  const [seenInvalidation, setSeenInvalidation] = useState(invalidation);
+  if (seenInvalidation !== invalidation) {
+    setSeenInvalidation(invalidation);
+    if (loaded && cursor) setBehind(true);
+  }
+
+  // At the tail there is no ordering to protect, so resume from the final cursor.
   useEffect(() => {
-    if (!loaded || invalidation === handledInvalidation.current) return;
+    if (!loaded || cursor || invalidation === handledInvalidation.current) return;
     handledInvalidation.current = invalidation;
-    if (cursor) {
-      // The operator has not reached the previous tail yet. Preserve pagination
-      // order and make the newer append explicit instead of skipping history.
-      setBehind(true);
-      return;
-    }
     void load(resumeCursor, true);
   }, [cursor, invalidation, load, loaded, resumeCursor]);
 
@@ -1621,6 +1614,16 @@ type PageProps = {
 function hashRoute(): ScreenName {
   const candidate = window.location.hash.replace(/^#\//, "") as ScreenName;
   return navigation.some((item) => item.id === candidate) ? candidate : "overview";
+}
+// The inverse of hashRoute. Kept outside the component so the window mutation is
+// visibly an event-time side effect rather than something render could trigger.
+function writeRouteHash(route: ScreenName) {
+  if (window.location.hash !== `#/${route}`) window.location.hash = `/${route}`;
+}
+// Stable ref callback: React invokes it once per mounted heading, so focus moves
+// on navigation without an effect that re-runs on unrelated state.
+function focusHeading(element: HTMLHeadingElement | null) {
+  element?.focus();
 }
 function handleReadError(
   error: unknown,
