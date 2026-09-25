@@ -43,13 +43,13 @@ updates:
         exclude-patterns:
           - github.com/actions/scaleset
 
-  # web/ and api/codegen/ use pnpm, extensions/raycast/ uses npm. Dependabot's
-  # npm ecosystem covers all three lockfile formats.
     ignore:
       - dependency-name: "*"
         update-types:
           - "version-update:semver-major"
 
+  # web/ and api/codegen/ use pnpm, extensions/raycast/ uses npm. Dependabot's
+  # npm ecosystem covers all three lockfile formats.
   - package-ecosystem: npm
     directories:
       - /web
