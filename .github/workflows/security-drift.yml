@@ -48,7 +48,7 @@ jobs:
         env:
           GOBIN: ${{ runner.temp }}/bin
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           echo "${GOBIN}" >> "${GITHUB_PATH}"
 
       # Writes SARIF whether or not it finds anything, and keeps its own exit
