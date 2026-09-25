@@ -19,6 +19,10 @@ updates:
       github-actions:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   - package-ecosystem: gomod
     directory: /
@@ -38,6 +42,11 @@ updates:
           - "*"
         exclude-patterns:
           - github.com/actions/scaleset
+
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
 
   # web/ and api/codegen/ use pnpm, extensions/raycast/ uses npm. Dependabot's
   # npm ecosystem covers all three lockfile formats.
@@ -66,3 +75,7 @@ updates:
         dependency-type: development
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "*"
+        update-types:
+          - "version-update:semver-major"
