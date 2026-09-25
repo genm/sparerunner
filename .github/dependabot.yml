@@ -71,6 +71,15 @@ updates:
         dependency-type: production
         patterns:
           - "*"
+      # @playwright/test and @playwright/experimental-ct-react each resolve their
+      # own playwright-core, and two copies make every test() call fail with
+      # "did not expect test() to be called here". Bumping them in one pull request
+      # keeps them on the same release. This must precede npm-development, which
+      # would otherwise claim these packages first.
+      playwright:
+        dependency-type: development
+        patterns:
+          - "@playwright/*"
       npm-development:
         dependency-type: development
         patterns:
