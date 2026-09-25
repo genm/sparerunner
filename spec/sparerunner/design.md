@@ -104,7 +104,7 @@ this layout already answers them:
 
 | Layer | Choice |
 |---|---|
-| Runtime | Go 1.26.5 pinned with `mise`; one Go module |
+| Runtime | Go 1.27.1 pinned with `mise`; one Go module |
 | GitHub | `github.com/actions/scaleset` v0.4.0 behind `internal/github` |
 | CLI | Cobra |
 | Daily commands | `just`; Process Compose for local processes; lefthook for local gates |

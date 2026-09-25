@@ -305,7 +305,7 @@ jobs:
         with:
           # Keep this in step with the golangci-lint pin in .mise.toml, which is
           # what `just lint` uses locally.
-          version: v2.12.2
+          version: v2.14.0
           # cmd/sparerunner-tray needs cgo and each OS's own native toolchain
           # (systray's darwin backend is Objective-C behind cgo), so it is
           # excluded from every cross-compiled cross-build.sh target for the

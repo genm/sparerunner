@@ -338,6 +338,76 @@ describe("App", () => {
     expect(screen.queryByText(/Newer activity is available/i)).toBeNull();
   });
 
+  it("does not append newer activity out of order while earlier pages remain", async () => {
+    const user = userEvent.setup();
+    const base = createScenarioClient("empty");
+    const firstEvent: Schema["AuditEvent"] = {
+      id: "audit-1",
+      occurredAt: "2026-07-27T00:00:00Z",
+      actor: "single_admin",
+      action: "session_created",
+      resourceType: "controller",
+      resourceId: "",
+      outcome: "succeeded",
+      requestId: "req_00000000000000000000000000000001",
+    };
+    let sendEvent: ((event: EventInvalidation) => void) | undefined;
+    // A next cursor means the operator has not reached the tail yet.
+    const listAuditEvents = vi.fn(async () => ({
+      events: [firstEvent],
+      nextCursor: "aud1_AAAAAAAAAAE",
+      resumeCursor: "aud1_AAAAAAAAAAE",
+    }));
+    const api: ManagementClient = {
+      ...base,
+      listAuditEvents,
+      subscribe: (_csrfToken, _cursor, handlers) => {
+        sendEvent = handlers.onEvent;
+        return () => undefined;
+      },
+    };
+    render(<App api={api} initialRoute="settings" />);
+
+    await user.click(await screen.findByRole("button", { name: "Load activity" }));
+    expect(await screen.findByText("session_created")).toBeTruthy();
+
+    await act(async () => {
+      sendEvent?.({ kind: "invalidate", cursor: "evt1_test", resources: ["audit_events"] });
+    });
+
+    expect(await screen.findByText(/Load remaining pages in order to catch up/i)).toBeTruthy();
+    // History must not be skipped: no append is attempted until the operator pages on.
+    expect(listAuditEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("adopts a newer confirmed configuration when the operator has no unsaved edit", async () => {
+    const base = createScenarioClient("empty");
+    const confirmed = await base.getConfiguration();
+    const remote = { ...confirmed, revision: "8", scheduler: { maxRunners: 5 } };
+    let sendEvent: ((event: EventInvalidation) => void) | undefined;
+    const getConfiguration = vi.fn().mockResolvedValueOnce(confirmed).mockResolvedValue(remote);
+    const api: ManagementClient = {
+      ...base,
+      getConfiguration,
+      subscribe: (_csrfToken, _cursor, handlers) => {
+        sendEvent = handlers.onEvent;
+        return () => undefined;
+      },
+    };
+    render(<App api={api} initialRoute="settings" />);
+
+    const maximum = await screen.findByRole("spinbutton", { name: "Maximum runners" });
+    expect((maximum as HTMLInputElement).value).toBe("3");
+
+    await act(async () => {
+      sendEvent?.({ kind: "invalidate", cursor: "evt1_test", resources: ["configuration"] });
+    });
+
+    await waitFor(() => expect((maximum as HTMLInputElement).value).toBe("5"));
+    expect(screen.getByText("Revision 8")).toBeTruthy();
+    expect(screen.queryByText(/Configuration changed elsewhere/i)).toBeNull();
+  });
+
   it("cancels a join code whose response arrives after the dialog closes", async () => {
     const user = userEvent.setup();
     const base = createScenarioClient("empty");
