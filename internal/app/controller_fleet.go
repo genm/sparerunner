@@ -315,7 +315,28 @@ func (fleet *ControllerFleet) superviseTarget(
 		if ctx.Err() != nil {
 			return
 		}
-		err := fleet.runTargetOnce(ctx, target)
+		// Durable state can withdraw this Target before the fleet reconciles and
+		// cancels the worker. Opening a session in that window would drive a
+		// queue the operator already removed, so wait for cancellation instead.
+		desired, err := fleet.targetStillDesired(ctx, target)
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil || !desired {
+			attempt++
+			if err != nil {
+				fleet.logFailure(
+					"controller_fleet_configuration_unreadable",
+					target.TargetID,
+					err,
+				)
+			}
+			if !fleet.waitBackoff(ctx, attempt) {
+				return
+			}
+			continue
+		}
+		err = fleet.runTargetOnce(ctx, target)
 		if ctx.Err() != nil {
 			return
 		}
@@ -339,6 +360,24 @@ func (fleet *ControllerFleet) superviseTarget(
 			return
 		}
 	}
+}
+
+// targetStillDesired reports whether durable state still resolves this Target
+// to exactly the value its worker was started for.
+func (fleet *ControllerFleet) targetStillDesired(
+	ctx context.Context,
+	target ControllerFleetTarget,
+) (bool, error) {
+	desired, err := fleet.DesiredTargets(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, candidate := range desired {
+		if candidate.TargetID == target.TargetID {
+			return candidate == target, nil
+		}
+	}
+	return false, nil
 }
 
 func (fleet *ControllerFleet) runTargetOnce(

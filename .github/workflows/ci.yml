@@ -390,7 +390,7 @@ jobs:
         env:
           GOBIN: ${{ runner.temp }}/bin
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4
+          go install golang.org/x/vuln/cmd/govulncheck@v1.8.0
           echo "${GOBIN}" >> "${GITHUB_PATH}"
 
       # Reports only advisories that are reachable from this module's own code

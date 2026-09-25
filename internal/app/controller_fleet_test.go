@@ -87,6 +87,50 @@ func TestControllerFleetConfigurationChangeStopsRemovedTargetSession(t *testing.
 	}
 }
 
+// TestControllerFleetSupervisorDoesNotReopenWithdrawnTarget proves a worker
+// whose Target was withdrawn from durable state opens no session while it waits
+// for the fleet to cancel it, even when no reconcile signal ever arrives.
+func TestControllerFleetSupervisorDoesNotReopenWithdrawnTarget(t *testing.T) {
+	fixture := newFleetFixture(t, fleetBoundTarget, fleetOpenTarget)
+	fixture.commitProvisioning(t, fleetBoundTarget, fleetScaleSetID)
+	fixture.commitProvisioning(t, fleetOpenTarget, fleetOtherSetID)
+
+	provider := newFleetFakeProvider()
+	fleet := fixture.fleet(t, provider)
+	desired, err := fleet.DesiredTargets(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withdrawn ControllerFleetTarget
+	for _, target := range desired {
+		if target.TargetID == fleetOpenTarget {
+			withdrawn = target
+		}
+	}
+	if withdrawn.TargetID != fleetOpenTarget {
+		t.Fatalf("desired targets = %v, want %q resolved", desired, fleetOpenTarget)
+	}
+	fixture.removeTarget(t, fleetOpenTarget)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		fleet.superviseTarget(ctx, withdrawn)
+	}()
+	// Several retry periods pass without any Open.
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("supervisor did not stop after cancellation")
+	}
+	if opened := provider.openCount(fleetOpenTarget); opened != 0 {
+		t.Fatalf("withdrawn target opened %d sessions, want 0", opened)
+	}
+}
+
 // TestControllerFleetRetriesFailingTargetWithoutStoppingOthers proves a Target
 // that cannot open a session is retried with backoff rather than terminating
 // the fleet or its healthy siblings.

@@ -89,7 +89,7 @@ check-npm-policy:
 # database.
 [doc("Report Go vulnerabilities reachable from this module's own code")]
 vulncheck:
-  go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+  go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
 test:
   mkdir -p output/test-results
