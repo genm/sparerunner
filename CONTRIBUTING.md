@@ -156,9 +156,13 @@ you did not, and the names of the normal-path and failure-path tests. "Not yet
 proven" is a valid and useful answer; a missing answer is not.
 
 Required CI runs on GitHub-hosted runners only, and it does not skip draft pull
-requests — the draft state is where evidence is produced. A pull request that
-changes nothing but prose (`docs/**` and any `*.md`) skips the language gates;
-anything else, and any event that is not a pull request, runs all of them.
+requests — the draft state is where evidence is produced. A pull request runs
+only the gates its diff can affect: prose (`docs/**` and any `*.md`) and
+`.github/**` other than `ci.yml` run no language gate, since the static job
+lints workflows on every run; `web/**` runs the Web gates plus the generated
+contract check and the browser journey; `extensions/raycast/**` runs the
+Raycast gate. Any other path — Go, `api/`, scripts, packaging, tool pins, or
+`ci.yml` itself — and any event that is not a pull request runs all of them.
 Alongside required CI, CodeQL and dependency review report on every pull request
 that touches code. OpenSSF Scorecard grades repository configuration rather than
 a diff, so it runs weekly against `main` instead of per pull request. A

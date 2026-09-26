@@ -22,17 +22,28 @@ concurrency:
   cancel-in-progress: ${{ github.event_name != 'push' || github.ref != 'refs/heads/main' }}
 
 jobs:
-  # A prose-only pull request does not need three operating systems, two browser
-  # engines, and a cross-compile of every target. This job decides that once, and
-  # only for pull requests: pushes to main, merge queue entries, and every other
-  # event fall through to running everything, so the skip can never be the reason
-  # an untested tree reaches main.
+  # A pull request only pays for the gates its diff can affect. This job decides
+  # that once, and only for pull requests: pushes to main, merge queue entries,
+  # and every other event fall through to running everything, so the skip can
+  # never be the reason an untested tree reaches main.
+  #
+  # Every changed path is classified, and anything not named below counts as
+  # affecting every area. The confined buckets are deliberately narrow:
+  #   - prose (`docs/**`, `*.md`): no language gate;
+  #   - workflows other than this one, and the rest of `.github/`: no language
+  #     gate, because the `static` job lints and audits them on every run;
+  #   - `web/**`: the Web gates, plus the gates that embed or drive the Web UI;
+  #   - `extensions/raycast/**`: the Raycast gate only.
+  # This file itself, scripts, packaging, api/, tool pins, and all Go land in
+  # the fallthrough, so a change to how the gates run runs every gate.
   changes:
     name: Detect what changed
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      code: ${{ steps.filter.outputs.code }}
+      go: ${{ steps.filter.outputs.go }}
+      web: ${{ steps.filter.outputs.web }}
+      raycast: ${{ steps.filter.outputs.raycast }}
     steps:
       - name: Check out repository with full history
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -40,33 +51,52 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Decide whether the code gates need to run
+      - name: Decide which gates the change can affect
         id: filter
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
-            echo "code=true" >> "${GITHUB_OUTPUT}"
+          run_everything() {
+            {
+              echo "go=true"
+              echo "web=true"
+              echo "raycast=true"
+            } >> "${GITHUB_OUTPUT}"
             exit 0
+          }
+          if [ "${GITHUB_EVENT_NAME}" != pull_request ]; then
+            run_everything
           fi
           # Three dots: the diff against the merge base, so a pull request does
           # not inherit whatever landed on main after it was opened.
           if ! changed="$(git diff --name-only "${BASE_SHA}...${HEAD_SHA}" 2>&1)"; then
             printf 'could not diff against the base, running every gate:\n%s\n' \
               "${changed}" >&2
-            echo "code=true" >> "${GITHUB_OUTPUT}"
-            exit 0
+            run_everything
+          fi
+          # An empty diff proves nothing about the tree, so it runs everything.
+          if [ -z "${changed}" ]; then
+            run_everything
           fi
           printf 'changed files:\n%s\n' "${changed}"
-          # Prose only. Everything else — .github, scripts, packaging, and the Go
-          # that lives under spec/ — is code as far as this gate is concerned, and
-          # an empty diff also lands here, so the fallthrough is always "run it".
-          if printf '%s\n' "${changed}" | grep -qvE '(^docs/|\.md$)'; then
-            echo "code=true" >> "${GITHUB_OUTPUT}"
-          else
-            echo "code=false" >> "${GITHUB_OUTPUT}"
-          fi
+          go=false
+          web=false
+          raycast=false
+          while IFS= read -r path; do
+            case "${path}" in
+              .github/workflows/ci.yml) run_everything ;;
+              docs/* | *.md | .github/*) ;;
+              web/*) web=true ;;
+              extensions/raycast/*) raycast=true ;;
+              *) run_everything ;;
+            esac
+          done <<< "${changed}"
+          {
+            echo "go=${go}"
+            echo "web=${web}"
+            echo "raycast=${raycast}"
+          } >> "${GITHUB_OUTPUT}"
 
   # Cheapest signal first: nothing here needs a language toolchain, so a broken
   # workflow or shell script reports in about a minute instead of behind a
@@ -127,7 +157,7 @@ jobs:
   generated:
     name: Generated contracts
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -171,7 +201,7 @@ jobs:
   go-quality:
     name: Go quality
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -275,7 +305,7 @@ jobs:
     # runner covers them without spending macOS or Windows runner time.
     name: Lint Go (GOOS=${{ matrix.goos }})
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     strategy:
@@ -328,7 +358,7 @@ jobs:
     # considered. Bringing those two under the detector is worth its own task.
     name: Go race detector (concurrency-owning packages)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -371,7 +401,7 @@ jobs:
   govulncheck:
     name: Go vulnerability scan
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -402,7 +432,7 @@ jobs:
   go-platform:
     name: Privileged Linux runner boundary
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -432,7 +462,7 @@ jobs:
   web:
     name: Web quality
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -483,7 +513,7 @@ jobs:
   raycast:
     name: Raycast extension
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.raycast == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
@@ -516,7 +546,7 @@ jobs:
   web-components:
     name: Web component tests
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -582,7 +612,7 @@ jobs:
   browser-journey:
     name: Management journey in a real browser
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' || needs.changes.outputs.web == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -656,7 +686,7 @@ jobs:
     # because their platform adapters only compile and only run there.
     name: Go (${{ matrix.os }})
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
@@ -732,7 +762,7 @@ jobs:
   cross-build:
     name: Cross-build (all supported targets)
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
+    if: ${{ needs.changes.outputs.go == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -791,30 +821,66 @@ jobs:
     timeout-minutes: 5
     steps:
       # Fails closed: failure and cancelled always leave the required check red.
-      # `skipped` is accepted only when the `changes` job established that this
-      # pull request touches nothing but prose — so on any code change the gate
-      # is exactly as strict as it was before, and a job that skips because
-      # someone broke its `if` is still red. Job results are a closed enum
-      # produced by Actions, not contributor-controlled text.
+      # `skipped` is accepted for a job only when the `changes` job established
+      # that the pull request cannot affect that job's area, so a job that skips
+      # because someone broke its `if` is still red. `changes` and `static` must
+      # always succeed. Job results and area flags are closed enums produced by
+      # Actions and by this workflow, not contributor-controlled text.
       - name: Enforce required quality gates
         shell: bash
         env:
-          RESULTS: ${{ join(needs.*.result, ' ') }}
-          CODE_CHANGED: ${{ needs.changes.outputs.code }}
+          GO: ${{ needs.changes.outputs.go }}
+          WEB: ${{ needs.changes.outputs.web }}
+          RAYCAST: ${{ needs.changes.outputs.raycast }}
+          CHANGES: ${{ needs.changes.result }}
+          STATIC: ${{ needs.static.result }}
+          GENERATED: ${{ needs.generated.result }}
+          GO_QUALITY: ${{ needs.go-quality.result }}
+          GO_LINT: ${{ needs.go-lint.result }}
+          GO_RACE: ${{ needs.go-race.result }}
+          GOVULNCHECK: ${{ needs.govulncheck.result }}
+          GO_PLATFORM: ${{ needs.go-platform.result }}
+          WEB_QUALITY: ${{ needs.web.result }}
+          WEB_COMPONENTS: ${{ needs.web-components.result }}
+          BROWSER_JOURNEY: ${{ needs.browser-journey.result }}
+          RAYCAST_EXTENSION: ${{ needs.raycast.result }}
+          GO_OS: ${{ needs.go.result }}
+          CROSS_BUILD: ${{ needs.cross-build.result }}
         run: |
-          echo "job results: ${RESULTS} (code changed: ${CODE_CHANGED})"
-          for result in ${RESULTS}; do
-            case "${result}" in
+          echo "affected areas: go=${GO} web=${WEB} raycast=${RAYCAST}"
+          either() {
+            if [[ "$1" == true || "$2" == true ]]; then echo true; else echo false; fi
+          }
+          failed=0
+          # require <job> <result> <whether the job's area is affected>
+          require() {
+            echo "$1: $2 (affected: $3)"
+            case "$2" in
               success) ;;
               skipped)
-                if [[ "${CODE_CHANGED}" != false ]]; then
-                  echo "a required job was skipped on a code change" >&2
-                  exit 1
+                if [[ "$3" != false ]]; then
+                  echo "::error::$1 was skipped although the change affects it"
+                  failed=1
                 fi
                 ;;
               *)
-                echo "a required job did not succeed: ${result}" >&2
-                exit 1
+                echo "::error::$1 did not succeed: $2"
+                failed=1
                 ;;
             esac
-          done
+          }
+          require changes "${CHANGES}" true
+          require static "${STATIC}" true
+          require generated "${GENERATED}" "$(either "${GO}" "${WEB}")"
+          require go-quality "${GO_QUALITY}" "${GO}"
+          require go-lint "${GO_LINT}" "${GO}"
+          require go-race "${GO_RACE}" "${GO}"
+          require govulncheck "${GOVULNCHECK}" "${GO}"
+          require go-platform "${GO_PLATFORM}" "${GO}"
+          require web "${WEB_QUALITY}" "${WEB}"
+          require web-components "${WEB_COMPONENTS}" "${WEB}"
+          require browser-journey "${BROWSER_JOURNEY}" "$(either "${GO}" "${WEB}")"
+          require raycast "${RAYCAST_EXTENSION}" "${RAYCAST}"
+          require go "${GO_OS}" "${GO}"
+          require cross-build "${CROSS_BUILD}" "${GO}"
+          exit "${failed}"
