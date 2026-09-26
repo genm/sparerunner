@@ -20,7 +20,7 @@ importers:
         version: 4.13.0(playwright-core@1.62.1)
       '@playwright/experimental-ct-react':
         specifier: 1.62.1
-        version: 1.62.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))
+        version: 1.62.1(@types/node@26.6.2)(vite@8.3.1(@types/node@26.6.2))
       '@playwright/test':
         specifier: 1.62.1
         version: 1.62.1
@@ -41,7 +41,7 @@ importers:
         version: 19.3.0(@types/react@19.3.0)
       '@vitejs/plugin-react':
         specifier: 6.1.1
-        version: 6.1.1(vite@8.3.0(@types/node@26.6.2))
+        version: 6.1.1(vite@8.3.1(@types/node@26.6.2))
       jsdom:
         specifier: 28.1.0
         version: 28.1.0
@@ -58,11 +58,11 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
       vite:
-        specifier: 8.3.0
-        version: 8.3.0(@types/node@26.6.2)
+        specifier: 8.3.1
+        version: 8.3.1(@types/node@26.6.2)
       vitest:
         specifier: 4.1.11
-        version: 4.1.11(@types/node@26.6.2)(jsdom@28.1.0)(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.0(@types/node@26.6.2))
+        version: 4.1.11(@types/node@26.6.2)(jsdom@28.1.0)(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.1(@types/node@26.6.2))
 
 packages:
 
@@ -1288,8 +1288,8 @@ packages:
   until-async@3.0.2:
     resolution: {integrity: sha512-IiSk4HlzAMqTUseHHe3VhIGyuFmN90zMTpD3Z3y8jeQbzLIq500MVM7Jq2vUAnTKAFPJrqwkzr6PoTcPhGcOiw==}
 
-  vite@8.3.0:
-    resolution: {integrity: sha512-lhZBVvEHefgE+HQZC9O7EBJgCU/nVzFNl7vkS4RE0APtWLP02/8QVIkQtzBxPquh7lq5/78NHipTj7ODQ6XuyQ==}
+  vite@8.3.1:
+    resolution: {integrity: sha512-/bvH9E9tmCXRGp2uXY3WbOldqpTwFkbha/8ANaEQ6VkxhH60KyqLwgZq6lG2y+4uT55x9+9eUHMpQ7uGnOCKjA==}
     engines: {node: ^20.19.0 || >=22.12.0}
     hasBin: true
     peerDependencies:
@@ -1654,7 +1654,7 @@ snapshots:
     dependencies:
       playwright: 1.62.1
       playwright-core: 1.62.1
-      vite: 8.3.0(@types/node@26.6.2)
+      vite: 8.3.1(@types/node@26.6.2)
     transitivePeerDependencies:
       - '@types/node'
       - '@vitejs/devtools'
@@ -1669,10 +1669,10 @@ snapshots:
       - tsx
       - yaml
 
-  '@playwright/experimental-ct-react@1.62.1(@types/node@26.6.2)(vite@8.3.0(@types/node@26.6.2))':
+  '@playwright/experimental-ct-react@1.62.1(@types/node@26.6.2)(vite@8.3.1(@types/node@26.6.2))':
     dependencies:
       '@playwright/experimental-ct-core': 1.62.1(@types/node@26.6.2)
-      '@vitejs/plugin-react': 6.1.1(vite@8.3.0(@types/node@26.6.2))
+      '@vitejs/plugin-react': 6.1.1(vite@8.3.1(@types/node@26.6.2))
     transitivePeerDependencies:
       - '@rolldown/plugin-babel'
       - '@types/node'
@@ -1858,10 +1858,10 @@ snapshots:
   '@typescript/typescript-win32-x64@7.0.2':
     optional: true
 
-  '@vitejs/plugin-react@6.1.1(vite@8.3.0(@types/node@26.6.2))':
+  '@vitejs/plugin-react@6.1.1(vite@8.3.1(@types/node@26.6.2))':
     dependencies:
       '@rolldown/pluginutils': 1.0.1
-      vite: 8.3.0(@types/node@26.6.2)
+      vite: 8.3.1(@types/node@26.6.2)
 
   '@vitest/expect@4.1.11':
     dependencies:
@@ -1872,14 +1872,14 @@ snapshots:
       chai: 6.2.2
       tinyrainbow: 3.1.0
 
-  '@vitest/mocker@4.1.11(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.0(@types/node@26.6.2))':
+  '@vitest/mocker@4.1.11(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.1(@types/node@26.6.2))':
     dependencies:
       '@vitest/spy': 4.1.11
       estree-walker: 3.0.3
       magic-string: 0.30.21
     optionalDependencies:
       msw: 2.15.0(@types/node@26.6.2)(typescript@7.0.2)
-      vite: 8.3.0(@types/node@26.6.2)
+      vite: 8.3.1(@types/node@26.6.2)
 
   '@vitest/pretty-format@4.1.11':
     dependencies:
@@ -2004,9 +2004,9 @@ snapshots:
     dependencies:
       fast-string-width: 3.0.2
 
-  fdir@6.5.0(picomatch@4.0.5):
+  fdir@6.5.0(picomatch@4.0.7):
     optionalDependencies:
-      picomatch: 4.0.5
+      picomatch: 4.0.7
 
   fsevents@2.3.2:
     optional: true
@@ -2332,8 +2332,8 @@ snapshots:
 
   tinyglobby@0.2.17:
     dependencies:
-      fdir: 6.5.0(picomatch@4.0.5)
-      picomatch: 4.0.5
+      fdir: 6.5.0(picomatch@4.0.7)
+      picomatch: 4.0.7
 
   tinypool@2.1.2: {}
 
@@ -2386,7 +2386,7 @@ snapshots:
 
   until-async@3.0.2: {}
 
-  vite@8.3.0(@types/node@26.6.2):
+  vite@8.3.1(@types/node@26.6.2):
     dependencies:
       lightningcss: 1.33.0
       picomatch: 4.0.7
@@ -2397,10 +2397,10 @@ snapshots:
       '@types/node': 26.6.2
       fsevents: 2.3.3
 
-  vitest@4.1.11(@types/node@26.6.2)(jsdom@28.1.0)(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.0(@types/node@26.6.2)):
+  vitest@4.1.11(@types/node@26.6.2)(jsdom@28.1.0)(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.1(@types/node@26.6.2)):
     dependencies:
       '@vitest/expect': 4.1.11
-      '@vitest/mocker': 4.1.11(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.0(@types/node@26.6.2))
+      '@vitest/mocker': 4.1.11(msw@2.15.0(@types/node@26.6.2)(typescript@7.0.2))(vite@8.3.1(@types/node@26.6.2))
       '@vitest/pretty-format': 4.1.11
       '@vitest/runner': 4.1.11
       '@vitest/snapshot': 4.1.11
@@ -2417,7 +2417,7 @@ snapshots:
       tinyexec: 1.2.4
       tinyglobby: 0.2.17
       tinyrainbow: 3.1.0
-      vite: 8.3.0(@types/node@26.6.2)
+      vite: 8.3.1(@types/node@26.6.2)
       why-is-node-running: 2.3.0
     optionalDependencies:
       '@types/node': 26.6.2
