@@ -499,6 +499,8 @@ jobs:
           pnpm --dir web typecheck
 
       - name: Test Web
+        env:
+          NODE_OPTIONS: --localstorage-file=${{ runner.temp }}/node-localstorage.json
         run: pnpm --dir web test:ci
 
       - name: Upload failure evidence
