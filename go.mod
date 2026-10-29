@@ -7,7 +7,7 @@ require (
 	github.com/Microsoft/go-winio v0.6.4
 	github.com/actions/scaleset v0.4.0
 	github.com/coder/websocket v1.8.15
-	github.com/getkin/kin-openapi v0.150.0
+	github.com/getkin/kin-openapi v0.151.0
 	github.com/hashicorp/go-retryablehttp v0.7.8
 	github.com/hashicorp/mdns v1.0.7
 	github.com/lexfrei/keychain v1.2.0
