@@ -1,6 +1,6 @@
 module github.com/genm/sparerunner
 
-go 1.27.3
+go 1.27.4
 
 require (
 	fyne.io/systray v1.12.2
@@ -15,7 +15,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/sys v0.49.0
-	modernc.org/sqlite v1.61.0
+	modernc.org/sqlite v1.61.1
 )
 
 require (
