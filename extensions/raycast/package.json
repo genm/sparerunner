@@ -49,7 +49,7 @@
     }
   ],
   "dependencies": {
-    "@raycast/api": "^1.104.25",
+    "@raycast/api": "^2.11.1",
     "@raycast/utils": "^2.3.2"
   },
   "devDependencies": {
